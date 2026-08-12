@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS partner_branding (
 );
 `);
 
-function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); } // legacy — kept only so migration 004 can detect and upgrade old hashes
+function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); } // legacy — kept only so verifyPassword() can still check any not-yet-upgraded row; login() upgrades it to PBKDF2 automatically on next successful sign-in (see lib/auth.js)
 function hashPbkdf2(pw, salt) {
   salt = salt || crypto.randomBytes(16).toString('hex');
   const iterations = 100000;
@@ -409,7 +409,33 @@ function seedOrders(propId, partnerId) {
   }
 }
 
-seedIfEmpty();
+// Q06/Production-bootstrap (2nd corrective round): seedIfEmpty() populates
+// full demo data (fake partners, orders, users with `password = username`)
+// — this must NEVER run in production. A real deployment needs exactly one
+// admin account to bootstrap from, created from environment variables, with
+// zero demo partners/products/orders alongside it.
+function bootstrapProductionIfEmpty() {
+  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+  if (userCount > 0) return; // already bootstrapped or migrated from an existing deployment
+  const username = process.env.ADMIN_BOOTSTRAP_USERNAME;
+  const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
+  if (!username || !password || password.length < 12) {
+    console.error('\n❌ FATAL: NODE_ENV=production with an empty database requires');
+    console.error('   ADMIN_BOOTSTRAP_USERNAME and ADMIN_BOOTSTRAP_PASSWORD (12+ chars)');
+    console.error('   to create the first SuperAdmin account. No demo data is seeded in');
+    console.error('   production. See docs/DEPLOYMENT.md "Production Bootstrap".\n');
+    process.exit(1);
+  }
+  db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)
+    .run(uid('u'), username, hashPbkdf2(password), 'SuperAdmin', null, Date.now());
+  console.log(`Production bootstrap: created initial SuperAdmin account "${username}". No demo data seeded.`);
+}
+
+if (process.env.NODE_ENV === 'production') {
+  bootstrapProductionIfEmpty();
+} else {
+  seedIfEmpty(); // demo/dev only — full fake dataset for exploring every role
+}
 
 // ===========================================================================
 // Phase 4 Increment 1 — Outlet migration (§16, §22 of Phase 4 Change Request)

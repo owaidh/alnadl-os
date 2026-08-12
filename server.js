@@ -1296,11 +1296,17 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Alnadl Hospitality OS backend listening on http://localhost:${PORT}`);
-  console.log(`Demo users (password = username): customer_demo, operator, runner, manager, partner, finance, admin`);
-  if (!process.env.SESSION_SECRET) {
-    console.warn('\n⚠️  WARNING (Q06): SESSION_SECRET is not set — using a random per-process secret.');
-    console.warn('    Every restart invalidates every active session. This is fine for local/demo use');
-    console.warn('    but MUST be set to a fixed, secret value from a secret manager before any real');
-    console.warn('    deployment. See docs/DEPLOYMENT.md "الأمان" section.\n');
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`Demo users (password = username): customer_demo, operator, runner, manager, partner, finance, admin`);
+  }
+  // Q06 (2nd round): the hard NODE_ENV=production check now happens at
+  // lib/auth.js module load time (resolveSessionSecret()), before the
+  // server ever reaches listen() — the process exits before this point if
+  // production has no strong secret. This dev/demo-only notice just
+  // clarifies non-production behavior for anyone reading the logs.
+  if (!process.env.SESSION_SECRET && process.env.NODE_ENV !== 'production') {
+    console.warn('\n⚠️  NOTE (Q06): SESSION_SECRET is not set — using a random per-process secret.');
+    console.warn('    Every restart invalidates every active session. Fine for local/demo use.');
+    console.warn('    NODE_ENV=production refuses to start at all without a real one (enforced).\n');
   }
 });

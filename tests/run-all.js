@@ -11,6 +11,7 @@ const suites = [
   './api-security.js',
   './concurrency.js',
   './financial-regression.js',
+  './auth-unit.js',
 ];
 
 (async () => {

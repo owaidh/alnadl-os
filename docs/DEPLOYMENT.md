@@ -1,4 +1,4 @@
-> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
+> **Version:** v2.0.2 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.2-corrective-2
 
 # Alnadl Hospitality OS — Deployment Guide
 
@@ -94,6 +94,24 @@ volumes:
 اربط نطاقًا فعليًا (مثال: `os.alnadl.com`) وشهادة SSL (Let's Encrypt عبر Caddy تلقائي، أو عبر مزوّد الاستضافة).
 
 ---
+
+## Production Bootstrap (لا Demo Data في الإنتاج)
+
+منذ v2.0.2، `NODE_ENV=production` **لا يستدعي `seedIfEmpty()` إطلاقًا** — صفر شركاء وهميين، صفر طلبات، صفر مستخدمين تجريبيين. بدلاً من ذلك:
+
+1. **يجب تعيين** `SESSION_SECRET` بقيمة عشوائية 32+ حرفًا (مثال: `openssl rand -hex 32`) — بدونها **يفشل Startup فورًا** (`process.exit(1)`)، وليس مجرد تحذير
+2. **عند قاعدة بيانات إنتاج فارغة تمامًا**، يجب أيضًا تعيين `ADMIN_BOOTSTRAP_USERNAME` و`ADMIN_BOOTSTRAP_PASSWORD` (12+ حرفًا) — يُنشئ النظام حساب `SuperAdmin` واحدًا فقط منهما عند أول إقلاع، ثم لا يُعيد إنشاءه في الإقلاعات اللاحقة (يتحقق من `COUNT(users) > 0` أولاً)
+3. بدون هذين المتغيرين وقاعدة بيانات فارغة، **يفشل Startup أيضًا** بنفس المبدأ — لا يوجد "استمرار صامت" بأي حال في وضع الإنتاج
+
+```bash
+NODE_ENV=production \
+SESSION_SECRET=$(openssl rand -hex 32) \
+ADMIN_BOOTSTRAP_USERNAME=alnadl_admin \
+ADMIN_BOOTSTRAP_PASSWORD='<كلمة مرور قوية فعلية>' \
+node server.js
+```
+
+بعد أول إقلاع ناجح، غيّر كلمة مرور هذا الحساب فورًا من داخل النظام نفسه (لا حاجة لإبقاء متغيرات البيئة هذه بعد ذلك).
 
 ## Phase 4 — تفاصيل Migration الفعلية
 
