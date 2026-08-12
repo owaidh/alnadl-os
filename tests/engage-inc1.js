@@ -100,6 +100,100 @@ async function run() {
     assertEqual(knownPass.status, 200, 'GET /api/engage/pass/:id returns 200 for a real pass');
     assertEqual(knownPass.data.status, 'active', 'the returned pass status is correct');
 
+    // ============================================================
+    // CORRECTIVE ROUND: Retry / Dead-Letter Policy
+    // ============================================================
+    const { setFailureInjector } = require('../lib/engage-worker.js');
+
+    // --- fail -> retry -> success ---
+    // Deliberately NOT paid via the API here: if it were, Core's own payment
+    // handler would write a REAL outbox row too, and the server's own
+    // (unaffected) worker would process it independently within 5s,
+    // contaminating this test's assertions with a pass that has nothing to
+    // do with the retry logic under test. Using an unpaid-but-real order
+    // (satisfies engage_outbox's FK to orders) keeps this test fully isolated.
+    const order3 = await api('POST', '/api/orders', { pointId: 'PT-014', items: [{ productId: 'p_latte', qty: 1 }] });
+    const retryRowId = 'test_retry_row';
+    db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,attempts,max_attempts,created_at) VALUES (?,?,?,?,?,?,?)`)
+      .run(retryRowId, order3.data.id, 'order.confirmed', 'pending', 0, 5, Date.now());
+
+    let failuresRemaining = 1; // fail exactly once, then succeed
+    setFailureInjector((row) => {
+      if (row.id === retryRowId && failuresRemaining > 0) { failuresRemaining--; return new Error('simulated transient failure'); }
+      return null;
+    });
+    processOutboxOnce(); // attempt 1: fails, should stay pending with a future next_attempt_at
+    let retryRow = db.prepare('SELECT * FROM engage_outbox WHERE id = ?').get(retryRowId);
+    assertEqual(retryRow.status, 'pending', 'after a transient failure, the row stays pending (eligible for retry), not dead-lettered');
+    assertEqual(retryRow.attempts, 1, 'attempts incremented to 1 after the first failure');
+    assert(retryRow.next_attempt_at > Date.now(), 'next_attempt_at is set in the future (real backoff, not an immediate tight retry loop)');
+
+    processOutboxOnce(); // immediately again: backoff hasn't elapsed yet, must NOT be picked up
+    retryRow = db.prepare('SELECT * FROM engage_outbox WHERE id = ?').get(retryRowId);
+    assertEqual(retryRow.attempts, 1, 'a poll cycle before next_attempt_at elapses does not re-attempt the row (backoff is honored)');
+
+    db.prepare('UPDATE engage_outbox SET next_attempt_at = ? WHERE id = ?').run(Date.now() - 1000, retryRowId); // force backoff to have elapsed
+    processOutboxOnce(); // attempt 2: injector no longer fails for this row -> should succeed
+    retryRow = db.prepare('SELECT * FROM engage_outbox WHERE id = ?').get(retryRowId);
+    assertEqual(retryRow.status, 'processed', 'once the backoff has elapsed and the transient failure clears, the retried row succeeds');
+    const passFromRetry = db.prepare('SELECT * FROM engage_pass WHERE order_id = ?').get(order3.data.id);
+    assert(!!passFromRetry, 'a real engage_pass was created once the retry succeeded (and this order was never paid via the API, so this pass can ONLY have come from the retried synthetic row, not from any automatic Core-driven outbox write)');
+    setFailureInjector(null);
+
+    // --- fail until max_attempts -> dead_letter + audit ---
+    // Same isolation principle: order4 is never paid via the API, so no
+    // automatic outbox row exists to contaminate this test.
+    const order4 = await api('POST', '/api/orders', { pointId: 'PT-014', items: [{ productId: 'p_latte', qty: 1 }] });
+    const deadRowId = 'test_dead_letter_row';
+    db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,attempts,max_attempts,created_at) VALUES (?,?,?,?,?,?,?)`)
+      .run(deadRowId, order4.data.id, 'order.confirmed', 'pending', 0, 3, Date.now()); // low max_attempts=3 to keep the test fast
+
+    setFailureInjector((row) => row.id === deadRowId ? new Error('persistent simulated failure') : null);
+    for (let i = 0; i < 3; i++) {
+      processOutboxOnce();
+      const r = db.prepare('SELECT * FROM engage_outbox WHERE id = ?').get(deadRowId);
+      if (r.status === 'pending' && r.next_attempt_at) {
+        db.prepare('UPDATE engage_outbox SET next_attempt_at = ? WHERE id = ?').run(Date.now() - 1000, deadRowId); // skip real backoff wait in the test
+      }
+    }
+    const deadRow = db.prepare('SELECT * FROM engage_outbox WHERE id = ?').get(deadRowId);
+    assertEqual(deadRow.status, 'dead_letter', 'after exhausting max_attempts (3), the row reaches the dead_letter terminal state');
+    assertEqual(deadRow.attempts, 3, 'attempts equals max_attempts exactly at dead-letter time');
+    assert(!!deadRow.last_error, 'last_error captures the failure reason for diagnosis');
+    const passFromDead = db.prepare('SELECT * FROM engage_pass WHERE order_id = ?').get(order4.data.id);
+    assert(!passFromDead, 'no engage_pass was ever created for a permanently failing row (order was never paid, so this is unambiguous)');
+    const deadLetterAudit = db.prepare(`SELECT * FROM engage_audit_log WHERE action = 'outbox_dead_letter' AND object_id = ?`).get(deadRowId);
+    assert(!!deadLetterAudit, 'a dead-letter event is recorded in engage_audit_log for operational visibility');
+    setFailureInjector(null);
+
+    // ============================================================
+    // CORRECTIVE ROUND: Atomic Outbox — transaction rollback proof
+    // ============================================================
+    // Proves the exact transactional pattern server.js now uses (BEGIN ...
+    // writes ... COMMIT, with ROLLBACK on any exception) is genuinely atomic
+    // on this schema: if a later write in the sequence fails, an earlier
+    // write in the SAME transaction is undone, not left half-committed.
+    const atomicOrder = await api('POST', '/api/orders', { pointId: 'PT-014', items: [{ productId: 'p_latte', qty: 1 }] });
+    const beforeStatus = db.prepare('SELECT status FROM orders WHERE id = ?').get(atomicOrder.data.id).status;
+    assertEqual(beforeStatus, 'Payment Pending', 'order starts in Payment Pending (setup check)');
+
+    let rolledBack = false;
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE orders SET status = ? WHERE id = ?').run('Paid', atomicOrder.data.id); // write #1
+      db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,created_at) VALUES (?,?,?,?,?)`)
+        .run('test_atomic_row', 'NONEXISTENT_ORDER_TO_FORCE_FK_FAILURE', 'order.confirmed', 'pending', Date.now()); // write #2, deliberately violates the real FK
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      rolledBack = true;
+    }
+    assert(rolledBack, 'the forced FK violation on the second write actually threw and triggered a ROLLBACK (test setup sanity check)');
+    const afterStatus = db.prepare('SELECT status FROM orders WHERE id = ?').get(atomicOrder.data.id).status;
+    assertEqual(afterStatus, 'Payment Pending', 'CRASH-CONSISTENCY PROOF: when the second write in the transaction fails, the FIRST write (order status -> Paid) is rolled back too -- the order is never left half-confirmed');
+    const orphanOutboxRow = db.prepare('SELECT * FROM engage_outbox WHERE id = ?').get('test_atomic_row');
+    assert(!orphanOutboxRow, 'the failed outbox insert itself does not persist either -- true all-or-nothing atomicity');
+
   } finally {
     stopServer();
   }

@@ -1,4 +1,4 @@
-> **Version:** v2.0.4-p5-inc1 · **Status:** REV 2 APPROVED — P5-Inc-1 DELIVERED, awaiting review before P5-Inc-2 begins (per acceptance condition 9) · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.4-p5-inc1`
+> **Version:** v2.0.5-p5-inc1-corrective · **Status:** P5-Inc-1 CORRECTIVE ROUND DELIVERED (outbox retry/dead-letter + atomic transactional outbox), awaiting review before P5-Inc-2 begins · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.5-p5-inc1-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -12,7 +12,28 @@
 
 ## P5-Inc-1 — سجل التسليم الفعلي (بعد التنفيذ)
 
-**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-2 (شرط 9 من طلب الموافقة).**
+**الحالة: مُسلَّم (جولة تصحيحية)، بانتظار مراجعتكم قبل بدء Inc-2.**
+
+### الجولة التصحيحية — إغلاق نقطتين برمجيتين حقيقيتين
+
+بعد المراجعة الأولى، حُدِّدت نقطتان برمجيتان حقيقيتان أُغلقتا الآن بالكامل:
+
+**1) Outbox Retry/Dead-Letter — لم يكن موجودًا فعليًا، أُضيف بالكامل**
+- `migrations/005_engage_outbox_retry.js`: إعادة بناء `engage_outbox` بأعمدة `max_attempts`, `next_attempt_at`, `last_error`، وحالة نهائية حقيقية `dead_letter` (بدل `failed` التي لم تكن نهائية فعليًا ولا قابلة لإعادة المحاولة)
+- **سياسة إعادة المحاولة**: Backoff أُسِّي حقيقي (1s→2s→4s→8s...، سقف 30 ثانية) — الصف يبقى `pending` بعد فشل عابر لكن لا يُعاد التقاطه قبل `next_attempt_at`
+- **Dead-Letter حقيقي**: بعد استنفاد `max_attempts`، الصف ينتقل لحالة `dead_letter` نهائية مع `last_error` وسجل تدقيق كامل في `engage_audit_log`
+- **مُختبَر فعليًا بحقن فشل مصطنع (`setFailureInjector`)**: سيناريو `fail → retry → success` (فشلة واحدة ثم نجاح، مع التحقق من احترام الـBackoff فعليًا)، وسيناريو `fail حتى max_attempts → dead_letter` (3 محاولات فاشلة متتالية → حالة نهائية + سجل تدقيق) — **9 اختبارات جديدة**
+
+**2) Atomic Outbox Pattern — خلل حقيقي، أُصلح بالكامل**
+- **قبل الإصلاح**: كل كتابة (Payments، تحديث حالة الطلب، تعاقب Child Orders، الولاء، توزيع الإيراد، Outbox) كانت Statement مستقلة تُثبَّت (Auto-commit) فور تنفيذها — انهيار فعلي بين أي خطوتين كان يمكن أن يترك طلبًا "مؤكَّدًا" فعليًا (`Paid`) بلا أي حدث Engage مقابل له، بصمت تام
+- **بعد الإصلاح**: كل هذه الكتابات الآن داخل معاملة واحدة (`BEGIN...COMMIT`) — إما تثبت جميعًا معًا أو لا يثبت أي منها (`ROLLBACK` عند أي استثناء)
+- **مُختبَر فعليًا بإثبات Rollback حقيقي** (وليس افتراضًا نظريًا): معاملة تُحدِّث حالة الطلب لـ`Paid` ثم تحاول إدراج صف Outbox بمرجع طلب غير صالح عمدًا (ينتهك FK حقيقي) — النتيجة المُتحقَّق منها: **حالة الطلب عادت فعليًا لـ`Payment Pending`** (لم تبقَ `Paid` منقوصة)، وصف الـOutbox الفاشل لم يُثبَّت هو الآخر — Atomicity كاملة بالاتجاهين
+- **خلل جانبي حقيقي اكتُشف وأُصلح أثناء هذا الإصلاح تحديدًا**: تفعيل المعاملة الصريحة كشف قفل قاعدة بيانات حقيقيًا (`database is locked`) عند اتصال ثانٍ متزامن (مثل اختبار يقرأ من نفس الملف) — SQLite الافتراضي (Rollback Journal) يقفل الملف بالكامل أثناء أي معاملة كتابة. أُصلح بتفعيل **WAL mode** (`PRAGMA journal_mode=WAL`) + `busy_timeout=5000` — وهذا تحسين إنتاجي حقيقي مستقل، وليس Workaround للاختبار فقط
+
+**3) اكتمال `context_snapshot_json` — QR وOutlet/Child-Outlet**
+اللقطة الآن تشمل: `qrToken`/`qrType` (رمز QR الفعلي النشط لنقطة الطلب)، و`outlets[]` — كل منفذ (Outlet) شارك فعليًا في هذا الطلب (بالمعرّف والاسم والنوع فقط، لا نسخ لسجل المنفذ الكامل — مطابق لمبدأ عدم تكرار Master Data)، و`isMultiOutlet` صريح. **مُختبَر بطلب متعدد المنافذ فعليًا عبر واجهة حقيقية** — تحقَّق أن كل الكتابات (الطلب، طلبان فرعيان، سطرا Revenue Ledger، وسطر Outbox واحد) ثبتت معًا بنجاح ضمن نفس المعاملة.
+
+**العدد الإجمالي للاختبارات الآن: 105/105** (73 Phase 1-4 + 32 P5-Inc-1، كانت 90/90 قبل هذه الجولة — الزيادة 15 اختبارًا جديدًا بالضبط: 6 لسيناريو fail→retry→success، 5 لسيناريو fail حتى dead_letter، 4 لإثبات Atomicity/Rollback — مُتحقَّق منه برمجيًا بعدّ فعلي لأسطر PASS، وليس تقديرًا).
 
 | شرط القبول | الحالة | الدليل |
 |---|---|---|

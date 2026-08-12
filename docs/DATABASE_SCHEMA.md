@@ -1,4 +1,4 @@
-> **Version:** v2.0.4-p5-inc1 · **Status:** FINAL (Phase 1-4) + P5-Inc-1 tables added · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.4-p5-inc1
+> **Version:** v2.0.5-p5-inc1-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1 (corrective: retry/dead-letter + atomic transaction) · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.5-p5-inc1-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -147,7 +147,7 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 - **`engage_pass`** — بوابة الأهلية؛ لا صف بلا `order_id` صالح لطلب مدفوع فعليًا. `context_snapshot_json` لقطة ثابتة وقت الإصدار (نفس مبدأ `revenue_ledger.model_snapshot_json`)
 - **`engage_session`** — بنية فقط في Inc-1 (`personality` NULLABLE)؛ التعبئة الفعلية مؤجَّلة لـInc-2
-- **`engage_outbox`** — آلية الربط غير المتزامنة الوحيدة؛ `status`: `pending → processed` (Flag ON) أو `skipped` (Flag OFF، الحالة الافتراضية لكل الباقات اليوم) أو `failed`
+- **`engage_outbox`** — آلية الربط غير المتزامنة الوحيدة؛ `status`: `pending → processed` (Flag ON) أو `skipped` (Flag OFF، الحالة الافتراضية لكل الباقات اليوم) أو `dead_letter` (فشل نهائي بعد استنفاد `max_attempts`). **سياسة إعادة محاولة حقيقية** (جولة تصحيحية v2.0.5): `attempts`/`max_attempts` (افتراضي 5)/`next_attempt_at` (Backoff أُسِّي، سقف 30 ثانية)/`last_error` — فشل عابر يُبقي الصف `pending` قابلاً لإعادة المحاولة لاحقًا، وليس `failed` نهائية بلا رجعة كما كان الحال قبل هذا الإصلاح
 - **`engage_audit_log`** — سجل تدقيق مستقل تمامًا عن `audit_log` الأساسي (لا تداخل)
 
 `engage_enabled` أُضيف كمفتاح جديد في `plans.features_json` لكل الباقات الأربع (القيمة الافتراضية `false` للجميع — لا باقة خامسة أُنشئت، تطبيقًا لـ§6 من وثيقة Phase 5).
@@ -173,6 +173,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 ---
 
 ## قيود تصميم مقصودة (يجب معرفتها قبل التوسّع)
+
+0. **معاملات (Transactions) صريحة على مسار الدفع** (جولة تصحيحية P5-Inc-1، v2.0.5): `POST /api/orders/:id/pay` يُغلِّف الآن كل كتاباته (Payments، حالة الطلب، تعاقب Child Orders، الولاء، توزيع الإيراد، سطر `engage_outbox`) داخل `BEGIN...COMMIT` واحدة — إما تثبت جميعًا معًا أو لا يثبت أي منها. **مُختبَر فعليًا بإثبات Rollback حقيقي**، وليس افتراضًا. هذا يحل خللاً حقيقيًا كان موجودًا سابقًا: كل Statement كانت تُثبَّت فوريًا بمعزل عن الأخرى (Auto-commit)، فانهيار فعلي بين خطوتين كان بإمكانه ترك طلب `Paid` بلا أي حدث Engage مقابل، بصمت تام.
+0ب. **WAL Mode مُفعَّل** (`PRAGMA journal_mode=WAL` + `busy_timeout=5000`، جولة تصحيحية v2.0.5) — اكتُشف فعليًا أن تفعيل المعاملات الصريحة أعلاه يكشف قفل قاعدة بيانات حقيقيًا (SQLite الافتراضي/Rollback Journal يقفل الملف بالكامل أثناء أي معاملة كتابة) عند أي اتصال ثانٍ متزامن. WAL يسمح بقراءات متزامنة أثناء الكتابة، وهو الوضع المُوصى به عمليًا لأي سيناريو اتصالات متعددة.
 
 1. **Foreign Key Constraints فعلية مفروضة الآن على 4 جداول فقط من أصل 34** (`order_items`, `child_orders`, `payments`, `revenue_ledger` — مسار المال المباشر، عبر `migrations/001_add_foreign_keys.js`، Q09). بقية الـ30 جدولاً لا تزال تعتمد على منطق التطبيق (`server.js`) فقط دون قيد قاعدة بيانات فعلي — **دَين تقني مُعتمَد رسميًا**، وليس إغفالًا. راجع `docs/GAP_REGISTER.md` بند Q09 للتفصيل والخطة.
 2. **الأسعار مخزنة كـ REAL (Floating point) في كل الجداول المالية دون استثناء** — هذا خطر تقريب (Rounding Risk) حقيقي وغير مُعالَج بعد، ذُكر صراحة في مراجعة الجودة النهائية (بند 13). التوصية المُعتمَدة: الانتقال لتخزين أصغر وحدة عملة كعدد صحيح (halalas، أي الريال × 100 كـ INTEGER) أو `NUMERIC/DECIMAL` عند الانتقال لـPostgreSQL (Q07)، مع قاعدة تقريب موحّدة صريحة للضريبة والخصومات والعمولات والاسترجاعات والتسويات — **هذا العمل لم يبدأ بعد**.

@@ -1,4 +1,4 @@
-> **Version:** v2.0.4-p5-inc1 · **Status:** FINAL (Phase 1-4) + P5-Inc-1 endpoint added · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.4-p5-inc1
+> **Version:** v2.0.5-p5-inc1-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1 endpoint (corrective round) · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.5-p5-inc1-corrective
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -345,7 +345,9 @@ Authorization: Bearer <token>
 ```
 `404` إن لم يوجد. لا نقطة نهاية أخرى لـEngage في Inc-1 — إنشاء الـPass يحدث **حصريًا** عبر `lib/engage-worker.js` استجابةً لحدث `order.confirmed` حقيقي، وليس عبر أي API قابل للاستدعاء المباشر (لا من العميل ولا من الإدارة).
 
-**آلية الربط `order.confirmed` (غير متزامنة بالكامل):** عند نجاح الدفع، `server.js` يكتب صفًا واحدًا في `engage_outbox` (كتابة محلية غير مشروطة، لا قرار Engage-specific). Worker مستقل (`startEngageWorker()`, استطلاع كل 5 ثوانٍ) يقرأ الصفوف `pending`، يتحقق من `engage_enabled` للشريك، وينشئ `engage_pass` فقط إن كانت الميزة مُفعَّلة. **إيقاف الـWorker بالكامل لا يُغيّر أي شيء في مسار الدفع/الطلب** — مُختبَر بشكل صريح (`ENG-ISO-001` في `tests/engage-inc1.js`).
+**آلية الربط `order.confirmed` (غير متزامنة بالكامل، ذرّية مع تأكيد الدفع):** عند نجاح الدفع، `server.js` يكتب صفًا واحدًا في `engage_outbox` **داخل نفس معاملة (Transaction) تحديث حالة الطلب** — إما يثبت الاثنان معًا أو لا يثبت أي منهما (جولة تصحيحية v2.0.5، Atomic Outbox Pattern). Worker مستقل (`startEngageWorker()`, استطلاع كل 5 ثوانٍ) يقرأ الصفوف المؤهَّلة، يتحقق من `engage_enabled` للشريك، وينشئ `engage_pass` فقط إن كانت الميزة مُفعَّلة. **إيقاف الـWorker بالكامل لا يُغيّر أي شيء في مسار الدفع/الطلب** — مُختبَر بشكل صريح (`ENG-ISO-001` في `tests/engage-inc1.js`).
+
+**سياسة إعادة المحاولة (v2.0.5):** فشل عابر أثناء المعالجة (وليس `engage_enabled=false`، تلك ليست فشلاً) يُبقي الصف `pending` مع `next_attempt_at` بـBackoff أُسِّي (سقف 30 ثانية) حتى `max_attempts` (افتراضي 5)، ثم ينتقل لحالة `dead_letter` نهائية مع `last_error` وسجل تدقيق كامل.
 
 ## ملاحظة حول Idempotency وWebhooks (Q03، §18)
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل

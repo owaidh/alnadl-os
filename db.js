@@ -9,6 +9,17 @@ const path = require('path');
 const DB_PATH = process.env.SQLITE_PATH || path.join(__dirname, 'data.sqlite');
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA foreign_keys = ON;');
+// WAL mode (Write-Ahead Logging): allows readers to proceed concurrently
+// with a writer instead of the whole database locking during a write
+// transaction — the default rollback-journal mode blocks ALL other
+// connections for the duration of any BEGIN...COMMIT, which became a real
+// problem the moment server.js started wrapping payment writes in an
+// explicit transaction (P5-Inc-1 corrective round, atomicity fix) while a
+// second connection (e.g. a test, or a future reporting/admin connection)
+// tries to read the same file. busy_timeout is defense in depth for the
+// remaining brief exclusive-lock window WAL still has for writer-vs-writer.
+db.exec('PRAGMA journal_mode = WAL;');
+db.exec('PRAGMA busy_timeout = 5000;');
 
 function uid(prefix) { return prefix + '_' + crypto.randomBytes(5).toString('hex'); }
 

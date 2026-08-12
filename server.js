@@ -312,46 +312,67 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
   //     here only because the sandbox has no real card network to redirect to.
 
   const succeeded = cardResult.status === 'Captured';
-  if (succeeded && walletCovered > 0) commitSpend(order.wallet_id, order.id, walletCovered);
-  if (walletCovered > 0) {
-    db.prepare(`INSERT INTO payments (id,order_id,gateway_ref,amount,status,method,fees,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-      .run(uid('pay'), order.id, 'wallet:' + order.wallet_id, walletCovered, succeeded ? 'Captured' : 'Failed', 'wallet', 0, Date.now());
-  }
-  if (cardAmount > 0) {
-    db.prepare(`INSERT INTO payments (id,order_id,gateway_ref,amount,status,method,fees,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-      .run(uid('pay'), order.id, cardResult.gatewayRef, cardAmount, cardResult.status, method, cardResult.fees || 0, Date.now());
-  }
 
-  const newStatus = succeeded ? 'Paid' : 'Failed';
-  db.prepare('UPDATE orders SET status=?, updated_at=?, wallet_covered=? WHERE id=?').run(newStatus, Date.now(), walletCovered, order.id);
-  audit('gateway:' + gateway.name, 'Gateway', 'payment_webhook', order.id, { status: order.status }, { status: newStatus }, null);
-  notify(newStatus === 'Paid' ? 'payment_success' : 'payment_failed', order.id, 'push');
-  // Unified Cart: cascade Paid to every child order fanned out at creation (§8).
-  // If payment failed, children stay in 'Created' — nothing to cascade, since
-  // they were never sent to KDS in the first place.
-  if (succeeded) {
-    db.prepare(`UPDATE child_orders SET status='Paid', updated_at=? WHERE parent_order_id=? AND status='Created'`).run(Date.now(), order.id);
-  }
+  // Transactional Outbox (P5-Inc-1 corrective round): everything from here
+  // to the engage_outbox write is now ONE atomic unit. Before this fix, each
+  // db.prepare(...).run() below auto-committed independently — a crash
+  // between the order status UPDATE and the engage_outbox INSERT could leave
+  // a genuinely confirmed/Paid order with no Engage event ever recorded,
+  // silently. Now: either every write below lands together, or (on any
+  // exception) none of them do — the order stays in its PRE-payment state
+  // and the client-facing error reflects that honestly, rather than reporting
+  // success on a half-committed state.
+  db.exec('BEGIN');
+  let newStatus;
+  try {
+    if (succeeded && walletCovered > 0) commitSpend(order.wallet_id, order.id, walletCovered);
+    if (walletCovered > 0) {
+      db.prepare(`INSERT INTO payments (id,order_id,gateway_ref,amount,status,method,fees,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+        .run(uid('pay'), order.id, 'wallet:' + order.wallet_id, walletCovered, succeeded ? 'Captured' : 'Failed', 'wallet', 0, Date.now());
+    }
+    if (cardAmount > 0) {
+      db.prepare(`INSERT INTO payments (id,order_id,gateway_ref,amount,status,method,fees,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+        .run(uid('pay'), order.id, cardResult.gatewayRef, cardAmount, cardResult.status, method, cardResult.fees || 0, Date.now());
+    }
 
-  // Loyalty: commit any point redemption now that payment actually succeeded (§15)
-  if (succeeded && order.loyalty_points_used > 0 && order.loyalty_account_id) {
-    commitRedemption(order.loyalty_account_id, order.loyalty_points_used, order.id);
-  }
+    newStatus = succeeded ? 'Paid' : 'Failed';
+    db.prepare('UPDATE orders SET status=?, updated_at=?, wallet_covered=? WHERE id=?').run(newStatus, Date.now(), walletCovered, order.id);
+    audit('gateway:' + gateway.name, 'Gateway', 'payment_webhook', order.id, { status: order.status }, { status: newStatus }, null);
+    notify(newStatus === 'Paid' ? 'payment_success' : 'payment_failed', order.id, 'push');
+    // Unified Cart: cascade Paid to every child order fanned out at creation (§8).
+    // If payment failed, children stay in 'Created' — nothing to cascade, since
+    // they were never sent to KDS in the first place.
+    if (succeeded) {
+      db.prepare(`UPDATE child_orders SET status='Paid', updated_at=? WHERE parent_order_id=? AND status='Created'`).run(Date.now(), order.id);
+    }
 
-  // Revenue Model Engine (§9/§10): allocate this order's revenue to each
-  // outlet involved, the moment payment succeeds — not later, and not
-  // retroactively rewritable once written (each row snapshots the model it used).
-  if (succeeded) recordOrderRevenue(order.id);
+    // Loyalty: commit any point redemption now that payment actually succeeded (§15)
+    if (succeeded && order.loyalty_points_used > 0 && order.loyalty_account_id) {
+      commitRedemption(order.loyalty_account_id, order.loyalty_points_used, order.id);
+    }
 
-  // Phase 5 P5-Inc-1: this is Core's ENTIRE involvement with Engage — one
-  // unconditional local INSERT, no awareness of engage_enabled or any other
-  // Engage-specific decision (those live exclusively in lib/engage-worker.js).
-  // order.confirmed is the Event/Data Flow direction Core -> Engage; the
-  // Foreign-Key Dependency direction remains strictly Engage -> Core
-  // (engage_pass.order_id REFERENCES orders(id), never the reverse).
-  if (succeeded) {
-    db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,created_at) VALUES (?,?,?,?,?)`)
-      .run(uid('eo'), order.id, 'order.confirmed', 'pending', Date.now());
+    // Revenue Model Engine (§9/§10): allocate this order's revenue to each
+    // outlet involved, the moment payment succeeds — not later, and not
+    // retroactively rewritable once written (each row snapshots the model it used).
+    if (succeeded) recordOrderRevenue(order.id);
+
+    // Phase 5 P5-Inc-1: this is Core's ENTIRE involvement with Engage — one
+    // unconditional local INSERT, no awareness of engage_enabled or any other
+    // Engage-specific decision (those live exclusively in lib/engage-worker.js).
+    // order.confirmed is the Event/Data Flow direction Core -> Engage; the
+    // Foreign-Key Dependency direction remains strictly Engage -> Core
+    // (engage_pass.order_id REFERENCES orders(id), never the reverse).
+    // Committing this in the SAME transaction as the order status change is
+    // exactly the "transactional outbox" pattern: the confirmation and its
+    // event either both land or neither does.
+    if (succeeded) {
+      db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,created_at) VALUES (?,?,?,?,?)`)
+        .run(uid('eo'), order.id, 'order.confirmed', 'pending', Date.now());
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
   }
 
   sendJSON(res, 200, { id: order.id, status: newStatus, walletCovered, cardCharged: cardAmount });
