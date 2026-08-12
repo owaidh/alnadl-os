@@ -44,6 +44,13 @@ function audit(actor, role, action, entity, before, after, reason) {
   db.prepare(`INSERT INTO audit_log (actor,role,action,entity,before,after,reason,ts) VALUES (?,?,?,?,?,?,?,?)`)
     .run(actor, role, action, entity, before != null ? JSON.stringify(before) : null, after != null ? JSON.stringify(after) : null, reason || null, Date.now());
 }
+// QR analytics (§5): records a raw scan/order event per token. Deliberately
+// NOT deduplicated or throttled here — a real "unique visitor" definition
+// is a product decision for later; this table is the raw event log
+// everything else (Last Scan, Conversion Rate...) is computed from.
+function logQrEvent(token, eventType, orderId) {
+  db.prepare(`INSERT INTO qr_analytics_events (token,event_type,order_id,ts) VALUES (?,?,?,?)`).run(token, eventType, orderId || null, Date.now());
+}
 // Notification log (§16 من المواصفات). No real SMS/email/push provider is
 // wired up — this records the *event* so the extension point exists and is
 // visible in the admin UI; swapping in a real provider (Twilio, SES, FCM…)
@@ -113,6 +120,7 @@ on('GET', '/api/demo/points', null, async (req, res) => {
 on('GET', '/api/qr/:token', null, async (req, res, p) => {
   const row = db.prepare('SELECT * FROM qr_tokens WHERE token = ?').get(p.token);
   if (!row || !row.active) return sendJSON(res, 404, { error: 'QR غير صالح / Invalid QR' });
+  logQrEvent(p.token, 'scan', null);
   const point = db.prepare('SELECT * FROM points WHERE id = ?').get(row.point_id);
   if (!point || !point.active) return sendJSON(res, 409, { error: 'Point unavailable' });
   const zone = db.prepare('SELECT * FROM zones WHERE id = ?').get(point.zone_id);
@@ -251,6 +259,8 @@ on('POST', '/api/orders', null, async (req, res) => {
   // Created -> Payment Pending (system-driven, matches §10 first transition)
   db.prepare(`UPDATE orders SET status='Payment Pending', updated_at=? WHERE id=?`).run(Date.now(), id);
   audit('system', 'System', 'order_create', id, null, { status: 'Payment Pending' }, null);
+  const activeToken = db.prepare('SELECT token FROM qr_tokens WHERE point_id = ? AND active = 1').get(pointId);
+  if (activeToken) logQrEvent(activeToken.token, 'order', id);
   notify('order_created', id, 'push');
 
   sendJSON(res, 201, { id, paymentRef, total: Math.round(total * 100) / 100, status: 'Payment Pending', loyaltyPointsUsed, loyaltyDiscount: Math.round(loyaltyDiscount * 100) / 100 });
@@ -581,6 +591,43 @@ on('PATCH', '/api/admin/points/:id', ['SuperAdmin', 'PartnerAdmin'], async (req,
   sendJSON(res, 200, { ok: true });
 });
 
+/* ------------------------------ QR: BULK GENERATE + ANALYTICS (§5) --------------------------------- */
+on('POST', '/api/admin/qr/bulk', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  assertTenantWrite(session, zonePartnerId(b.zoneId));
+  const count = Math.min(50, Math.max(1, parseInt(b.count) || 1)); // sane cap for a single bulk batch
+  const qrType = ['table', 'office', 'room', 'zone', 'counter_pickup'].includes(b.type) ? b.type : 'table';
+  const created = [];
+  for (let i = 0; i < count; i++) {
+    const id = 'PT-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+    const label = b.labelPrefix ? `${b.labelPrefix} ${i + 1}` : `${qrType} ${i + 1}`;
+    db.prepare('INSERT INTO points (id,zone_id,code,label,type,active) VALUES (?,?,?,?,?,1)').run(id, b.zoneId, id, label, qrType);
+    const token = crypto.randomBytes(6).toString('hex');
+    db.prepare('INSERT INTO qr_tokens (id,point_id,token,active,created_at,qr_type) VALUES (?,?,?,1,?,?)').run(uid('qr'), id, token, Date.now(), qrType);
+    created.push({ id, token, label });
+  }
+  audit(session.username, session.role, 'qr_bulk_generate', b.zoneId, null, { count, type: qrType }, null);
+  sendJSON(res, 201, { created, count: created.length });
+});
+
+on('GET', '/api/admin/qr/:pointId/analytics', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  assertTenantWrite(session, pointPartnerId(p.pointId));
+  const tokenRow = db.prepare('SELECT token FROM qr_tokens WHERE point_id = ? ORDER BY created_at DESC LIMIT 1').get(p.pointId);
+  if (!tokenRow) return sendJSON(res, 404, { error: 'No QR token for this point' });
+  const events = db.prepare('SELECT * FROM qr_analytics_events WHERE token = ? ORDER BY ts DESC').all(tokenRow.token);
+  const scans = events.filter(e => e.event_type === 'scan');
+  const orders = events.filter(e => e.event_type === 'order');
+  const orderIds = orders.map(o => o.order_id).filter(Boolean);
+  const paidOrders = orderIds.length ? db.prepare(`SELECT id, total, status FROM orders WHERE id IN (${orderIds.map(() => '?').join(',')}) AND status NOT IN ('Cancelled','Failed')`).all(...orderIds) : [];
+  const totalSales = paidOrders.reduce((s, o) => s + (o.total || 0), 0);
+  sendJSON(res, 200, {
+    scans: scans.length, orders: orders.length,
+    conversionRate: scans.length ? Math.round((orders.length / scans.length) * 1000) / 10 : 0,
+    lastScan: scans[0] ? scans[0].ts : null, lastOrder: orders[0] ? orders[0].ts : null,
+    totalSales: Math.round(totalSales * 100) / 100,
+  });
+});
+
 /* ------------------------------ ADMIN: catalog --------------------------------- */
 on('GET', '/api/admin/categories', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, query, session) => {
   let rows = db.prepare('SELECT * FROM categories').all();
@@ -836,6 +883,7 @@ on('PATCH', '/api/admin/outlets/:id', ['SuperAdmin', 'PartnerAdmin'], async (req
 on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
   const row = db.prepare('SELECT * FROM qr_tokens WHERE token = ?').get(p.token);
   if (!row || !row.active) return sendJSON(res, 404, { error: 'QR غير صالح / Invalid QR' });
+  logQrEvent(p.token, 'scan', null);
   const point = db.prepare('SELECT * FROM points WHERE id = ?').get(row.point_id);
   if (!point || !point.active) return sendJSON(res, 409, { error: 'Point unavailable' });
   const zone = db.prepare('SELECT * FROM zones WHERE id = ?').get(point.zone_id);

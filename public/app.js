@@ -484,6 +484,18 @@ const App = {
     try{ await api('PATCH',`/api/admin/points/${id}`,{active:!active},true); await App.loadAdminAll(); }
     catch(e){ showErr(e.message); }
   },
+  async bulkGenerateQr(){
+    const zoneId=document.getElementById('bulkZone').value, type=document.getElementById('bulkType').value;
+    const count=document.getElementById('bulkCount').value, labelPrefix=document.getElementById('bulkPrefix').value.trim();
+    try{ const r=await api('POST','/api/admin/qr/bulk',{zoneId,type,count,labelPrefix},true); showToast(`${S.lang==='ar'?'تم توليد':'Generated'} ${r.count}`); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+  async viewQrAnalytics(pointId){
+    S.ui.qrAnalyticsFor = pointId; S.ui.qrAnalyticsData = null; render();
+    try{ S.ui.qrAnalyticsData = await api('GET',`/api/admin/qr/${pointId}/analytics`,null,true); render(); }
+    catch(e){ showErr(e.message); S.ui.qrAnalyticsFor=null; render(); }
+  },
+  closeQrAnalytics(){ S.ui.qrAnalyticsFor=null; render(); },
   async addCategory(){
     const name_ar=document.getElementById('catAr').value.trim(), name_en=document.getElementById('catEn').value.trim();
     if(!name_ar && !name_en) return;
@@ -1013,6 +1025,18 @@ function renderAdminZones(){
         <div class="darkfield"><label>${t('pointType')}</label><select id="pointType"><option>Table</option><option>Room</option><option>Seat</option><option>Office</option><option>Area</option></select></div>
         <div class="darkfield" style="grid-column:1/-1"><label>${t('pointCode')}</label><input id="pointLabel" placeholder="Table 24"></div>
       </div><button class="btn-small brass" onclick="App.addPoint()">+ ${t('addPoint')}</button>
+    </div>
+    <div class="panel"><h3>${S.lang==='ar'?'توليد رموز QR بالجملة':'Bulk generate QR codes'}</h3>
+      <p class="ph">${S.lang==='ar'?'لطباعة عدة نقاط دفعة واحدة (مثال: 20 طاولة تراس)':'Print several points at once (e.g. 20 terrace tables)'}</p>
+      <div class="formgrid">
+        <div class="darkfield"><label>${S.lang==='ar'?'المنطقة':'Zone'}</label><select id="bulkZone">${zoneOpts}</select></div>
+        <div class="darkfield"><label>${S.lang==='ar'?'نوع الرمز':'QR type'}</label>
+          <select id="bulkType"><option value="table">Table</option><option value="office">Office</option><option value="room">Room</option><option value="zone">Zone</option><option value="counter_pickup">Counter Pickup</option></select>
+        </div>
+        <div class="darkfield"><label>${S.lang==='ar'?'العدد (حتى 50)':'Count (up to 50)'}</label><input id="bulkCount" type="number" value="10" max="50" min="1"></div>
+        <div class="darkfield"><label>${S.lang==='ar'?'بادئة الاسم':'Label prefix'}</label><input id="bulkPrefix" placeholder="Terrace Table"></div>
+      </div>
+      <button class="btn-small brass" onclick="App.bulkGenerateQr()">${S.lang==='ar'?'توليد':'Generate'}</button>
     </div></div>
     <div class="panel"><h3>${t('existingPoints')}</h3>
       ${S.admin.points.map(p=>{
@@ -1020,9 +1044,30 @@ function renderAdminZones(){
         return `<div class="pointrow"><div class="qrmini">${Array.from({length:36}).map((_,i)=>{
             const h=((p.token||'0').charCodeAt(i%(p.token||'0').length)+i*7)%5; return `<div class="${h===0?'off':''}"></div>`; }).join('')}</div>
           <div class="meta"><b>${p.label} — ${z?(S.lang==='ar'?z.name_ar:z.name_en):''}</b><span>${p.id} · token:${p.token}</span></div>
+          <button class="btn-small line" style="margin-inline-end:6px" onclick="App.viewQrAnalytics('${p.id}')">${S.lang==='ar'?'تحليلات':'Analytics'}</button>
           <button class="togglepill ${p.active?'active':'inactive'}" onclick="App.togglePoint('${p.id}',${!!p.active})">${p.active?t('active'):t('inactive')}</button></div>`;
       }).join('')}
-    </div></div>`;
+    </div></div>
+    ${S.ui.qrAnalyticsFor? renderQrAnalyticsModal():''}`;
+}
+
+function renderQrAnalyticsModal(){
+  const d = S.ui.qrAnalyticsData;
+  const fmtTime = (ts) => ts ? new Date(ts).toLocaleString(S.lang==='ar'?'ar-SA':'en-US') : (S.lang==='ar'?'لا يوجد بعد':'None yet');
+  return `<div class="ordmodal" onclick="if(event.target===this) App.closeQrAnalytics()"><div class="ordsheet">
+    <h3 style="font-family:inherit">${S.lang==='ar'?'تحليلات رمز QR':'QR Analytics'}</h3>
+    <div class="pt">${S.ui.qrAnalyticsFor}</div>
+    ${!d? `<div class="empty-hint">Loading…</div>` : `
+      <div class="kpirow" style="margin-bottom:0">
+        <div class="kpi"><div class="lbl">${S.lang==='ar'?'مسح':'Scans'}</div><div class="val">${d.scans}</div></div>
+        <div class="kpi"><div class="lbl">${S.lang==='ar'?'طلبات':'Orders'}</div><div class="val">${d.orders}</div></div>
+        <div class="kpi"><div class="lbl">${S.lang==='ar'?'التحويل':'Conversion'}</div><div class="val">${d.conversionRate}%</div></div>
+        <div class="kpi"><div class="lbl">${S.lang==='ar'?'المبيعات':'Sales'}</div><div class="val">${money(d.totalSales)}</div></div>
+      </div>
+      <div class="notebox" style="margin-top:14px">${S.lang==='ar'?'آخر مسح':'Last scan'}: ${fmtTime(d.lastScan)}<br>${S.lang==='ar'?'آخر طلب':'Last order'}: ${fmtTime(d.lastOrder)}</div>
+    `}
+    <div class="actrow"><button class="ghostbtn" onclick="App.closeQrAnalytics()">${t('close')}</button></div>
+  </div></div>`;
 }
 
 function renderAdminCatalog(){
