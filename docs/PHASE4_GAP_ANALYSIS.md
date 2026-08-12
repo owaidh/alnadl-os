@@ -1,4 +1,4 @@
-> **Version:** v1.3.0-draft · **Status:** DRAFT (pending client review) · **Last Updated:** 2026-08-12 · **Release Tag:** N/A — not yet implemented
+> **Version:** v1.4.0-increment1 · **Status:** DRAFT — Increment 1 (Outlet Architecture) implemented & regression-tested; Increments 2-4 still planning · **Last Updated:** 2026-08-12 · **Release Tag:** v1.4.0-increment1
 
 # Alnadl Hospitality OS — Phase 4 Gap Analysis & Technical Design
 ### (المطلوب من المبرمج قبل بدء التنفيذ — §22 من وثيقة Phase 4 Change Request v2)
