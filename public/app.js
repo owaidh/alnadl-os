@@ -1104,10 +1104,17 @@ function renderPartnerOverview(){
     <div class="kpi"><div class="lbl">${t('grossSales')}</div><div class="val">${money(ov.grossSales)}</div><div class="sub">SAR</div></div>
     <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${ov.orders}</div></div>
     <div class="kpi"><div class="lbl">${t('aov')}</div><div class="val">${money(ov.aov)}</div><div class="sub">SAR</div></div>
-    <div class="kpi"><div class="lbl">${t('topZones')}</div><div class="val" style="font-size:13px">${ov.topZones[0]? ov.topZones[0].zone : '—'}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'سلال متعددة المنافذ':'Cross-Outlet Basket Rate'}</div><div class="val">${ov.crossOutletBasketRate!=null?ov.crossOutletBasketRate:0}%</div></div>
   </div>
-  <div class="panel"><h3>${t('topZones')}</h3><table class="datatable"><tr><th>${S.lang==='ar'?'المنطقة':'Zone'}</th><th>${t('orders')}</th></tr>
-    ${ov.topZones.map(z=>`<tr><td>${z.zone}</td><td>${z.count}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}</table></div>`;
+  <div class="grid2">
+    <div class="panel"><h3>${t('topZones')}</h3><table class="datatable"><tr><th>${S.lang==='ar'?'المنطقة':'Zone'}</th><th>${t('orders')}</th></tr>
+      ${ov.topZones.map(z=>`<tr><td>${z.zone}</td><td>${z.count}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}</table></div>
+    <div class="panel"><h3>${S.lang==='ar'?'الأداء حسب المنفذ':'Performance by Outlet'}</h3>
+      <table class="datatable"><tr><th>${S.lang==='ar'?'المنفذ':'Outlet'}</th><th>${t('orders')}</th><th>${S.lang==='ar'?'إجمالي':'Gross'}</th><th>${S.lang==='ar'?'حصة الشريك':'Partner'}</th><th>${S.lang==='ar'?'التقييم':'Rating'}</th></tr>
+      ${(ov.outletPerformance||[]).map(o=>`<tr><td>${S.lang==='ar'?o.name_ar:o.name_en}</td><td>${o.orders}</td><td>${money(o.gross)}</td><td>${money(o.partnerAmount)}</td><td>${o.avgRating!=null?('★ '+o.avgRating):'—'}</td></tr>`).join('') || `<tr><td colspan="5">—</td></tr>`}
+      </table>
+    </div>
+  </div>`;
 }
 
 function renderSettlements(){

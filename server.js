@@ -689,7 +689,35 @@ on('GET', '/api/partner/overview', ['PartnerViewer', 'PartnerAdmin', 'SuperAdmin
     if (zone) { const key = zone.name_en; zoneCounts[key] = (zoneCounts[key] || 0) + 1; }
   }
   const topZones = Object.entries(zoneCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([zone, count]) => ({ zone, count }));
-  sendJSON(res, 200, { grossSales: round2(gross), orders: orders.length, aov: round2(aov), topZones });
+
+  // Cross-Outlet Basket Rate (§14) — % of orders that genuinely spanned more
+  // than one outlet (i.e. have child_orders), a real product metric that only
+  // became meaningful once Unified Cart existed.
+  const ordersWithChildren = orders.filter(o => db.prepare('SELECT COUNT(*) c FROM child_orders WHERE parent_order_id = ?').get(o.id).c > 0);
+  const crossOutletBasketRate = orders.length ? round2((ordersWithChildren.length / orders.length) * 100) : 0;
+
+  // Per-outlet performance breakdown, from the Revenue Ledger (§10) — the
+  // authoritative record of what was actually allocated, not re-derived
+  // from raw order totals.
+  const outlets = db.prepare('SELECT * FROM outlets WHERE property_id IN (SELECT id FROM properties WHERE partner_id = ?)').all(partnerId);
+  const outletPerformance = outlets.map(o => {
+    const ledgerRows = db.prepare('SELECT * FROM revenue_ledger WHERE outlet_id = ?').all(o.id);
+    const orderIds = [...new Set(ledgerRows.map(r => r.order_id))];
+    const grossTotal = ledgerRows.reduce((s, r) => s + r.gross_amount, 0);
+    const partnerTotal = ledgerRows.reduce((s, r) => s + r.partner_amount, 0);
+    const alnadlTotal = ledgerRows.reduce((s, r) => s + r.alnadl_amount, 0);
+    // Average feedback rating for orders that included this outlet
+    const stars = orderIds.length
+      ? db.prepare(`SELECT AVG(stars) avg FROM feedback WHERE order_id IN (${orderIds.map(() => '?').join(',') || "''"})`).get(...orderIds).avg
+      : null;
+    return {
+      outletId: o.id, name_ar: o.name_ar, name_en: o.name_en, type: o.type,
+      orders: orderIds.length, gross: round2(grossTotal), partnerAmount: round2(partnerTotal), alnadlAmount: round2(alnadlTotal),
+      avgRating: stars ? round2(stars) : null,
+    };
+  }).sort((a, b) => b.gross - a.gross);
+
+  sendJSON(res, 200, { grossSales: round2(gross), orders: orders.length, aov: round2(aov), topZones, crossOutletBasketRate, outletPerformance });
 });
 function round2(n) { return Math.round(n * 100) / 100; }
 
