@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const { db, uid, hash } = require('./db.js');
+const { db, uid, hash, hashPbkdf2 } = require('./db.js');
 const { login, authenticate, requireRole, assertPartnerScope } = require('./lib/auth.js');
 const { canTransition, actorAllowed, TRANSITIONS } = require('./lib/statemachine.js');
 const { computeSettlement, saveSettlement } = require('./lib/settlement.js');
@@ -945,7 +945,7 @@ on('POST', '/api/admin/users', ['SuperAdmin', 'PartnerAdmin'], async (req, res, 
   if (session.role === 'PartnerAdmin') { b.partner_scope = session.scope; if (!['Operator', 'Runner', 'SiteManager', 'PartnerViewer'].includes(b.role)) { const e = new Error('PartnerAdmin can only create site-level roles'); e.status = 403; throw e; } }
   const id = uid('u');
   db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)
-    .run(id, b.username, hash(b.username), b.role, b.partner_scope || null, Date.now());
+    .run(id, b.username, hashPbkdf2(b.username), b.role, b.partner_scope || null, Date.now());
   audit(session.username, session.role, 'user_create', id, null, { username: b.username, role: b.role }, null);
   sendJSON(res, 201, { id, note: 'Password defaults to the username in this sandbox demo' });
 });
@@ -1260,4 +1260,10 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Alnadl Hospitality OS backend listening on http://localhost:${PORT}`);
   console.log(`Demo users (password = username): customer_demo, operator, runner, manager, partner, finance, admin`);
+  if (!process.env.SESSION_SECRET) {
+    console.warn('\n⚠️  WARNING (Q06): SESSION_SECRET is not set — using a random per-process secret.');
+    console.warn('    Every restart invalidates every active session. This is fine for local/demo use');
+    console.warn('    but MUST be set to a fixed, secret value from a secret manager before any real');
+    console.warn('    deployment. See docs/DEPLOYMENT.md "الأمان" section.\n');
+  }
 });

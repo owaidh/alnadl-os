@@ -46,6 +46,19 @@ async function run() {
     assertEqual(orderOnInactive.status, 409, 'ordering against a deactivated point is rejected, not silently accepted');
     await api('PATCH', '/api/admin/points/PT-014', { active: true }, adminToken); // restore for other tests
 
+    // --- Q06: login rate limiting ---
+    const rateLimitUser = 'rate_limit_test_user_' + Date.now();
+    let lastStatus;
+    for (let i = 0; i < 6; i++) {
+      const attempt = await api('POST', '/api/auth/login', { username: rateLimitUser, password: 'wrong-password' });
+      lastStatus = attempt.status;
+    }
+    assertEqual(lastStatus, 429, 'the 6th failed login attempt in a row is rate-limited (429), not just another 401');
+
+    // --- Q06: password hashing is PBKDF2, not the old raw SHA-256 ---
+    const correctLogin = await api('POST', '/api/auth/login', { username: 'admin', password: 'admin' });
+    assertEqual(correctLogin.status, 200, 'a correct login still succeeds under the new PBKDF2 hashing');
+
   } finally {
     stopServer();
   }

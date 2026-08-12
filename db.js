@@ -201,7 +201,23 @@ CREATE TABLE IF NOT EXISTS partner_branding (
 );
 `);
 
-function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); }
+function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); } // legacy — kept only so migration 004 can detect and upgrade old hashes
+function hashPbkdf2(pw, salt) {
+  salt = salt || crypto.randomBytes(16).toString('hex');
+  const iterations = 100000;
+  const derived = crypto.pbkdf2Sync(pw, salt, iterations, 32, 'sha256').toString('hex');
+  return `pbkdf2:${iterations}:${salt}:${derived}`;
+}
+function verifyPassword(pw, stored) {
+  if (stored.startsWith('pbkdf2:')) {
+    const [, iterStr, salt, expected] = stored.split(':');
+    const derived = crypto.pbkdf2Sync(pw, salt, parseInt(iterStr), 32, 'sha256').toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(derived), Buffer.from(expected));
+  }
+  // legacy SHA-256 hash (pre-Q06) — still verified for any not-yet-migrated
+  // row, but never produced for a new password.
+  return stored === hash(pw);
+}
 
 function seedIfEmpty() {
   const has = db.prepare('SELECT COUNT(*) c FROM partners').get().c;
@@ -354,7 +370,7 @@ function seedIfEmpty() {
   ];
   for (const [username, role, scope] of users) {
     db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)
-      .run(uid('u'), username, hash(username), role, scope, Date.now());
+      .run(uid('u'), username, hashPbkdf2(username), role, scope, Date.now());
   }
 
   // a couple of demo promo codes
@@ -458,4 +474,4 @@ if (migrationResults.length) {
   console.log(`Applied ${migrationResults.length} migration(s): ${migrationResults.map(r => r.id).join(', ')}`);
 }
 
-module.exports = { db, uid, hash };
+module.exports = { db, uid, hash, hashPbkdf2, verifyPassword };
