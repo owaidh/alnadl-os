@@ -38,6 +38,7 @@ const DOCS = [
   { file: 'docs/CREDENTIALS.md', category: 'أمن المعلومات · Security' },
   { file: 'docs/WARRANTY_CLAUSE_TEMPLATE.md', category: 'نموذج تعاقدي · Contract Template' },
   { file: 'docs/PHASE4_GAP_ANALYSIS.md', category: 'تحليل فني · Technical Analysis', landscape: true },
+  { file: 'docs/PHASE5_GAP_ANALYSIS.md', category: 'تحليل فني · Technical Analysis (DRAFT)' },
   { file: 'docs/GAP_REGISTER.md', category: 'سجل الفجوات · Gap Register', landscape: true },
   { file: 'docs/CHANGELOG.md', category: 'سجل الإصدارات · Release Notes' },
 ];
