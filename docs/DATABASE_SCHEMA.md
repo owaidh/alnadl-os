@@ -1,4 +1,4 @@
-> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+> **Version:** v1.8.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -105,6 +105,24 @@ promotions (مرتبط بـ property_id)
 
 ### `wallet_accounts` / `wallet_transactions` — المحفظة المؤسسية (§8/§14)
 `wallet_accounts.owner_ref` معرّف الجهة المستخدم في الربط عند الدفع (`GET /api/wallets/lookup`). `monthly_budget` و`spent_this_period` يحدّدان السقف الكلي؛ `policy_json` يحمل قواعد إضافية مرنة (حاليًا `perOrderCap` فقط، قابل للتوسعة لاحقًا لقيود توقيت/تصنيف دون تعديل المخطط). `wallet_transactions` سجل كل خصم فعلي، مرتبط بالطلب المسبب.
+
+### `outlets` — المنافذ (Phase 4 §6)
+`property_id` → `properties.id`. `type`: coffee/restaurant/bakery/service/other. `operator`: alnadl/partner/third_party. `commission_rate` قيمة موروثة من Merchants (Phase 3)، تُستخدم كنموذج إيراد ضمني حتى يُعرَّف نموذج صريح في `revenue_models`. `legacy_merchant_id` يحفظ تتبّع الترحيل من أي صف `merchants` نشأ هذا المنفذ.
+
+### `outlet_availability` — ربط منفذ↔منطقة/نقطة **مع بُعد زمني** (§5)
+منفذ **بلا أي صف هنا** متاح دائمًا وفي كل مكان — هذا ما يجعل كل منفذ مُرحَّل من Increment 1 يعمل دون أي إعداد إضافي. وجود صفوف يُقيِّد التوفر بمنطقة/نقطة/يوم/نطاق وقت محدد.
+
+### `qr_analytics_events` — سجل خام لأحداث QR (§5)
+صف واحد لكل مسح فعلي (`GET /api/qr/:token` أو `/api/service-hub/:token`) أو طلب فعلي — وليس عدادًا مُجمَّعًا مُخزَّنًا؛ كل مؤشرات التحليلات (نسبة التحويل، آخر مسح...) تُحسب من هذا السجل عند الطلب.
+
+### `child_orders` + `order_items.child_order_id`/`outlet_id` (Phase 4 §8/§13)
+طلب بمنفذ واحد **لا ينشئ أي صف هنا إطلاقًا** — يبقى مطابقًا 100% لسلوك ما قبل Phase 4. طلب يمتد لأكثر من منفذ (فقط إن كانت الباقة تشمل `unifiedCart`) ينشئ صفًا لكل منفذ، وتُحدَّث `order_items.child_order_id` لتربط كل سطر بالطلب الفرعي الصحيح. `orders.status` للطلب الأصلي **يُشتق تلقائيًا** من حالات الأبناء (`deriveParentStatus()` في `server.js`) ولا يُكتب مباشرة أبدًا عند وجود أبناء.
+
+### `revenue_models` + `revenue_ledger` (Phase 4 §9/§10)
+نموذج واحد نشط لكل منفذ (`active=1`)؛ تغيير النموذج يُعطِّل القديم (`active=0`) بدل حذفه — تاريخ كامل محفوظ. **`revenue_ledger` يُكتب مرة واحدة فقط عند نجاح الدفع، وكل سطر يحمل `model_snapshot_json`** (لقطة كاملة من النموذج المستخدم وقتها) — هذا يضمن أن تغيير نموذج منفذ لاحقًا لا يُعيد كتابة أي معاملة تاريخية أبدًا، بنفس فلسفة `settlements` في Phase 3.
+
+### `partner_branding` (Phase 4 §11/§12)
+صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
 
 ### `users` — حسابات النظام
 `partner_scope` هو FK اختياري لـ `partners.id` — `NULL` تعني مستخدمًا على مستوى النادل (SuperAdmin/AlnadlFinance) وليس مقيّدًا بشريك واحد. `password_hash` هو SHA-256 بسيط **لأغراض العرض التوضيحي فقط** — راجع README لملاحظات الأمان قبل الإنتاج.

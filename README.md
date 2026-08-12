@@ -1,4 +1,4 @@
-> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+> **Version:** v1.8.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
 
 # Alnadl Hospitality OS — Backend + Frontend
 
@@ -114,13 +114,27 @@ refund(gatewayRef, amount)
 
 جميع مزايا Loyalty/Corporate Wallet/Marketplace مُقيّدة بباقة PLATFORM فقط (§12) — تم اختبار الحظر الفعلي (402) على الباقات الأقل، ثم رفع الحظر فورًا عند الترقية، تمامًا كباقي مزايا SaaS في هذا النظام.
 
-## غير مبني بعد (خارج نطاق MVP + Phase 2/3 الحالية)
+## Phase 4 — التوسعة البنيوية (منجزة بالكامل ومُختبرة، راجع `docs/PHASE4_GAP_ANALYSIS.md` للتفاصيل الكاملة)
 
-- AI Forecasting / Predictive Operations (Phase 4، §19)
-- P02/P03/P05 (تحليلات وتقارير مفصّلة إضافية)
+| البند | الحالة |
+|---|---|
+| **Outlet Architecture** (§6) — منافذ مستقلة لكل عائلة منتج | ✅ Backend + Migration فعلي + شاشة إدارية |
+| **Service Hub** (§7) — اختيار المنفذ عند العميل | ✅ Backend + واجهة عميل كاملة، مع تخطٍ تلقائي عند منفذ واحد |
+| **Unified Cart / Parent-Child Orders** (§8/§13) | ✅ — طلب متعدد المنافذ يُقسَّم فعليًا لتذاكر KDS مستقلة، بحالة أصل مُشتقة تلقائيًا |
+| **Revenue Model Engine** (§9/§10) — 4 أنواع حساب لكل منفذ | ✅ — بما فيها Ledger بلقطات ثابتة لا تُعاد كتابتها أبدًا |
+| **White Label** (§11/§12) | ✅ — معزول تمامًا عن هوية أي منفذ، بنموذج تجاري منفصل |
+| **QR Bulk Generation + Analytics** (§5) | ✅ — توليد حتى 50 رمز دفعة واحدة + Scans/Conversion/Sales لكل رمز |
+| **باقة CONNECT** الجديدة | ✅ — بين SMART وPLATFORM |
+
+**كل بند أعلاه اختُبر فعليًا** (curl + متصفح حقيقي عبر Playwright)، وليس بناءً نظريًا — راجع سجل Git (`git log`) والعلامات (`git tag`) لكل زيادة على حدة.
+
+## غير مبني بعد
+
+- AI Forecasting / Predictive Operations (Phase 5+ حسب خارطة التطور)
+- P02/P03/P05 (تحليلات وتقارير مفصّلة إضافية) وPartner Dashboard الموسّع (Cross-Outlet Basket Rate)
 - MFA للمستخدمين الإداريين
 - مزوّد إشعارات حقيقي (SMS/Email/Push) — سجل الأحداث جاهز (`notifications` table)، لكن لا اتصال فعلي بمزود خارجي، بنفس فلسفة `lib/payment.js`: نقطة تمديد واحدة واضحة
-- سلة تسوق مُقسّمة فعليًا حسب الشريك التجاري عند الدفع (Marketplace الحالي يعرض المنتجات مجمّعة بصريًا في نفس السلة، لا فواتير منفصلة لكل شريك)
+- 19 من أصل 20 وثيقة مطلوبة في §26 من Phase 4 Change Request (فقط Gap Analysis مكتمل)؛ Requirement Traceability Matrix بدأت جزئيًا فقط
 
 ---
 

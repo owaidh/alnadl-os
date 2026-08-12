@@ -1,4 +1,4 @@
-> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+> **Version:** v1.8.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -236,6 +236,69 @@ Authorization: Bearer <token>
 ### `GET /api/audit?limit=100`
 ### `GET /api/admin/notifications?limit=100`
 سجل أحداث الإشعارات (بديل مؤقت لمزوّد SMS/Email حقيقي — راجع README).
+
+---
+
+## 15) المنافذ (Outlets) — Phase 4 §6
+
+### `GET/POST /api/admin/outlets`
+إدارة المنافذ (كوفي/مطعم/مخبز...) ضمن منشأة. **منفذ إضافي (بعد الأول) يتطلب باقة تشمل `multiOutlet`** (CONNECT أو PLATFORM) — 402 عدا ذلك؛ المنفذ الأول (المُرحَّل تلقائيًا من `merchants`) لا يخضع لهذا القيد أبدًا.
+### `PATCH /api/admin/outlets/:id`
+تفعيل/إيقاف أو تعديل حقول أساسية.
+
+### `GET /api/service-hub/:token` — عام
+النسخة الموسّعة من `GET /api/qr/:token` (نفس الشكل + حقلي `hub` و`outlets`/`outlet`):
+- إن كان عدد المنافذ الفعّالة (بعد فلترة `outlet_availability` حسب المنطقة/النقطة/الوقت) ≤ 1، أو الباقة لا تشمل `multiOutlet`: `hub:false` مع `outlet` واحد — **تخطٍ كامل للشاشة**، مطابق تمامًا لمعيار القبول §20.16.
+- إن كان العدد > 1 والباقة تشمل الميزة: `hub:true` مع مصفوفة `outlets`.
+
+---
+
+## 16) محرك نموذج الإيراد (Revenue Model Engine) — Phase 4 §9/§10
+
+### `GET/POST /api/admin/revenue-models`
+نموذج واحد نشط لكل Outlet، من 4 أنواع: `share` (نسبة من القاعدة المستحقة للشريك) · `commission` (نسبة يأخذها النادل) · `fixed` (رسم ثابت للنادل) · `hybrid` (عمولة + رسم ثابت معًا). منفذ بلا نموذج صريح يستخدم نموذج **عمولة ضمني** مبني تلقائيًا من `outlets.commission_rate` المُرحَّل من Phase 3 — لا حاجة لأي إعداد إضافي على المنافذ القائمة.
+
+### `GET /api/admin/revenue-ledger?outletId=`
+سجل كل معاملة موزَّعة. **كل سطر يحمل لقطة كاملة (`model_snapshot_json`) من النموذج وقت الكتابة** — تغيير النموذج لاحقًا لا يُعيد كتابة أي سطر قديم أبدًا. يُكتب مرة واحدة فقط عند نجاح الدفع (`POST /api/orders/:id/pay`)، ويُوزَّع تلقائيًا على كل منفذ ممثَّل في الطلب بما يتناسب مع حصته من المجموع الفرعي (بما في ذلك توزيع الخصومات بالتناسب).
+
+---
+
+## 17) السلة الموحّدة والطلبات الفرعية (Unified Cart / Child Orders) — Phase 4 §8/§13
+
+طلب يمتد لأكثر من منفذ (فقط إن كانت الباقة تشمل `unifiedCart`) يُنشئ صفوف `child_orders` إضافية — **سلة بمنفذ واحد لا تُنشئ أي طلب فرعي إطلاقًا** وتبقى مطابقة 100% لسلوك ما قبل Phase 4.
+
+### `POST /api/child-orders/:id/transition`
+نظير `POST /api/orders/:id/transition` لكن على مستوى الطلب الفرعي — نفس آلة الحالة تمامًا. حالة الطلب الأصلي (Parent) **تُشتق تلقائيًا** من أبنائه (لا تُغيَّر مباشرة أبدًا): أقل حالة تقدّمًا بين الأبناء النشطين، وتصبح `Delivered` فقط عندما يكتمل الجميع، و`Cancelled` فقط إن أُلغي الجميع.
+
+### `GET /api/ops/queue?stationId=`
+يُرجع الطلبات أحادية المنفذ كما هي دائمًا، **بالإضافة** إلى تذكرة مستقلة لكل طلب فرعي نشط (بعلامة `isChild:true` واسم المنفذ) — قابلة للفلترة حسب المحطة.
+
+---
+
+## 18) العلامة التجارية (White Label) — Phase 4 §11/§12
+
+### `GET/POST /api/admin/branding`
+**تعديل الوضع أو النطاق المخصص إداري فقط (`SuperAdmin`)**، تطبيقًا لمبدأ §19 الأمني. **مُقيّد بباقة `whiteLabel`** (PLATFORM). يشمل نموذجًا تجاريًا منفصلاً تمامًا عن نموذج إيراد المنفذ (`fee_model`: `included`/`setup`/`monthly`/`annual`/`setup_recurring`).
+
+يُطبَّق فقط على واجهة العميل (Platform Shell) عبر متغيرات CSS مُحدَّدة النطاق — **هوية أي Outlet (`branding_json`) مستقلة تمامًا ولا تتأثر أبدًا**. تخفيض باقة شريك لا يحذف إعداداته المحفوظة، بل يُرجع العرض تلقائيًا للعلامة الافتراضية حتى إعادة الترقية.
+
+النطاق المخصص (`custom_domain`) بيانات تخزين فقط — التوجيه الفعلي (DNS/Reverse Proxy) بنية تحتية خارج نطاق الكود، موثّقة في `docs/DEPLOYMENT.md`.
+
+---
+
+## 19) رموز QR — التوليد الجماعي والتحليلات — Phase 4 §5
+
+### `POST /api/admin/qr/bulk`
+```json
+{ "zoneId": "z_lobby", "type": "table", "count": 20, "labelPrefix": "Terrace Table" }
+```
+ينشئ حتى 50 نقطة+رمز QR بطلب واحد. الأنواع الخمسة: `table`, `office`, `room`, `zone`, `counter_pickup`.
+
+### `GET /api/admin/qr/:pointId/analytics`
+```json
+{ "scans": 2, "orders": 1, "conversionRate": 50, "lastScan": 173..., "lastOrder": 173..., "totalSales": 25.3 }
+```
+محسوبة من سجل أحداث خام (`qr_analytics_events`) يُسجَّل عند كل مسح فعلي (`GET /api/qr/:token` أو `/api/service-hub/:token`) وكل طلب فعلي — وليس عدادًا مُخزَّنًا يمكن أن ينحرف عن الواقع.
 
 ---
 

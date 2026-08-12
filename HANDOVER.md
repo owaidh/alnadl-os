@@ -1,4 +1,4 @@
-> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+> **Version:** v1.8.0 · **Status:** FINAL (Phase 1-3) + LIVING (Phase 4 in progress) · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
 
 # Alnadl Hospitality OS — التسليم الفني النهائي (Final Technical Handover)
 

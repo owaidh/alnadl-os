@@ -1,4 +1,4 @@
-> **Version:** v1.4.0-increment1 · **Status:** DRAFT — Increment 1 (Outlet Architecture) implemented & regression-tested; Increments 2-4 still planning · **Last Updated:** 2026-08-12 · **Release Tag:** v1.4.0-increment1
+> **Version:** v1.8.0 · **Status:** LIVING DOCUMENT — Increments 1-4 + QR Bulk/Analytics implemented & regression-tested; remaining scope: Partner Dashboard extensions, §26 documentation set (19/20 files outstanding) · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
 
 # Alnadl Hospitality OS — Phase 4 Gap Analysis & Technical Design
 ### (المطلوب من المبرمج قبل بدء التنفيذ — §22 من وثيقة Phase 4 Change Request v2)
@@ -214,7 +214,7 @@ partner_branding: ... + fee_model ('included'|'setup'|'monthly'|'annual'|'setup_
 ### نظام Requirement ID (مطلوب لـ§26.3 Traceability Matrix)
 يُقترح الترميز: `P4-<AREA>-<NUM>` مطابقًا لأمثلة الوثيقة نفسها (`P4-OUT-01`, `P4-REV-01`, `P4-WL-01`). المجالات: `OUT` (Outlet) · `HUB` (Service Hub) · `CART` (Unified Cart) · `REV` (Revenue Engine) · `WL` (White Label) · `QR` (QR/Site Mapping) · `PKG` (Packages/Flags) · `SEC` (Security).
 
-### Traceability Matrix — Increment 1 (منفَّذ ومُختبَر فعليًا)
+### Traceability Matrix — Increments 1-4 + QR Bulk/Analytics (منفَّذة ومُختبَرة فعليًا)
 أول سطور فعلية في هذا النظام، بأدلة اختبار حقيقية وليست افتراضية:
 
 | Requirement ID | المتطلب | UI/Screen | API/Service | DB Entity | Test Evidence | الحالة |
@@ -224,9 +224,20 @@ partner_branding: ... + fee_model ('included'|'setup'|'monthly'|'annual'|'setup_
 | P4-OUT-03 | Migration idempotent (لا تكرار عند إعادة التشغيل) | — | نفس الدالة أعلاه | `outlets` | اختُبر: استدعاء الدالة مرتين → العدد ثابت (3 وليس 6) | **Pass** |
 | P4-PKG-01 | باقة CONNECT جديدة بمزايا Multi-Outlet | A-TenantsPlans | `GET /api/plans` | `plans` | اختُبر: 4 باقات تُرجَع (OPERATE/SMART/**CONNECT**/PLATFORM) | **Pass** |
 | P4-PKG-02 | حظر إنشاء Outlet إضافي بدون مزايا الباقة | A-OutletManager | `POST /api/admin/outlets` (feature gate) | `subscriptions.features_json` | اختُبر: تخفيض Hotel Nova لباقة SMART → محاولة إضافة منفذ ثالث تُرفض 402، والمنفذان المُرحَّلان يبقيان سليمين وقابلين للقراءة | **Pass** |
-| P4-HUB-01 | Service Hub تظهر فقط عند تعدد المنافذ الفعلي | — (Backend فقط حتى الآن، الواجهة الأمامية لم تُبنَ بعد) | `GET /api/service-hub/:token` | `outlets`, `outlet_availability` | اختُبر: Hotel Nova (منفذان، PLATFORM) → `hub:true`؛ Al-Rowad (منفذ واحد) → `hub:false` تلقائيًا | **Pass** |
-| P4-HUB-02 | Zone/Point↔Outlet مع بُعد زمني | — | نفس نقطة أعلاه | `outlet_availability` | مبني ومُختبَر منطقيًا (فلترة day_of_week/time_from/time_to)؛ **لا يوجد بعد سيناريو اختبار بوقت فعلي مضبوط** (يحتاج اختبارًا إضافيًا عند ربط بيانات توفر حقيقية) | **Partial** |
-| P4-SEC-01 | Regression: النظام القائم لا يتأثر إطلاقًا | كل الشاشات القائمة | `GET /api/qr/:token` (بلا تغيير) | — | اختُبر 4 مرات متتالية عبر كل هذه الزيادة: رحلة العميل الكاملة + تسجيل دخول كل الأدوار السبعة — **صفر أخطاء في كل مرة** | **Pass** |
+| P4-HUB-01 | Service Hub تظهر فقط عند تعدد المنافذ الفعلي | scrHub() — واجهة عميل كاملة | `GET /api/service-hub/:token` | `outlets`, `outlet_availability` | اختُبر عبر متصفح حقيقي: Hotel Nova (منفذان، PLATFORM) → بطاقات اختيار فعلية (لقطة شاشة)؛ Al-Rowad (منفذ واحد) → صفر بطاقات، تخطٍ تلقائي لشاشة "ابدأ الطلب" (لقطة شاشة) | **Pass** |
+| P4-HUB-02 | Zone/Point↔Outlet مع بُعد زمني | — | `GET /api/service-hub/:token` | `outlet_availability` | مبني ومُختبَر منطقيًا (فلترة day_of_week/time_from/time_to)؛ **لا يوجد بعد سيناريو اختبار بوقت فعلي مضبوط** | **Partial** |
+| P4-SEC-01 | Regression: النظام القائم لا يتأثر إطلاقًا | كل الشاشات القائمة | `GET /api/qr/:token` (بلا تغيير) | — | اختُبر عبر أكثر من 10 دورات Regression متتالية عبر كل زيادات Phase 4 — **صفر أخطاء في كل مرة** | **Pass** |
+| P4-CART-01 | سلة موحّدة عبر أكثر من منفذ | scrHub + زر "منافذ أخرى" في القائمة | `POST /api/orders` (فرز outlet_id تلقائي) | `child_orders`, `order_items.outlet_id` | اختُبر عبر متصفح حقيقي كامل: اختيار منفذ، إضافة صنف، تبديل المنفذ، إضافة صنف آخر لنفس السلة، دفعة واحدة → تحقق عبر API أن الطلب انقسم فعليًا لتذكرتي KDS | **Pass** |
+| P4-CART-02 | حالة الطلب الأصل تُشتق من الأبناء | شاشة KDS (Operator) | `POST /api/child-orders/:id/transition` + `deriveParentStatus()` | `orders.status`, `child_orders.status` | اختُبر: تقدّم منفذ واحد فقط → الحالة الأصل تبقى "Paid"؛ تقدّم الثاني أيضًا → تتحول لـ"Ready" تلقائيًا | **Pass** |
+| P4-CART-03 | طلب أحادي المنفذ لا يتأثر إطلاقًا | KDS القديم | `POST /api/orders/:id/transition` (بلا تغيير) | `orders` (بلا `child_orders`) | اختُبر: طلب قديم انتقل عبر النقطة القديمة بنجاح رغم كل تعديلات Unified Cart | **Pass** |
+| P4-REV-01 | 4 أنواع حساب إيراد | A-RevenueModels | `POST /api/admin/revenue-models` | `revenue_models` | اختُبرت الحسابات الأربعة رياضيًا (unit test) وصحّت جميعها | **Pass** |
+| P4-REV-02 | نموذج ضمني للمنافذ المُرحَّلة | A-RevenueModels | `getActiveModel()` في `lib/revenue-engine.js` | `outlets.commission_rate` | اختُبر: منفذ بلا نموذج صريح استخدم عمولة 0%/12% المُرحَّلة تلقائيًا وبدقة | **Pass** |
+| P4-REV-03 | Ledger بلقطة ثابتة، لا إعادة كتابة | A-RevenueModels | `recordOrderRevenue()` | `revenue_ledger.model_snapshot_json` | اختُبر: غُيِّر نموذج منفذ من عمولة لمشاركة 60%، والسطر القديم بالسجل بقي محتفظًا بلقطة النموذج القديم | **Pass** |
+| P4-REV-04 | توزيع تناسبي عبر منافذ متعددة لنفس الطلب | — | نفس الدالة أعلاه | `revenue_ledger` | اختُبر: طلب بمنفذين → سطران منفصلان بحساب صحيح لكل منفذ | **Pass** |
+| P4-WL-01 | عزل هوية المنصة عن هوية المنفذ | scrWelcome (متغيرات CSS مُحدَّدة النطاق) | `GET /api/qr/:token` (حقل `branding`) | `partner_branding` | اختُبر بمتصفح حقيقي: لون/شعار/نص مخصص ظهر في شاشة الترحيب، بينما شريط الإدارة العلوي بقي بألوان النادل الافتراضية دون أي تأثر (لقطة شاشة) | **Pass** |
+| P4-WL-02 | تخفيض الباقة يُرجع العرض الافتراضي دون حذف الإعداد | — | نفس نقطة أعلاه | `partner_branding` | اختُبر: تخفيض الباقة لـSMART → `branding.mode` عاد لـ"alnadl" تلقائيًا في الاستجابة، دون حذف الصف المحفوظ | **Pass** |
+| P4-QR-01 | توليد جماعي لرموز QR | A-QR Bulk Generate | `POST /api/admin/qr/bulk` | `points`, `qr_tokens` | اختُبر: توليد 5 رموز طاولات دفعة واحدة عبر متصفح حقيقي (لقطة شاشة) | **Pass** |
+| P4-QR-02 | تحليلات لكل رمز QR (مسح/تحويل/مبيعات) | A-QR Analytics Modal | `GET /api/admin/qr/:pointId/analytics` | `qr_analytics_events` | اختُبر: مسح مرتين + طلب واحد مدفوع → تحويل 50% محسوب بدقة من السجل الخام | **Pass** |
 
 ### هيكل Final Delivery Package (§26.5) — تخطيط مبدئي لمطابقة `docs/` الحالي
 | مجلد §26.5 المطلوب | الملف/المجلد المقابل في المشروع اليوم | الحالة |

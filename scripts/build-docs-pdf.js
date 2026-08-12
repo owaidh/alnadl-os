@@ -26,7 +26,7 @@ const DOCS = [
   { file: 'docs/TRAINING.md', category: 'دليل تدريب · Training Guide' },
   { file: 'docs/CREDENTIALS.md', category: 'أمن المعلومات · Security' },
   { file: 'docs/WARRANTY_CLAUSE_TEMPLATE.md', category: 'نموذج تعاقدي · Contract Template' },
-  { file: 'docs/PHASE4_GAP_ANALYSIS.md', category: 'تحليل فني · Technical Analysis' },
+  { file: 'docs/PHASE4_GAP_ANALYSIS.md', category: 'تحليل فني · Technical Analysis', landscape: true },
 ];
 
 const CSS = `
@@ -64,11 +64,11 @@ const CSS = `
   a{ color:var(--brass-600); }
   strong{ color:var(--ink-950); }
   hr{ border:none; border-top:1px solid var(--line); margin:26px 0; }
-  table{ border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:12.5px; }
-  th{ background:var(--ink-950); color:var(--cream); text-align:start; padding:9px 12px; font-weight:700; font-size:11.5px; }
-  td{ padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table{ border-collapse:collapse; width:100%; table-layout:fixed; margin:12px 0 20px; font-size:11px; }
+  th{ background:var(--ink-950); color:var(--cream); text-align:start; padding:8px 10px; font-weight:700; font-size:10px; overflow-wrap:break-word; }
+  td{ padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; overflow-wrap:break-word; word-break:break-word; }
   tr:nth-child(even) td{ background:#FBF7EF; }
-  code{ font-family:'Liberation Mono',monospace; unicode-bidi:plaintext; background:var(--brass-100); color:var(--ink-800); padding:1px 6px; border-radius:4px; font-size:11.5px; }
+  code{ font-family:'Liberation Mono',monospace; unicode-bidi:plaintext; background:var(--brass-100); color:var(--ink-800); padding:1px 5px; border-radius:4px; font-size:9.5px; word-break:break-word; white-space:pre-wrap; }
   pre{ unicode-bidi:plaintext; text-align:start; background:var(--ink-950); color:#F3ECDD; padding:14px 16px; border-radius:8px; overflow-x:auto; margin:12px 0 18px; font-size:11.5px; }
   pre code{ background:none; color:inherit; padding:0; }
   blockquote{ margin:14px 0; padding:10px 16px; border-inline-start:4px solid var(--brass-500); background:var(--brass-100); border-radius:0 6px 6px 0; }
@@ -112,7 +112,7 @@ const FOOTER_TEMPLATE = `
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  for (const { file, category } of DOCS) {
+  for (const { file, category, landscape } of DOCS) {
     const html = buildHtml(file, category);
     const tmp = path.join(OUT_DIR, '_tmp.html');
     fs.writeFileSync(tmp, html);
@@ -121,6 +121,7 @@ const FOOTER_TEMPLATE = `
     await page.pdf({
       path: path.join(OUT_DIR, outName),
       format: 'A4',
+      landscape: !!landscape,
       printBackground: true,
       displayHeaderFooter: true,
       headerTemplate: HEADER_TEMPLATE,
