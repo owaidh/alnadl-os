@@ -75,4 +75,6 @@ function summary() {
 }
 function resetCounts() { passCount = 0; failCount = 0; }
 
-module.exports = { startServer, stopServer, api, loginAs, assert, assertEqual, summary, resetCounts, BASE };
+function getDataPath() { return serverProcess ? serverProcess._dataPath : null; }
+
+module.exports = { startServer, stopServer, api, loginAs, assert, assertEqual, summary, resetCounts, BASE, getDataPath };

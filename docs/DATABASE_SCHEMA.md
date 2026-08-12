@@ -1,4 +1,4 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.0.4-p5-inc1 · **Status:** FINAL (Phase 1-4) + P5-Inc-1 tables added · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.4-p5-inc1
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,16 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### جداول ALNADL Engage — Phase 5 P5-Inc-1 (`migrations/004_engage_inc1.js`)
+**اتجاه الاعتماد مؤكَّد ومُختبَر**: `Engage → Core` حصريًا — `engage_pass.order_id` قيد `FOREIGN KEY ... REFERENCES orders(id)` **حقيقي** (`ON DELETE CASCADE ON UPDATE CASCADE`)، مُختبَر فعليًا برفض إدراج بمرجع غير صالح. لا جدول Core (`orders`, `payments`...) يحمل أي عمود أو قيد نحو Engage. تدفق البيانات (وليس الاعتماد) يسير بالاتجاه المعاكس: `Core → Engage` عبر `order.confirmed` → صف واحد في `engage_outbox` (كتابة محلية غير مشروطة، لا قرار Engage-specific داخل Core).
+
+- **`engage_pass`** — بوابة الأهلية؛ لا صف بلا `order_id` صالح لطلب مدفوع فعليًا. `context_snapshot_json` لقطة ثابتة وقت الإصدار (نفس مبدأ `revenue_ledger.model_snapshot_json`)
+- **`engage_session`** — بنية فقط في Inc-1 (`personality` NULLABLE)؛ التعبئة الفعلية مؤجَّلة لـInc-2
+- **`engage_outbox`** — آلية الربط غير المتزامنة الوحيدة؛ `status`: `pending → processed` (Flag ON) أو `skipped` (Flag OFF، الحالة الافتراضية لكل الباقات اليوم) أو `failed`
+- **`engage_audit_log`** — سجل تدقيق مستقل تمامًا عن `audit_log` الأساسي (لا تداخل)
+
+`engage_enabled` أُضيف كمفتاح جديد في `plans.features_json` لكل الباقات الأربع (القيمة الافتراضية `false` للجميع — لا باقة خامسة أُنشئت، تطبيقًا لـ§6 من وثيقة Phase 5).
 
 ### `refunds` — الاسترجاعات الكاملة/الجزئية (Q03)
 سجل غير قابل للتعديل — كل استرجاع صف جديد، لا يُعدَّل أي صف قائم أبدًا. `reason` تحمل بادئة `__idem__` عند استخدام مفتاح Idempotency بدل سبب نصي حر.

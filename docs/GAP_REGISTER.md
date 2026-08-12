@@ -37,6 +37,10 @@
 
 **❌ Pre-Go-Live Open Items — لا تمنع Technical Handover، لكنها تمنع Production Go-Live (4):** Q05 (بوابة دفع)، Q11 (UAT)، Q17 (Load Test)، Q18 (أجهزة فعلية)
 
+## Phase 5 (ALNADL Engage) — تتبّع منفصل
+
+Phase 5 لها سجل تتبّع خاص بها، منفصل عمدًا عن Q01-Q20 أعلاه (تلك خاصة بإغلاق Phase 1-4 فقط): راجع `docs/PHASE5_GAP_ANALYSIS.md`. **الحالة الحالية: P5-Inc-1 مُسلَّم ومُختبَر (90/90 اختبارًا إجماليًا)، بانتظار مراجعة ALNADL قبل بدء P5-Inc-2.**
+
 ## بوابة إغلاق Phase 4 (P4-GATE-001 إلى 008) — مُنفَّذة بالكامل
 
 استجابةً لـ`P5_وتحديث_p4.docx`، القسم "PRE-PHASE 5 GATE". **هذه البوابة إلزامية قبل أي عمل على Phase 5 Engage**، وقد نُفِّذت بالكامل الآن:

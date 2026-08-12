@@ -1,4 +1,4 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.0.4-p5-inc1 · **Status:** FINAL (Phase 1-4) + P5-Inc-1 endpoint added · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.4-p5-inc1
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -336,6 +336,16 @@ Authorization: Bearer <token>
 ## ملاحظة حول آلة الحالة (State Machine)
 
 جدول الانتقالات المسموحة والأدوار المخوّلة لكل انتقال موثّق بالكامل في `lib/statemachine.js` — هذا الملف هو "مصدر الحقيقة الوحيد" (Single Source of Truth) ولا يوجد أي منطق مكرر له في أي مكان آخر بالكود.
+
+## 22) ALNADL Engage — Phase 5 P5-Inc-1
+
+### `GET /api/engage/pass/:id` — عام
+```json
+{ "id": "ep_...", "status": "active", "expiresAt": 173..., "createdAt": 173... }
+```
+`404` إن لم يوجد. لا نقطة نهاية أخرى لـEngage في Inc-1 — إنشاء الـPass يحدث **حصريًا** عبر `lib/engage-worker.js` استجابةً لحدث `order.confirmed` حقيقي، وليس عبر أي API قابل للاستدعاء المباشر (لا من العميل ولا من الإدارة).
+
+**آلية الربط `order.confirmed` (غير متزامنة بالكامل):** عند نجاح الدفع، `server.js` يكتب صفًا واحدًا في `engage_outbox` (كتابة محلية غير مشروطة، لا قرار Engage-specific). Worker مستقل (`startEngageWorker()`, استطلاع كل 5 ثوانٍ) يقرأ الصفوف `pending`، يتحقق من `engage_enabled` للشريك، وينشئ `engage_pass` فقط إن كانت الميزة مُفعَّلة. **إيقاف الـWorker بالكامل لا يُغيّر أي شيء في مسار الدفع/الطلب** — مُختبَر بشكل صريح (`ENG-ISO-001` في `tests/engage-inc1.js`).
 
 ## ملاحظة حول Idempotency وWebhooks (Q03، §18)
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل

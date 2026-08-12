@@ -1,4 +1,4 @@
-> **Version:** v2.0.3-p5-rev2 · **Status:** DRAFT REVISION 2 — responds point-by-point to ALNADL's review of Revision 1. No production code written for P5-Inc-1 yet, per explicit instruction. · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked`
+> **Version:** v2.0.4-p5-inc1 · **Status:** REV 2 APPROVED — P5-Inc-1 DELIVERED, awaiting review before P5-Inc-2 begins (per acceptance condition 9) · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.4-p5-inc1`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -7,7 +7,28 @@
 | المراجعة | التغيير |
 |---|---|
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
-| **Rev 2 (هذا الملف)** | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
+| Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
+| **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-1 — سجل التسليم الفعلي (بعد التنفيذ)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-2 (شرط 9 من طلب الموافقة).**
+
+| شرط القبول | الحالة | الدليل |
+|---|---|---|
+| 1. لا Engage Pass قبل order.confirmed | ✅ | `ENG-GATE-001` — مُختبَر آليًا: طلب غير مدفوع لا يُنتج صف `engage_outbox` ولا `engage_pass` إطلاقًا |
+| 2. order.confirmed غير متزامن، لا يحجب Core | ✅ | كتابة `engage_outbox` محلية غير مشروطة داخل نفس معاملة الدفع؛ Worker مستقل بالاستطلاع (5 ثوانٍ) يقرأ لاحقًا |
+| 3. فشل/إيقاف Worker لا يؤثر على Core | ✅ | `ENG-ISO-001` — مُختبَر: دفع طلب + ظهوره في طابور KDS يعملان بنفس الدقة مع تحميل كود Engage وتشغيل الـWorker فعليًا؛ **73/73 من Phase 1-4 بقيت دون أي تغيير** |
+| 4. كل Foreign Keys حقيقية ومختبرة | ✅ | `engage_pass.order_id REFERENCES orders(id) ON DELETE CASCADE ON UPDATE CASCADE` — مُختبَر: إدراج مباشر بمرجع غير صالح **رُفض فعليًا** بخطأ SQLite حقيقي؛ إدراج بمرجع صالح **نجح فعليًا** |
+| 5. engage_enabled = OFF افتراضيًا | ✅ | مُختبَر مباشرة: طلب مدفوع لشريك على القيمة الافتراضية → صف Outbox يُصبح `skipped`، صفر `engage_pass` |
+| 6. 73/73 Phase 1-4 بلا Regression | ✅ | مُتحقَّق منه برمجيًا (مجموع "N passed") قبل وبعد كل تعديل — **73/73 دون أي تغيير**، بالإضافة لـRegression متصفح كامل (0 أخطاء) |
+| 7. اختبارات Inc-1 الجديدة (ENG-GATE-001، ENG-ISO-001) | ✅ | `tests/engage-inc1.js` — **17 اختبارًا جديدًا**، يغطي: Gate، Isolation، الفرعان (Flag ON وOFF مُختبَران فعليًا كلاهما، ليس الحالة الافتراضية فقط)، FK Integrity، Idempotency، Endpoint القراءة |
+| 8. تحديث Migration/ERD/API/Traceability | ✅ | `migrations/004_engage_inc1.js`، `docs/erd.dot`/`erd.png` (مجموعة Engage جديدة بلون مميّز)، `docs/API_DOCUMENTATION.md` §22، `docs/DATABASE_SCHEMA.md`، هذا القسم |
+| 9. لا بدء Inc-2 قبل المراجعة | ⏸️ **مُتوقَّف، بانتظار اعتمادكم** | لم يبدأ أي عمل على Inc-2 |
+
+**العدد الإجمالي للاختبارات الآن: 90/90** (73 من Phase 1-4 + 17 من P5-Inc-1)، مُتحقَّق منه برمجيًا.
+
+**ملاحظة معمارية صادقة واحدة تستحق مراجعتكم تحديدًا:** `engage_session` أُنشئت كبنية (DDL) في هذه الزيادة لكن **بلا أي صف مكتوب فيها بعد** — تعبئتها الفعلية (تعيين `personality`) مؤجَّلة لـInc-2 عمدًا، لأن منطق الشخصية (RESET/SPARK/DISCOVER/PLAY/MIND) لم يُبنَ بعد. هذا القرار مذكور صراحة في Scope الأصلي لـInc-1 بالـGap Analysis (Rev 2، قسم 7)، وليس انحرافًا عن الخطة — لكنه يستحق تأكيدكم قبل الانتقال لـInc-2.
 
 ---
 
@@ -438,7 +459,7 @@ engage_audit_log (مستقل، يُكتب من كل نقطة تغيير حساس
 
 | مصدر المتطلب (من الوثيقة الأصلية) | يُغطَّى في | الحالة المستهدَفة |
 |---|---|---|
-| §9 Post-order only | Inc-1 | Done عند إغلاق Inc-1 |
+| §9 Post-order only | Inc-1 | ✅ **Done** — مُختبَر (ENG-GATE-001) |
 | §9 Context-aware | Inc-2 | Done عند إغلاق Inc-2 |
 | §9 Autonomous generation | Inc-7 | Done (Mock) عند إغلاق Inc-7 |
 | §9 Semantic anti-repetition | Inc-4 (Partial) → Inc-7 (Done) | **Partial حتى Inc-7** — راجع قسم 3 |

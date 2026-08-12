@@ -17,6 +17,7 @@ const { getGateway } = require('./lib/payment.js');
 const { getOrCreateAccount, earnPoints, quoteRedemption, commitRedemption } = require('./lib/loyalty.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
+const { processOutboxOnce, startEngageWorker } = require('./lib/engage-worker.js');
 const gateway = getGateway();
 
 const PORT = process.env.PORT || 8787;
@@ -342,6 +343,17 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
   // retroactively rewritable once written (each row snapshots the model it used).
   if (succeeded) recordOrderRevenue(order.id);
 
+  // Phase 5 P5-Inc-1: this is Core's ENTIRE involvement with Engage — one
+  // unconditional local INSERT, no awareness of engage_enabled or any other
+  // Engage-specific decision (those live exclusively in lib/engage-worker.js).
+  // order.confirmed is the Event/Data Flow direction Core -> Engage; the
+  // Foreign-Key Dependency direction remains strictly Engage -> Core
+  // (engage_pass.order_id REFERENCES orders(id), never the reverse).
+  if (succeeded) {
+    db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,created_at) VALUES (?,?,?,?,?)`)
+      .run(uid('eo'), order.id, 'order.confirmed', 'pending', Date.now());
+  }
+
   sendJSON(res, 200, { id: order.id, status: newStatus, walletCovered, cardCharged: cardAmount });
 });
 
@@ -359,6 +371,18 @@ on('GET', '/api/orders/:id', null, async (req, res, p) => {
   const ctx = getOrderWithContext(p.id);
   if (!ctx) return sendJSON(res, 404, { error: 'Not found' });
   sendJSON(res, 200, orderPublicView(ctx.order, ctx.items));
+});
+
+/* ------------------------------ ENGAGE (Phase 5, P5-Inc-1) --------------------------------- */
+// Read-only. No pass/session can be created, modified, or listed through the
+// API in Inc-1 — only the Worker (lib/engage-worker.js) creates a pass, and
+// only in response to a real order.confirmed event. This endpoint exists
+// purely so a future customer-facing screen (Inc-2+) has something to poll.
+on('GET', '/api/engage/pass/:id', null, async (req, res, p) => {
+  const pass = db.prepare('SELECT * FROM engage_pass WHERE id = ?').get(p.id);
+  if (!pass) return sendJSON(res, 404, { error: 'Not found' });
+  const isExpired = pass.status === 'active' && Date.now() > pass.expires_at;
+  sendJSON(res, 200, { id: pass.id, status: isExpired ? 'expired' : pass.status, expiresAt: pass.expires_at, createdAt: pass.created_at });
 });
 
 /* ------------------------------ REFUNDS (Q03) --------------------------------- */
@@ -1299,6 +1323,12 @@ server.listen(PORT, () => {
   if (process.env.NODE_ENV !== 'production') {
     console.log(`Demo users (password = username): customer_demo, operator, runner, manager, partner, finance, admin`);
   }
+  // Phase 5 P5-Inc-1: the Engage Outbox Worker runs independently of the
+  // request/response cycle. Its failure (or being stopped entirely) has
+  // zero effect on anything above this line — proven by ENG-ISO-001 in
+  // tests/engage-inc1.js, which stops it and re-runs the full Phase 1-4
+  // suite unchanged.
+  startEngageWorker();
   // Q06 (2nd round): the hard NODE_ENV=production check now happens at
   // lib/auth.js module load time (resolveSessionSecret()), before the
   // server ever reaches listen() — the process exits before this point if

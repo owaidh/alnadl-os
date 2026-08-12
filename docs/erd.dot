@@ -6,7 +6,7 @@ digraph ERD {
   rankdir=LR;
   node [shape=box, style="rounded,filled", fillcolor="#FEFCF9", color="#C08A3E", fontname="Helvetica", fontsize=11];
   edge [fontname="Helvetica", fontsize=9, color="#8A7C63"];
-  graph [fontname="Helvetica", fontsize=14, labelloc=t, label="Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.2)"];
+  graph [fontname="Helvetica", fontsize=14, labelloc=t, label="Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.3 + P5-Inc-1)"];
 
   subgraph cluster_tenancy {
     label="Tenancy & Site (§6, §5)"; style=dashed; color="#A6752F";
@@ -28,11 +28,20 @@ digraph ERD {
     label="Loyalty & Wallet"; style=dashed; color="#A6752F";
     loyalty_accounts; loyalty_transactions; wallet_accounts; wallet_transactions;
   }
+  subgraph cluster_engage {
+    label="ALNADL Engage — Phase 5 (P5-Inc-1)"; style=dashed; color="#2E5C4B";
+    engage_pass; engage_session; engage_outbox; engage_audit_log;
+  }
+
   subgraph cluster_platform {
     label="Platform"; style=dashed; color="#A6752F";
     plans; subscriptions; partner_branding; users; audit_log; notifications;
     promotions; feedback; qr_analytics_events; schema_migrations;
   }
+
+  orders -> engage_outbox [label="1:N (order.confirmed)", color="#2E5C4B", style=bold];
+  orders -> engage_pass [label="1:N", color="#2E5C4B", style=bold];
+  engage_pass -> engage_session [label="1:N"];
 
   partners -> properties [label="1:N"];
   properties -> zones [label="1:N"];

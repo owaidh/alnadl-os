@@ -12,6 +12,7 @@ const suites = [
   './concurrency.js',
   './financial-regression.js',
   './auth-unit.js',
+  './engage-inc1.js',
 ];
 
 (async () => {
