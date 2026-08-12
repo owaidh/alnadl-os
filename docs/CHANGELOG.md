@@ -1,8 +1,24 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Change Log / Release Notes (§26.1)
 
 كل إصدار أدناه له Git tag مطابق — `git log --oneline`/`git tag -l` في المستودع يُظهر السجل الكامل بالتفصيل الحرفي لكل تغيير وملف تأثّر.
+
+## v2.0.1 — Corrective Release (2026-08-12)
+**استجابة مباشرة لمراجعة الجودة النهائية من ALNADL** (`ALNADL_Phase_1_to_4_Final_Quality_Completion_Handover_Requirements.docx`) — Commit تصحيحي فوق `v2.0.0-final-quality-closure`، **بلا حذف أو إعادة كتابة لتاريخ الأخطاء** (بند 41 من تلك المراجعة).
+
+**الخلل الأهم المُصحَّح:** عدد الاختبارات الفعلي هو **68/68**، وليس 70/70 كما ادُّعي خطأً في إصدارات سابقة من `docs/GAP_REGISTER.md` والتوثيق المرتبط — تحقَّقت المراجعة من هذا بتشغيل الحزمة فعليًا وأثبتت الرقم الصحيح؛ صُحِّح الآن في كل مكان (تحقَّق آليًا: صفر بقايا لـ"70/70" عبر كل الوثائق الـ24 وملفات PDF المُقابلة).
+
+**تصحيحات أخرى:**
+- `docs/GAP_REGISTER.md`: أُزيل تناقض حقيقي بين رأس الوثيقة (14 مُغلَق/6 مفتوح) ومتنها (15/5) — أُعيد الآن كتصنيف ثلاثي دقيق: 13 مُغلَق بلا تحفظ، 3 مُغلَق جزئيًا كدَين تقني معتمَد رسميًا (Q06, Q07, Q09)، 4 مفتوح صراحة (Q05, Q11, Q17, Q18). Q13 (Git Traceability) كان مُغلَقًا فعليًا في الكود لكن الوثيقة لم تعكس ذلك — صُحِّح
+- **Q09 حُدِّد صراحة كـ"Partially Closed — Technical Debt"** بدل "Closed (نطاق محدود)" — لا يُوصَف بأنه مكتمل في أي مكان؛ التغطية الفعلية 4 جداول من 34 (~12%)
+- `docs/DATABASE_SCHEMA.md`: أُزيل تناقض ذاتي كان يؤكد وجود FK وMigrations في قسم، وينفي وجودهما في قسم "قيود التصميم" بالأسفل — الآن يصف النسخة الحالية فقط، بلا فقرات باقية من تاريخ ما قبل Q08/Q09
+- `docs/CREDENTIALS.md`: يعكس الآن PBKDF2 الفعلي (100,000 تكرار + Salt فريد)، لا SHA-256 القديم كأنه لا يزال قائمًا
+- توحيد وصف Grouped/Separate Delivery عبر `docs/MASTER_REQUIREMENTS.md` و`docs/MULTI_OUTLET_SPEC.md` (كانا لا يزالان يصفانها "لم تُبنَ بعد" رغم إنجازها في v2.0.0)
+- تصحيح 6 مواضع كانت تصف الباقات التجارية بأنها "ثلاث" (OPERATE/SMART/PLATFORM) بدل الأربع الفعلية (+ CONNECT): `README.md`, `HANDOVER.md`, `docs/TEST_PLAN.md`, `docs/API_DOCUMENTATION.md`, `docs/TRAINING.md`, `docs/DATABASE_SCHEMA.md`
+- كل الـ24 وثيقة (+ PDF المقابلة) موحَّدة الآن على **v2.0.1** بترويسة متطابقة
+
+**غير مُغلَق في هذا الإصدار (يتطلب عملاً هندسيًا حقيقيًا إضافيًا، وليس تصحيح توثيق فقط)** — راجع البنود 9-39 من مراجعة الجودة النهائية للتفصيل الكامل: End-to-End Payment Testing بعد ربط بوابة حقيقية، مراجعة تخزين القيم المالية (REAL→INTEGER/DECIMAL)، تنفيذ PostgreSQL الفعلي، اختبار Rollback/Backup فعلي، مراجعة أمن إنتاج شاملة، اختبارات Edge Case إضافية على Unified Cart (outlet failure post-payment، restart/recovery)، Load Testing حقيقي، UAT رسمي، اختبار أجهزة فعلية.
 
 ## v1.9.0 — Partner Dashboard Extensions (2026-08-12)
 - `GET /api/partner/overview`: حقلا `crossOutletBasketRate` و`outletPerformance` جديدان (إضافيان، لا يكسران أي مستهلك قائم)

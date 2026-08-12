@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -161,7 +161,7 @@ Authorization: Bearer <token>
 { "partnerNameAr":"...", "partnerNameEn":"...", "propertyNameAr":"...", "propertyNameEn":"...", "planCode":"SMART" }
 ```
 ### `GET /api/plans`
-عام — يسرد الباقات الثلاث (OPERATE/SMART/PLATFORM) ومزاياها.
+عام — يسرد الباقات الأربع (OPERATE/SMART/CONNECT/PLATFORM) ومزاياها.
 ### `GET /api/admin/subscription?partnerId=<id>`
 ### `POST /api/admin/subscription`
 تغيير باقة شريك فوريًا: `{ "partnerId":"...", "planCode":"PLATFORM" }`

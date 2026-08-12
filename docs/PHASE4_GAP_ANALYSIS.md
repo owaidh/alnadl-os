@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** LIVING DOCUMENT — superseded by `docs/GAP_REGISTER.md` for Q01-Q20 closure tracking; kept for the original Phase 4 Increment 1-4 traceability matrix · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** LIVING DOCUMENT — superseded by `docs/GAP_REGISTER.md` for Q01-Q20 closure tracking; kept for the original Phase 4 Increment 1-4 traceability matrix · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Phase 4 Gap Analysis & Technical Design
 ### (المطلوب من المبرمج قبل بدء التنفيذ — §22 من وثيقة Phase 4 Change Request v2)

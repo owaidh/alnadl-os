@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Multi-Outlet Specification (§6, §8, §13, §26.1)
 
@@ -46,8 +46,8 @@ GET /api/ops/queue?stationId=xxx
     قابلة للفلترة حسب station_id
 ```
 
-## سياسة التسليم — Grouped مقابل Separate (غير مبنية بعد)
-عند اكتمال أجزاء طلب من منافذ مختلفة، هل يسلّمها Runner دفعة واحدة (Grouped) أم كل جزء فور جاهزيته بمعزل عن البقية (Separate)؟ **قرار تصميمي لم يُتَّخذ بعد** — الحقل المقترح `properties.delivery_grouping` غير موجود في المخطط الحالي. راجع `docs/PHASE4_GAP_ANALYSIS.md` §8ب للتفصيل.
+## سياسة التسليم — Grouped مقابل Separate (منجزة، Q01)
+عند اكتمال أجزاء طلب من منافذ مختلفة، `properties.delivery_grouping` يحدد السلوك: `grouped` (الافتراضي، يطابق حرفيًا السلوك القديم قبل هذه الميزة) ينتظر Runner اكتمال كل الأبناء ليسلّمهم دفعة واحدة؛ `separate` يُسلِّم كل Child Order فور جهوزيته بمعزل عن البقية. مُختبَر آليًا (23 اختبارًا في `tests/api-phase4.js`) وبصريًا. راجع `docs/API_DOCUMENTATION.md` §21 لتفاصيل الـAPI (`PATCH /api/admin/properties/:id`).
 
 ## القيود المعروفة
 - لا فواتير منفصلة لكل منفذ عند الدفع — دفعة واحدة موحّدة للعميل دائمًا (يطابق §8 "Checkout واحد")؛ التوزيع المالي يحدث داخليًا بعد النجاح فقط

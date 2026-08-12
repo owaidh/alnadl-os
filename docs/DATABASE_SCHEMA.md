@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -104,7 +104,7 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 كل عملية حساسة (تغيير حالة طلب، تعديل مستخدم، تغيير باقة...) تُسجَّل هنا بالفاعل (`actor`) ودوره والقيمة قبل/بعد والسبب إن وُجد.
 
 ### `plans` / `subscriptions` — الباقات التجارية (SaaS، §12)
-`plans` ثابتة (OPERATE/SMART/PLATFORM) وتحمل `features_json` (خريطة مزايا boolean). `subscriptions.partner_id` **فريد** (UNIQUE) — شريك واحد له اشتراك فعّال واحد فقط في كل لحظة؛ ترقية الباقة تستبدل الصف عبر `ON CONFLICT`.
+`plans` ثابتة (OPERATE/SMART/CONNECT/PLATFORM) وتحمل `features_json` (خريطة مزايا boolean). `subscriptions.partner_id` **فريد** (UNIQUE) — شريك واحد له اشتراك فعّال واحد فقط في كل لحظة؛ ترقية الباقة تستبدل الصف عبر `ON CONFLICT`.
 
 ### `promotions` — أكواد الخصم
 `property_id` يربط الكود بمنشأة محددة (لا يعمل الكود عبر منشآت أخرى). `discount_type`: `percent` أو `flat`.
@@ -162,8 +162,8 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ---
 
-## قيود تصميم مقصودة (يجب معرفتها قبل التوسّع)
+## قيود تصميم مقصودة (يجب معرفتها قبل التوسّع) — مُحدَّثة لتصف النسخة الحالية فقط (v2.0.1)
 
-1. **لا Foreign Key Constraints فعلية مفروضة في SQLite هنا** (رغم `PRAGMA foreign_keys = ON`) — العلاقات مضمونة عبر منطق التطبيق (`server.js`) وليس عبر قيود قاعدة البيانات. أي تعديل مباشر على القاعدة خارج الـ API قد يكسر الاتساق.
-2. **الأسعار مخزنة كـ REAL (Floating point)** — كافٍ لهذا الحجم التجريبي، لكن نظام إنتاج حقيقي بمبالغ مالية يُفضَّل أن يخزّنها كأصغر وحدة عملة (halalas كأعداد صحيحة) لتفادي أخطاء التقريب التراكمية.
-3. **لا Migration system** — التعديل على المخطط حاليًا يعني حذف `data.sqlite` وإعادة الزرع. لبيئة إنتاج فعلية يجب إضافة نظام Migrations (مثل node-pg-migrate إن انتقلتم لـ PostgreSQL، وهو الأنسب فعليًا لحمل إنتاجي حقيقي متعدد الشركاء).
+1. **Foreign Key Constraints فعلية مفروضة الآن على 4 جداول فقط من أصل 34** (`order_items`, `child_orders`, `payments`, `revenue_ledger` — مسار المال المباشر، عبر `migrations/001_add_foreign_keys.js`، Q09). بقية الـ30 جدولاً لا تزال تعتمد على منطق التطبيق (`server.js`) فقط دون قيد قاعدة بيانات فعلي — **دَين تقني مُعتمَد رسميًا**، وليس إغفالًا. راجع `docs/GAP_REGISTER.md` بند Q09 للتفصيل والخطة.
+2. **الأسعار مخزنة كـ REAL (Floating point) في كل الجداول المالية دون استثناء** — هذا خطر تقريب (Rounding Risk) حقيقي وغير مُعالَج بعد، ذُكر صراحة في مراجعة الجودة النهائية (بند 13). التوصية المُعتمَدة: الانتقال لتخزين أصغر وحدة عملة كعدد صحيح (halalas، أي الريال × 100 كـ INTEGER) أو `NUMERIC/DECIMAL` عند الانتقال لـPostgreSQL (Q07)، مع قاعدة تقريب موحّدة صريحة للضريبة والخصومات والعمولات والاسترجاعات والتسويات — **هذا العمل لم يبدأ بعد**.
+3. **نظام Migrations موجود وفعّال** (`lib/migrate.js` + `migrations/`, Q08) — التعديل على المخطط الآن يمر عبر ملف مُرقَّم مُتتبَّع في `schema_migrations`، **وليس** حذف `data.sqlite` وإعادة الزرع كما كان الحال قبل Q08. عند الانتقال لـPostgreSQL (Q07)، نفس نمط الملفات المُرقَّمة يبقى صالحًا مع تعديل بنية SQL فقط.

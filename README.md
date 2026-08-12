@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Backend + Frontend
 
@@ -48,7 +48,7 @@ alnadl-os/
 │   ├── auth.js         # جلسات موقّعة (HMAC) + صلاحيات حسب الدور والنطاق
 │   ├── statemachine.js # آلة حالة الطلب — المرجع الوحيد للانتقالات المسموحة (§10)
 │   ├── settlement.js   # محرك حساب تسوية Revenue Share
-│   ├── plan.js         # بوابة مزايا SaaS (OPERATE/SMART/PLATFORM) — §12
+│   ├── plan.js         # بوابة مزايا SaaS (OPERATE/SMART/CONNECT/PLATFORM) — §12، §4 Phase 4
 │   └── payment.js       # ← طبقة تجريد بوابة الدفع (اقرأ القسم أدناه)
 └── public/
     ├── index.html / styles.css / app.js   # واجهة أمامية واحدة بدون build step

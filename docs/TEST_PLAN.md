@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Test Plan & UAT Checklist
 
@@ -115,7 +115,7 @@
 - [ ] تم التحقق من دقة حسابات الضريبة (15%) والخصومات على عينة طلبات حقيقية
 - [ ] تم اختبار كل الأدوار (Operator/Runner/SiteManager/PartnerAdmin/Finance/SuperAdmin) من قبل شخص فعلي بذلك الدور
 - [ ] تمت مراجعة سجل التدقيق (Audit Log) والتأكد من تسجيله لكل عملية حساسة متوقعة
-- [ ] تم تأكيد نموذج الباقات (OPERATE/SMART/PLATFORM) يطابق الاتفاق التجاري الفعلي مع كل شريك
+- [ ] تم تأكيد نموذج الباقات (OPERATE/SMART/CONNECT/PLATFORM) يطابق الاتفاق التجاري الفعلي مع كل شريك
 - [ ] تم استبدال كل بيانات الدخول التجريبية (`password = username`) قبل أي بيانات حقيقية
 - [ ] تمت مراجعة `docs/DEPLOYMENT.md` والموافقة على خطة الانتقال للإنتاج
 - [ ] تم تحديد موعد ربط بوابة الدفع الحقيقية ومسؤوليتها (راجع `README.md`)

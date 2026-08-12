@@ -1,4 +1,4 @@
-> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
+> **Version:** v2.0.1 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.1-corrective
 
 # Alnadl Hospitality OS — Master Requirements (§26.1)
 
@@ -27,7 +27,7 @@
 | Revenue Allocation Ledger | §10 | ✅ منجز |
 | White Label | §11 | ✅ منجز |
 | White Label Commercial Config | §12 | ✅ منجز |
-| KDS/Routing (Multi-Outlet + Grouped/Separate Delivery) | §13 | ✅ منجز جزئيًا — Routing منجز، سياسة Grouped/Separate لم تُبنَ بعد |
+| KDS/Routing (Multi-Outlet + Grouped/Separate Delivery) | §13 | ✅ منجز بالكامل — `properties.delivery_grouping` (`grouped`/`separate`)، مُختبَر آليًا (23 اختبارًا)، راجع `docs/MULTI_OUTLET_SPEC.md` |
 | Partner Dashboard الموسّع | §14 | ✅ منجز |
 | Alnadl Admin (Outlet/Revenue/Branding Manager) | §15 | ✅ منجز |
 | Database/Migration | §16 | ✅ منجز (راجع `docs/DATABASE_SCHEMA.md` وقسم Migration في `docs/DEPLOYMENT.md`) |
@@ -43,7 +43,7 @@
 
 ## نطاق مؤجَّل عمدًا (خارج Phase 4 الحالية)
 - AI Forecasting / Predictive Operations
-- سياسة Grouped مقابل Separate Delivery للطلبات متعددة المنافذ (§13 جزء متبقٍ)
+- (سياسة Grouped/Separate Delivery أُنجزت — أُزيلت من هذه القائمة، راجع الجدول أعلاه)
 - Custom Domain Routing الفعلي (بنية تحتية، موثّق في `docs/DEPLOYMENT.md`)
 - P02/P03/P05 تحليلات إضافية غير محددة صراحة
 
