@@ -597,8 +597,17 @@ on('POST', '/api/admin/products', ['SuperAdmin', 'PartnerAdmin'], async (req, re
   const b = await readBody(req);
   assertTenantWrite(session, categoryPartnerId(b.categoryId));
   const id = uid('p');
-  db.prepare("INSERT INTO products (id,category_id,sku,name_ar,name_en,base_price,status) VALUES (?,?,?,?,?,?,'Active')")
-    .run(id, b.categoryId, b.sku || id, b.name_ar, b.name_en, b.basePrice);
+  // Default to the property's first Outlet if none specified (§17 backward
+  // compatibility — admin catalog UI doesn't ask for an outlet yet, so every
+  // product still needs to land in a valid one for Unified Cart to route it).
+  let outletId = b.outletId || null;
+  if (!outletId) {
+    const category = db.prepare('SELECT property_id FROM categories WHERE id = ?').get(b.categoryId);
+    const fallbackOutlet = category ? db.prepare(`SELECT id FROM outlets WHERE property_id = ? ORDER BY created_at ASC LIMIT 1`).get(category.property_id) : null;
+    outletId = fallbackOutlet ? fallbackOutlet.id : null;
+  }
+  db.prepare("INSERT INTO products (id,category_id,outlet_id,sku,name_ar,name_en,base_price,status) VALUES (?,?,?,?,?,?,?,'Active')")
+    .run(id, b.categoryId, outletId, b.sku || id, b.name_ar, b.name_en, b.basePrice);
   audit(session.username, session.role, 'create', id, null, b, null);
   sendJSON(res, 201, { id });
 });

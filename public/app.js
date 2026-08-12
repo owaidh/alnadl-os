@@ -101,7 +101,7 @@ const S = {
   lang:'ar', mode:'customer', screen:'welcome',
   session:null, // {token, user:{username,role,scope}}
   qrContext:null, catalog:null, activeCatId:null, activeProduct:null,
-  cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null,
+  cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
   ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
@@ -124,9 +124,25 @@ const App = {
   },
   async loadQrContext(token){
     try{
-      const ctx = await api('GET', '/api/qr/'+token);
-      S.qrContext = ctx; S.mode='customer'; S.screen='welcome'; render();
+      const ctx = await api('GET', '/api/service-hub/'+token); // superset of /api/qr — same shape, plus optional hub/outlets
+      S.qrContext = ctx; S.mode='customer';
+      // Service Hub (§7): only ever shown when the property genuinely has more
+      // than one available outlet AND the plan includes multiOutlet — every
+      // single-outlet property (the default for everything before Phase 4)
+      // skips straight to 'welcome' exactly as before.
+      S.screen = ctx.hub ? 'hub' : 'welcome';
+      if(!ctx.hub && ctx.outlet) S.activeOutletId = ctx.outlet.id;
+      render();
     }catch(e){ showErr(e.message); }
+  },
+  chooseOutlet(outletId){
+    S.activeOutletId = outletId;
+    // First-ever pick (empty cart, fresh visit) shows the branded Welcome
+    // screen once, matching how a single-outlet property always does.
+    // Switching outlets mid-shopping (cart already has items) skips straight
+    // back to the menu — the customer already saw Welcome and is actively
+    // building a cart, so re-showing it would be a pointless extra tap.
+    App.goScreen(S.cart.length > 0 ? 'menu' : 'welcome');
   },
   async goScreen(scr){ S.screen=scr; render(); window.scrollTo(0,0);
     if(scr==='menu' && !S.catalog){ await App.loadCatalog(); }
@@ -506,6 +522,7 @@ function renderCustomerShell(){
   if(!S.qrContext) return renderQrPicker();
   let inner='';
   switch(S.screen){
+    case 'hub': inner=scrHub(); break;
     case 'welcome': inner=scrWelcome(); break;
     case 'menu': inner=scrMenu(); break;
     case 'cart': inner=scrCart(); break;
@@ -533,6 +550,34 @@ function renderQrPicker(){
 App._loadDemoPoints = async function(){
   try{ S._demoPoints = await api('GET','/api/demo/points'); render(); }catch(e){}
 };
+
+function scrHub(){
+  // Service Hub (Phase 4 §7) — shown ONLY when the property genuinely has
+  // more than one available outlet right now AND the plan includes
+  // multiOutlet. This screen literally cannot appear for any property that
+  // existed before Phase 4, since those all have exactly one outlet.
+  const c = S.qrContext;
+  const outlets = c.outlets || [];
+  const typeIcons = { coffee:'☕', restaurant:'🍽️', bakery:'🥐', service:'🛎️', other:'📦' };
+  return `
+  <div class="welcome" style="padding:28px 22px">
+    <div class="crest">ن</div>
+    <div class="locpill">${t('youAreAt')}: ${S.lang==='ar'?c.partner.name_ar:c.partner.name_en} — ${S.lang==='ar'?c.zone.name_ar:c.zone.name_en}</div>
+    <h2 style="margin:4px 0 0">${S.lang==='ar'?'اختر ما تريد الطلب منه':'Choose where to order from'}</h2>
+    <div class="qrpicklist" style="max-width:320px">
+      ${outlets.map(o=>`
+        <button class="qrpickitem" style="display:flex;align-items:center;gap:12px;padding:14px" onclick="App.chooseOutlet('${o.id}')">
+          <span style="font-size:24px">${typeIcons[o.type]||'📦'}</span>
+          <span style="flex:1">
+            <span style="display:block;font-weight:800;font-size:14px">${S.lang==='ar'?o.name_ar:o.name_en}</span>
+            <span style="display:block;font-size:11px;color:var(--ink-400);font-weight:400">${o.operator==='partner'?(S.lang==='ar'?'شريك':'Partner'):(S.lang==='ar'?'مُشغَّل من النادل':'Alnadl-operated')}</span>
+          </span>
+          <span style="color:var(--ink-300)">${S.lang==='ar'?'←':'→'}</span>
+        </button>`).join('')}
+    </div>
+    <p style="font-size:11px;color:var(--ink-400);max-width:280px">${S.lang==='ar'?'يمكنك الطلب من أكثر من منفذ في نفس السلة':'You can order from more than one outlet in the same cart'}</p>
+  </div>`;
+}
 
 function scrWelcome(){
   const c = S.qrContext;
@@ -572,7 +617,7 @@ function scrMenu(){
   return `
   <div class="scrhead">
     <div class="top"><h3>${S.lang==='ar'?c.partner.name_ar:c.partner.name_en} — ${S.lang==='ar'?c.zone.name_ar:c.zone.name_en}</h3>
-      ${S.loyalty && S.loyalty.pointsBalance>0? `<div class="ptsbadge" onclick="App.goScreen('loyalty')">★ ${S.loyalty.pointsBalance}</div>` : '<div style="width:32px"></div>'}</div>
+      ${S.qrContext.hub? `<button class="btn-small line" style="border:1px solid var(--ink-800);background:none" onclick="App.goScreen('hub')">${S.lang==='ar'?'منافذ أخرى':'Other outlets'}</button>` : (S.loyalty && S.loyalty.pointsBalance>0? `<div class="ptsbadge" onclick="App.goScreen('loyalty')">★ ${S.loyalty.pointsBalance}</div>` : '<div style="width:32px"></div>')}</div>
     <div class="cattabs">${cats.map(cat=>`<button class="${S.activeCatId===cat.id?'active':''}" onclick="App.setCat('${cat.id}')">${S.lang==='ar'?cat.name_ar:cat.name_en}</button>`).join('')}</div>
   </div>
   <div class="scrbody">
