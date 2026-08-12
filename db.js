@@ -163,6 +163,27 @@ CREATE TABLE IF NOT EXISTS child_orders (
   id TEXT PRIMARY KEY, parent_order_id TEXT, outlet_id TEXT, status TEXT DEFAULT 'Paid',
   subtotal REAL, station_id TEXT, cancel_reason TEXT, created_at INTEGER, updated_at INTEGER
 );
+-- ===== Phase 4 Increment 3: Revenue Model Engine + Allocation Ledger (§9, §10) =====
+-- An outlet with NO row here falls back to an implicit Commission model
+-- built from outlets.commission_rate (see lib/revenue-engine.js) -- this is
+-- what lets every outlet migrated in Increment 1 keep working with zero
+-- configuration required.
+CREATE TABLE IF NOT EXISTS revenue_models (
+  id TEXT PRIMARY KEY, outlet_id TEXT, type TEXT, -- share | commission | fixed | hybrid
+  share_rate REAL, commission_rate REAL, fixed_amount REAL, fixed_cycle TEXT, -- per_order | monthly
+  calculation_base TEXT DEFAULT 'gross', -- gross | net_after_discounts | net_after_refunds
+  active INTEGER DEFAULT 1, created_at INTEGER
+);
+-- One row per outlet-portion of a paid order. Written ONCE, at the moment
+-- payment succeeds, with a full JSON snapshot of the model that was used --
+-- a later change to revenue_models NEVER rewrites a historical ledger row
+-- (same "no retroactive rewrite" principle already applied to settlements
+-- in Phase 3's lib/settlement.js).
+CREATE TABLE IF NOT EXISTS revenue_ledger (
+  id TEXT PRIMARY KEY, order_id TEXT, outlet_id TEXT,
+  gross_amount REAL, discount_amount REAL, eligible_base REAL,
+  partner_amount REAL, alnadl_amount REAL, model_snapshot_json TEXT, created_at INTEGER
+);
 `);
 
 function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); }

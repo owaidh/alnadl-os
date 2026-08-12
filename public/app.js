@@ -16,6 +16,7 @@ async function api(method, path, body, auth) {
 const T = {
   ar:{
     scanQr:'اختر نقطة (محاكاة مسح QR)', startOrder:'ابدأ الطلب', youAreAt:'أنت في', serviceOn:'الخدمة متاحة الآن', eta:'الوقت المتوقع',
+    save:'حفظ',
     search:'بحث عن منتج...', cart:'السلة', items:'منتجات', addToCart:'إضافة للسلة',
     required:'إلزامي', notes:'ملاحظات خاصة', notesPh:'مثال: بدون سكر',
     yourCart:'سلتك', subtotal:'المجموع الفرعي', vat:'ضريبة القيمة المضافة',
@@ -55,6 +56,7 @@ const T = {
   },
   en:{
     scanQr:'Choose a point (simulated QR scan)', startOrder:'Start Order', youAreAt:'You are at', serviceOn:'Service available now', eta:'Estimated time',
+    save:'Save',
     search:'Search a product...', cart:'Cart', items:'items', addToCart:'Add to cart',
     required:'Required', notes:'Special notes', notesPh:'e.g. no sugar',
     yourCart:'Your cart', subtotal:'Subtotal', vat:'VAT',
@@ -105,7 +107,7 @@ const S = {
   checkoutName:'', checkoutPhone:'',
   ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
-  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[],
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{},
   ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
 };
@@ -295,6 +297,7 @@ const App = {
     if(scr==='users') await App.loadUsers();
     if(scr==='settlements') await App.loadSettlements();
     if(scr==='outlets') await App.loadOutlets();
+    if(scr==='revenue') await App.loadOutletsForRevenue();
     if(scr==='merchants') await App.loadMerchants();
     if(scr==='wallets') await App.loadWallets();
   },
@@ -323,6 +326,29 @@ const App = {
     try{ await api('PATCH',`/api/admin/outlets/${id}`,{status:active?'Inactive':'Active'},true); await App.loadOutlets(); }
     catch(e){ showErr(e.message); }
   },
+
+  /* ---- revenue model engine (Phase 4 §9/§10) ---- */
+  async loadOutletsForRevenue(){
+    S.outlets = await api('GET',`/api/admin/outlets?propertyId=${S.PROPERTY_ID}`,null,true);
+    S.revenueLedger = await api('GET','/api/admin/revenue-ledger',null,true);
+    for(const o of S.outlets){
+      try{ const models = await api('GET',`/api/admin/revenue-models?outletId=${o.id}`,null,true); S.revenueModels[o.id] = models[0]||null; }catch{ S.revenueModels[o.id]=null; }
+    }
+    render();
+  },
+  setRevModelType(outletId,type){ S.ui.revModelDraft = S.ui.revModelDraft||{}; S.ui.revModelDraft[outletId] = {...(S.ui.revModelDraft[outletId]||{}), type}; render(); },
+  async saveRevenueModel(outletId){
+    const draft = (S.ui.revModelDraft && S.ui.revModelDraft[outletId]) || {};
+    const type = draft.type || document.getElementById('revType_'+outletId)?.value || 'commission';
+    const payload = { outletId, type,
+      shareRate: type==='share'? parseFloat(document.getElementById('revShare_'+outletId)?.value)/100 : null,
+      commissionRate: (type==='commission'||type==='hybrid')? parseFloat(document.getElementById('revCommission_'+outletId)?.value)/100 : null,
+      fixedAmount: (type==='fixed'||type==='hybrid')? parseFloat(document.getElementById('revFixed_'+outletId)?.value) : null,
+    };
+    try{ await api('POST','/api/admin/revenue-models',payload,true); showToast(t('toast_saved')); await App.loadOutletsForRevenue(); }
+    catch(e){ showErr(e.message); }
+  },
+
   async loadMerchants(){ S.merchants = await api('GET','/api/admin/merchants',null,true); render(); },
   async addMerchant(){
     const name_ar=document.getElementById('merAr').value.trim(), name_en=document.getElementById('merEn').value.trim();
@@ -798,10 +824,10 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
     AlnadlFinance:[['settlements', t('revShareTitle')],['audit', t('auditLog')]],
     PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
-    PartnerAdmin:[['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    PartnerAdmin:[['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
   const nav = navByRole[role] || [];
   let inner = '';
@@ -818,6 +844,7 @@ function renderStaffShell(){
   else if(S.screen==='settlements') inner = renderSettlements();
   else if(S.screen==='billing') inner = renderBilling();
   else if(S.screen==='outlets') inner = renderOutlets();
+  else if(S.screen==='revenue') inner = renderRevenueModels();
   else if(S.screen==='merchants') inner = renderMerchants();
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
@@ -1099,6 +1126,44 @@ function renderOutlets(){
           <span style="font-size:11px;color:var(--ink-300)">${operatorLabels[o.operator]||o.operator}${o.legacy_merchant_id? (S.lang==='ar'?' · مُرحَّل من Merchants':' · migrated from Merchants'):''}</span>
         </div>`).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا توجد منافذ بعد':'No outlets yet'}</div>`}
     </div></div>`;
+}
+
+function renderRevenueModels(){
+  const outlets = S.outlets || [];
+  const typeNames = { share: S.lang==='ar'?'مشاركة إيراد':'Revenue Share', commission: S.lang==='ar'?'عمولة':'Commission', fixed: S.lang==='ar'?'رسم ثابت':'Fixed Fee', hybrid: S.lang==='ar'?'مختلط':'Hybrid' };
+  return `
+    <div class="panel"><p class="ph" style="margin:0">${S.lang==='ar'?'كل منفذ له نموذج إيراد مستقل. تغيير النموذج لا يُعيد كتابة أي معاملة سابقة — كل سطر في السجل يحتفظ بلقطة من النموذج المستخدم وقتها.':'Each outlet has its own revenue model. Changing it never rewrites past transactions — every ledger row keeps a snapshot of the model that was active when it was recorded.'}</p></div>
+    ${outlets.map(o=>{
+      const current = S.revenueModels[o.id];
+      const draft = (S.ui.revModelDraft && S.ui.revModelDraft[o.id]) || {};
+      const type = draft.type || (current ? current.type : 'commission');
+      return `<div class="panel">
+        <h3>${S.lang==='ar'?o.name_ar:o.name_en} <span style="color:var(--ink-300);font-weight:400;font-size:12px">— ${current? typeNames[current.type] + (current.implicit? (S.lang==='ar'?' (افتراضي)':' (default)'):'') : ''}</span></h3>
+        <div class="formgrid">
+          <div class="darkfield"><label>${S.lang==='ar'?'نوع النموذج':'Model type'}</label>
+            <select id="revType_${o.id}" onchange="App.setRevModelType('${o.id}', this.value)">
+              <option value="commission" ${type==='commission'?'selected':''}>${typeNames.commission}</option>
+              <option value="share" ${type==='share'?'selected':''}>${typeNames.share}</option>
+              <option value="fixed" ${type==='fixed'?'selected':''}>${typeNames.fixed}</option>
+              <option value="hybrid" ${type==='hybrid'?'selected':''}>${typeNames.hybrid}</option>
+            </select>
+          </div>
+          ${type==='share'? `<div class="darkfield"><label>${S.lang==='ar'?'نسبة الشريك %':'Partner share %'}</label><input id="revShare_${o.id}" type="number" value="${current&&current.share_rate!=null?Math.round(current.share_rate*100):70}"></div>`:''}
+          ${(type==='commission'||type==='hybrid')? `<div class="darkfield"><label>${S.lang==='ar'?'نسبة عمولة النادل %':'Alnadl commission %'}</label><input id="revCommission_${o.id}" type="number" value="${current&&current.commission_rate!=null?Math.round(current.commission_rate*100):10}"></div>`:''}
+          ${(type==='fixed'||type==='hybrid')? `<div class="darkfield"><label>${S.lang==='ar'?'رسم ثابت (ر.س)':'Fixed fee (SAR)'}</label><input id="revFixed_${o.id}" type="number" value="${current&&current.fixed_amount!=null?current.fixed_amount:5}"></div>`:''}
+        </div>
+        <button class="btn-small brass" onclick="App.saveRevenueModel('${o.id}')">${t('save')}</button>
+      </div>`;
+    }).join('')}
+    <div class="panel"><h3>${S.lang==='ar'?'سجل التوزيع المالي (آخر المعاملات)':'Allocation ledger (recent transactions)'}</h3>
+      <table class="datatable"><tr><th>${S.lang==='ar'?'الطلب':'Order'}</th><th>${S.lang==='ar'?'المنفذ':'Outlet'}</th><th>${S.lang==='ar'?'إجمالي':'Gross'}</th><th>${S.lang==='ar'?'حصة الشريك':'Partner'}</th><th>${S.lang==='ar'?'حصة النادل':'Alnadl'}</th></tr>
+        ${(S.revenueLedger||[]).slice(0,15).map(r=>{
+          const model = JSON.parse(r.model_snapshot_json||'{}');
+          const o = outlets.find(x=>x.id===r.outlet_id);
+          return `<tr><td style="font-family:var(--mono)">${r.order_id}</td><td>${o?(S.lang==='ar'?o.name_ar:o.name_en):r.outlet_id}</td><td>${money(r.gross_amount)}</td><td>${money(r.partner_amount)}</td><td>${money(r.alnadl_amount)}</td></tr>`;
+        }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--ink-400)">${S.lang==='ar'?'لا توجد معاملات بعد':'No transactions yet'}</td></tr>`}
+      </table>
+    </div>`;
 }
 
 function renderMerchants(){

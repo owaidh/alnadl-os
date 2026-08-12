@@ -16,6 +16,7 @@ const { getSubscription, requireFeature } = require('./lib/plan.js');
 const { getGateway } = require('./lib/payment.js');
 const { getOrCreateAccount, earnPoints, quoteRedemption, commitRedemption } = require('./lib/loyalty.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
+const { getActiveModel, computeAmounts, recordOrderRevenue } = require('./lib/revenue-engine.js');
 const gateway = getGateway();
 
 const PORT = process.env.PORT || 8787;
@@ -314,6 +315,11 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
   if (succeeded && order.loyalty_points_used > 0 && order.loyalty_account_id) {
     commitRedemption(order.loyalty_account_id, order.loyalty_points_used, order.id);
   }
+
+  // Revenue Model Engine (§9/§10): allocate this order's revenue to each
+  // outlet involved, the moment payment succeeds — not later, and not
+  // retroactively rewritable once written (each row snapshots the model it used).
+  if (succeeded) recordOrderRevenue(order.id);
 
   sendJSON(res, 200, { id: order.id, status: newStatus, walletCovered, cardCharged: cardAmount });
 });
@@ -869,6 +875,45 @@ on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
     return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] });
   }
   sendJSON(res, 200, { ...base, hub: true, outlets });
+});
+
+/* ------------------------------ REVENUE MODEL ENGINE (§9, §10) --------------------------------- */
+on('GET', '/api/admin/revenue-models', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, query, session) => {
+  let rows = db.prepare('SELECT * FROM revenue_models WHERE outlet_id = ? AND active = 1 ORDER BY created_at DESC').all(query.outletId || '');
+  if (session.role === 'PartnerAdmin') rows = rows.filter(m => outletPartnerId(m.outlet_id) === session.scope);
+  // Also surface the implicit fallback model so the admin UI can show
+  // "using default commission" instead of an empty list for outlets that
+  // have never had an explicit model configured.
+  if (rows.length === 0 && query.outletId) {
+    const implicitModel = getActiveModel(query.outletId);
+    if (implicitModel.implicit) return sendJSON(res, 200, [implicitModel]);
+  }
+  sendJSON(res, 200, rows);
+});
+on('POST', '/api/admin/revenue-models', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  assertTenantWrite(session, outletPartnerId(b.outletId));
+  if (!['share', 'commission', 'fixed', 'hybrid'].includes(b.type)) return sendJSON(res, 400, { error: 'Invalid revenue model type' });
+  // Deactivate any prior model for this outlet — only one active model per
+  // outlet at a time; history is preserved (active=0), never deleted, since
+  // past ledger rows already snapshot whatever was active when they were written.
+  const before = db.prepare('SELECT * FROM revenue_models WHERE outlet_id = ? AND active = 1').all(b.outletId);
+  db.prepare('UPDATE revenue_models SET active = 0 WHERE outlet_id = ?').run(b.outletId);
+  const id = uid('rm');
+  db.prepare(`INSERT INTO revenue_models (id,outlet_id,type,share_rate,commission_rate,fixed_amount,fixed_cycle,calculation_base,active,created_at)
+              VALUES (?,?,?,?,?,?,?,?,1,?)`)
+    .run(id, b.outletId, b.type, b.shareRate || null, b.commissionRate || null, b.fixedAmount || null, b.fixedCycle || 'per_order', b.calculationBase || 'gross', Date.now());
+  audit(session.username, session.role, 'revenue_model_set', id, before, b, null);
+  sendJSON(res, 201, { id });
+});
+
+on('GET', '/api/admin/revenue-ledger', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer', 'AlnadlFinance'], async (req, res, p, query, session) => {
+  let rows = db.prepare('SELECT * FROM revenue_ledger ORDER BY created_at DESC LIMIT 200').all();
+  if (session.role === 'PartnerAdmin' || session.role === 'PartnerViewer') {
+    rows = rows.filter(r => outletPartnerId(r.outlet_id) === session.scope);
+  }
+  if (query.outletId) rows = rows.filter(r => r.outlet_id === query.outletId);
+  sendJSON(res, 200, rows);
 });
 
 /* ------------------------------ CORPORATE WALLET (Phase 3, §8/§14) --------------------------------- */
