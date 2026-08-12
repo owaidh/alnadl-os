@@ -184,6 +184,21 @@ CREATE TABLE IF NOT EXISTS revenue_ledger (
   gross_amount REAL, discount_amount REAL, eligible_base REAL,
   partner_amount REAL, alnadl_amount REAL, model_snapshot_json TEXT, created_at INTEGER
 );
+-- ===== Phase 4 Increment 4: White Label / Multi-Tenant Branding (§11, §12) =====
+-- Applies ONLY to the "Platform Shell" (header bar, welcome screen accent) --
+-- an Outlet's own branding_json (Increment 1) is completely independent and
+-- is never overridden by this. Gated by the whiteLabel plan feature
+-- (PLATFORM tier) -- a partner_id with no row here (every partner today)
+-- renders with Alnadl's default brass/ink theme, unchanged.
+CREATE TABLE IF NOT EXISTS partner_branding (
+  partner_id TEXT PRIMARY KEY,
+  mode TEXT DEFAULT 'alnadl', -- alnadl | co_branded | full_white_label
+  logo_text TEXT, primary_color TEXT, welcome_text_ar TEXT, welcome_text_en TEXT,
+  show_powered_by INTEGER DEFAULT 1, custom_domain TEXT,
+  fee_model TEXT DEFAULT 'included', -- included | setup | monthly | annual | setup_recurring
+  setup_fee_amount REAL DEFAULT 0, recurring_fee_amount REAL DEFAULT 0, recurring_cycle TEXT DEFAULT 'monthly',
+  updated_at INTEGER
+);
 `);
 
 function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); }

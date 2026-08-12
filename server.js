@@ -119,7 +119,9 @@ on('GET', '/api/qr/:token', null, async (req, res, p) => {
   const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(zone.property_id);
   const partner = db.prepare('SELECT * FROM partners WHERE id = ?').get(property.partner_id);
   const sub = getSubscription(property.partner_id);
-  sendJSON(res, 200, { partner, property, zone, point, token: p.token, features: sub ? sub.features : {} });
+  const features = sub ? sub.features : {};
+  const branding = features.whiteLabel ? getBranding(property.partner_id) : { partner_id: property.partner_id, mode: 'alnadl', show_powered_by: 1 };
+  sendJSON(res, 200, { partner, property, zone, point, token: p.token, features, branding });
 });
 
 /* ------------------------------ CATALOG --------------------------------- */
@@ -863,7 +865,8 @@ on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
     });
   });
 
-  const base = { partner, property, zone, point, token: p.token, features };
+  const branding = features.whiteLabel ? getBranding(property.partner_id) : { partner_id: property.partner_id, mode: 'alnadl', show_powered_by: 1 };
+  const base = { partner, property, zone, point, token: p.token, features, branding };
   if (outlets.length <= 1) {
     // Single (or zero, defensively — falls back to base context) outlet: skip the hub entirely.
     return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] || null });
@@ -875,6 +878,36 @@ on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
     return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] });
   }
   sendJSON(res, 200, { ...base, hub: true, outlets });
+});
+
+/* ------------------------------ WHITE LABEL / MULTI-TENANT BRANDING (§11, §12) --------------------------------- */
+function getBranding(partnerId) {
+  const b = db.prepare('SELECT * FROM partner_branding WHERE partner_id = ?').get(partnerId);
+  return b || { partner_id: partnerId, mode: 'alnadl', show_powered_by: 1 };
+}
+on('GET', '/api/admin/branding', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, query, session) => {
+  const partnerId = session.role === 'PartnerAdmin' ? session.scope : query.partnerId;
+  sendJSON(res, 200, getBranding(partnerId));
+});
+on('POST', '/api/admin/branding', ['SuperAdmin'], async (req, res, p, q, session) => {
+  // White Label mode/domain changes are Admin-only by design (§19 Security) —
+  // a PartnerAdmin can request a look via support, but cannot self-service
+  // switch their own tenant to full white-label without Alnadl approving the
+  // commercial fee model attached to it.
+  const b = await readBody(req);
+  requireFeature(b.partnerId, 'whiteLabel');
+  const before = getBranding(b.partnerId);
+  db.prepare(`INSERT INTO partner_branding (partner_id,mode,logo_text,primary_color,welcome_text_ar,welcome_text_en,show_powered_by,custom_domain,fee_model,setup_fee_amount,recurring_fee_amount,recurring_cycle,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+              ON CONFLICT(partner_id) DO UPDATE SET mode=excluded.mode, logo_text=excluded.logo_text, primary_color=excluded.primary_color,
+                welcome_text_ar=excluded.welcome_text_ar, welcome_text_en=excluded.welcome_text_en, show_powered_by=excluded.show_powered_by,
+                custom_domain=excluded.custom_domain, fee_model=excluded.fee_model, setup_fee_amount=excluded.setup_fee_amount,
+                recurring_fee_amount=excluded.recurring_fee_amount, recurring_cycle=excluded.recurring_cycle, updated_at=excluded.updated_at`)
+    .run(b.partnerId, b.mode || 'alnadl', b.logoText || null, b.primaryColor || null, b.welcomeTextAr || null, b.welcomeTextEn || null,
+         b.showPoweredBy !== false ? 1 : 0, b.customDomain || null, b.feeModel || 'included', b.setupFeeAmount || 0, b.recurringFeeAmount || 0,
+         b.recurringCycle || 'monthly', Date.now());
+  audit(session.username, session.role, 'branding_update', b.partnerId, before, b, null);
+  sendJSON(res, 200, { ok: true });
 });
 
 /* ------------------------------ REVENUE MODEL ENGINE (§9, §10) --------------------------------- */

@@ -107,7 +107,7 @@ const S = {
   checkoutName:'', checkoutPhone:'',
   ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
-  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{},
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
 };
@@ -298,6 +298,7 @@ const App = {
     if(scr==='settlements') await App.loadSettlements();
     if(scr==='outlets') await App.loadOutlets();
     if(scr==='revenue') await App.loadOutletsForRevenue();
+    if(scr==='branding') await App.loadBranding();
     if(scr==='merchants') await App.loadMerchants();
     if(scr==='wallets') await App.loadWallets();
   },
@@ -346,6 +347,26 @@ const App = {
       fixedAmount: (type==='fixed'||type==='hybrid')? parseFloat(document.getElementById('revFixed_'+outletId)?.value) : null,
     };
     try{ await api('POST','/api/admin/revenue-models',payload,true); showToast(t('toast_saved')); await App.loadOutletsForRevenue(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  /* ---- white label branding (Phase 4 §11/§12) ---- */
+  async loadBranding(){ S.branding = await api('GET',`/api/admin/branding?partnerId=${S.PARTNER_ID}`,null,true); render(); },
+  async saveBranding(){
+    const mode = document.getElementById('brMode').value;
+    const payload = {
+      partnerId: S.PARTNER_ID, mode,
+      logoText: document.getElementById('brLogo').value.trim() || null,
+      primaryColor: document.getElementById('brColor').value.trim() || null,
+      welcomeTextAr: document.getElementById('brWelcomeAr').value.trim() || null,
+      welcomeTextEn: document.getElementById('brWelcomeEn').value.trim() || null,
+      showPoweredBy: document.getElementById('brPoweredBy').checked,
+      feeModel: document.getElementById('brFeeModel').value,
+      setupFeeAmount: parseFloat(document.getElementById('brSetupFee').value) || 0,
+      recurringFeeAmount: parseFloat(document.getElementById('brRecurringFee').value) || 0,
+      recurringCycle: document.getElementById('brRecurringCycle').value,
+    };
+    try{ await api('POST','/api/admin/branding',payload,true); showToast(t('toast_saved')); await App.loadBranding(); }
     catch(e){ showErr(e.message); }
   },
 
@@ -559,7 +580,14 @@ function renderCustomerShell(){
     case 'feedbackThanks': inner=scrFeedbackThanks(); break;
     default: inner=scrWelcome();
   }
-  return `<div class="fohshell"><div class="phone">${inner}${S.activeProduct?renderProductModal():''}</div></div>`;
+  // White Label (§11): the primary color override is scoped to the .phone
+  // element ONLY via an inline CSS custom property — it never touches the
+  // admin/staff chrome (protobar), and an Outlet's own branding_json
+  // (Increment 1) is completely independent of this and never overridden.
+  const branding = S.qrContext.branding;
+  const themeStyle = (branding && branding.mode !== 'alnadl' && branding.primary_color)
+    ? `style="--brass-300:color-mix(in srgb, ${branding.primary_color} 55%, white);--brass-500:${branding.primary_color};--brass-600:${branding.primary_color};--brass-700:color-mix(in srgb, ${branding.primary_color} 80%, black);"` : '';
+  return `<div class="fohshell"><div class="phone" ${themeStyle}>${inner}${S.activeProduct?renderProductModal():''}</div></div>`;
 }
 
 function renderQrPicker(){
@@ -609,13 +637,19 @@ function scrWelcome(){
   const c = S.qrContext;
   const nm = S.lang==='ar'?c.partner.name_ar:c.partner.name_en;
   const zn = S.lang==='ar'?c.zone.name_ar:c.zone.name_en;
+  const branding = c.branding;
+  const isWhiteLabel = branding && branding.mode !== 'alnadl';
+  const crestLetter = isWhiteLabel && branding.logo_text ? branding.logo_text.charAt(0).toUpperCase() : 'ن';
+  const welcomeTitle = isWhiteLabel && (S.lang==='ar'?branding.welcome_text_ar:branding.welcome_text_en) || nm;
+  const showPoweredBy = !branding || branding.show_powered_by !== 0;
   return `
   <div class="welcome">
-    <div class="crest">ن</div>
+    <div class="crest">${crestLetter}</div>
     <div class="locpill">${t('youAreAt')}: ${nm} — ${zn} — ${c.point.label}</div>
     <div class="etarow"><span class="dot"></span>${t('serviceOn')} · ${t('eta')} 8–12 ${S.lang==='ar'?'دقيقة':'min'}</div>
-    <h2>${nm}</h2>
+    <h2>${welcomeTitle}</h2>
     <button class="btn-primary" style="max-width:260px" onclick="App.goScreen('menu')">${t('startOrder')}</button>
+    ${isWhiteLabel && showPoweredBy? `<div style="font-size:10px;color:var(--ink-400);margin-top:6px">${S.lang==='ar'?'مقدَّم من':'Powered by'} ALNADL</div>`:''}
   </div>`;
 }
 
@@ -824,7 +858,7 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
     AlnadlFinance:[['settlements', t('revShareTitle')],['audit', t('auditLog')]],
     PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
     PartnerAdmin:[['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
@@ -845,6 +879,7 @@ function renderStaffShell(){
   else if(S.screen==='billing') inner = renderBilling();
   else if(S.screen==='outlets') inner = renderOutlets();
   else if(S.screen==='revenue') inner = renderRevenueModels();
+  else if(S.screen==='branding') inner = renderBranding();
   else if(S.screen==='merchants') inner = renderMerchants();
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
@@ -1164,6 +1199,49 @@ function renderRevenueModels(){
         }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--ink-400)">${S.lang==='ar'?'لا توجد معاملات بعد':'No transactions yet'}</td></tr>`}
       </table>
     </div>`;
+}
+
+function renderBranding(){
+  const b = S.branding || { mode:'alnadl', show_powered_by:1, fee_model:'included' };
+  const modeLabels = S.lang==='ar'
+    ? { alnadl:'علامة النادل (افتراضي)', co_branded:'علامة مشتركة', full_white_label:'علامة كاملة للشريك' }
+    : { alnadl:'Alnadl branding (default)', co_branded:'Co-branded', full_white_label:'Full white label' };
+  const feeLabels = S.lang==='ar'
+    ? { included:'ضمن الباقة', setup:'رسم تأسيس فقط', monthly:'اشتراك شهري', annual:'اشتراك سنوي', setup_recurring:'تأسيس + اشتراك دوري' }
+    : { included:'Included in plan', setup:'Setup fee only', monthly:'Monthly subscription', annual:'Annual subscription', setup_recurring:'Setup + recurring' };
+  return `
+  <div class="panel"><p class="ph" style="margin:0">${S.lang==='ar'?'يُطبَّق فقط على واجهة العميل الأمامية (Platform Shell) — هوية كل منفذ (Outlet) مستقلة تمامًا ولا تتأثر. يتطلب باقة PLATFORM. تغيير الوضع أو النطاق المخصص إداري فقط.':'Applies only to the customer-facing Platform Shell — each Outlet keeps its own independent identity. Requires the PLATFORM plan. Mode/domain changes are Admin-only.'}</p></div>
+  <div class="panel">
+    <h3>${S.lang==='ar'?'إعدادات العلامة التجارية —':'Branding settings —'} ${S.PARTNER_ID}</h3>
+    <div class="formgrid">
+      <div class="darkfield"><label>${S.lang==='ar'?'الوضع':'Mode'}</label>
+        <select id="brMode">
+          <option value="alnadl" ${b.mode==='alnadl'?'selected':''}>${modeLabels.alnadl}</option>
+          <option value="co_branded" ${b.mode==='co_branded'?'selected':''}>${modeLabels.co_branded}</option>
+          <option value="full_white_label" ${b.mode==='full_white_label'?'selected':''}>${modeLabels.full_white_label}</option>
+        </select>
+      </div>
+      <div class="darkfield"><label>${S.lang==='ar'?'نص الشعار (أول حرف يظهر)':'Logo text (first letter shown)'}</label><input id="brLogo" value="${b.logo_text||''}" placeholder="Nova Order"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'اللون الأساسي':'Primary color'}</label><input id="brColor" type="text" value="${b.primary_color||'#C08A3E'}" placeholder="#2E5C4B"></div>
+      <div class="darkfield"><label style="display:flex;align-items:center;gap:6px;margin-top:18px"><input id="brPoweredBy" type="checkbox" ${b.show_powered_by!==0?'checked':''}> ${S.lang==='ar'?'إظهار "مقدَّم من ALNADL"':'Show "Powered by ALNADL"'}</label></div>
+      <div class="darkfield" style="grid-column:1/-1"><label>${S.lang==='ar'?'نص ترحيبي مخصص (AR)':'Custom welcome text (AR)'}</label><input id="brWelcomeAr" value="${b.welcome_text_ar||''}" placeholder="مرحبًا بك في تجربة نوفا الخاصة"></div>
+      <div class="darkfield" style="grid-column:1/-1"><label>${S.lang==='ar'?'نص ترحيبي مخصص (EN)':'Custom welcome text (EN)'}</label><input id="brWelcomeEn" value="${b.welcome_text_en||''}" placeholder="Welcome to the Nova experience"></div>
+    </div>
+    <div class="section-sm">${S.lang==='ar'?'النموذج التجاري لهذه الخدمة':'Commercial model for this service'}</div>
+    <div class="formgrid">
+      <div class="darkfield"><label>${S.lang==='ar'?'نوع الرسوم':'Fee model'}</label>
+        <select id="brFeeModel">
+          ${Object.entries(feeLabels).map(([k,v])=>`<option value="${k}" ${b.fee_model===k?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="darkfield"><label>${S.lang==='ar'?'رسم التأسيس (ر.س)':'Setup fee (SAR)'}</label><input id="brSetupFee" type="number" value="${b.setup_fee_amount||0}"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'الرسم الدوري (ر.س)':'Recurring fee (SAR)'}</label><input id="brRecurringFee" type="number" value="${b.recurring_fee_amount||0}"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'دورة التجديد':'Recurring cycle'}</label>
+        <select id="brRecurringCycle"><option value="monthly" ${b.recurring_cycle==='monthly'?'selected':''}>${S.lang==='ar'?'شهري':'Monthly'}</option><option value="annual" ${b.recurring_cycle==='annual'?'selected':''}>${S.lang==='ar'?'سنوي':'Annual'}</option></select>
+      </div>
+    </div>
+    <button class="btn-small brass" onclick="App.saveBranding()">${t('save')}</button>
+  </div>`;
 }
 
 function renderMerchants(){
