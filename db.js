@@ -449,4 +449,13 @@ function migratePhase4Outlets() {
 }
 migratePhase4Outlets();
 
+// Versioned migrations (Q08) run last, after all bootstrap/backfill data
+// exists — this is what lets migration 001 safely rebuild tables with real
+// FOREIGN KEY constraints (Q09) without racing the data that populates them.
+const { runMigrations } = require('./lib/migrate.js');
+const migrationResults = runMigrations(db);
+if (migrationResults.length) {
+  console.log(`Applied ${migrationResults.length} migration(s): ${migrationResults.map(r => r.id).join(', ')}`);
+}
+
 module.exports = { db, uid, hash };
