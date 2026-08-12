@@ -429,9 +429,19 @@ function deriveParentStatus(parentOrderId) {
   const order = ['Paid', 'Accepted', 'Preparing', 'Ready', 'Out for Delivery', 'Delivered'];
   const active = children.filter(c => c.status !== 'Cancelled');
   let newStatus;
-  if (active.length === 0) newStatus = 'Cancelled';
-  else if (active.every(c => c.status === 'Delivered')) newStatus = 'Delivered';
-  else {
+  if (active.length === 0) {
+    newStatus = 'Cancelled';
+  } else if (active.every(c => c.status === 'Delivered')) {
+    newStatus = 'Delivered';
+  } else if (active.some(c => c.status === 'Delivered')) {
+    // Q04: some outlets' portions handed over, others still in flight.
+    newStatus = 'Partially Delivered';
+  } else if (active.every(c => ['Ready', 'Out for Delivery'].includes(c.status))) {
+    newStatus = 'Ready'; // every portion dispatched/ready, none delivered yet — matches pre-Q01 behavior exactly
+  } else if (active.some(c => ['Ready', 'Out for Delivery'].includes(c.status))) {
+    // Q04: at least one outlet ready while another is still preparing.
+    newStatus = 'Partially Ready';
+  } else {
     let minIdx = order.length;
     for (const c of active) { const idx = order.indexOf(c.status); if (idx >= 0 && idx < minIdx) minIdx = idx; }
     newStatus = minIdx < order.length ? order[minIdx] : active[0].status;
@@ -440,7 +450,8 @@ function deriveParentStatus(parentOrderId) {
   if (before && before.status !== newStatus) {
     db.prepare('UPDATE orders SET status=?, updated_at=? WHERE id=?').run(newStatus, Date.now(), parentOrderId);
     audit('system', 'System', 'parent_status_derive', parentOrderId, { status: before.status }, { status: newStatus }, null);
-    const notifyEvent = { Ready: 'order_ready', 'Out for Delivery': 'order_out', Delivered: 'order_delivered', Cancelled: 'order_cancelled' }[newStatus];
+    const notifyEvent = { Ready: 'order_ready', 'Partially Ready': 'order_ready', 'Out for Delivery': 'order_out',
+      Delivered: 'order_delivered', 'Partially Delivered': 'order_out', Cancelled: 'order_cancelled' }[newStatus];
     if (notifyEvent) notify(notifyEvent, parentOrderId, 'push');
   }
 }
@@ -470,8 +481,39 @@ on('POST', '/api/child-orders/:id/transition', ['Operator', 'SiteManager', 'Runn
 on('GET', '/api/runner/queue', ['Runner', 'SuperAdmin'], async (req, res) => {
   const rows = db.prepare(`
     SELECT o.*, pt.label AS point_label FROM orders o LEFT JOIN points pt ON pt.id = o.point_id
-    WHERE o.status IN ('Ready','Out for Delivery') ORDER BY o.updated_at ASC`).all();
-  sendJSON(res, 200, rows);
+    WHERE o.status IN ('Ready','Out for Delivery','Partially Ready','Partially Delivered') ORDER BY o.updated_at ASC`).all();
+  const result = [];
+  for (const o of rows) {
+    const property = db.prepare('SELECT delivery_grouping FROM properties WHERE id = ?').get(o.property_id);
+    const grouping = (property && property.delivery_grouping) || 'grouped';
+    const children = db.prepare('SELECT * FROM child_orders WHERE parent_order_id = ?').all(o.id);
+
+    if (children.length === 0) {
+      // Legacy single-outlet path — unaffected by grouping policy, exactly as before Q01.
+      if (['Ready', 'Out for Delivery'].includes(o.status)) result.push(o);
+      continue;
+    }
+
+    if (grouping === 'grouped') {
+      // Grouped (§13, Q01 default — matches pre-Q01 behavior exactly): Runner
+      // only ever sees the whole order once every child has reached Ready.
+      if (o.status === 'Ready' || o.status === 'Out for Delivery') result.push(o);
+    } else {
+      // Separate (§13, Q01): each outlet's portion can be claimed and
+      // delivered independently the moment IT is ready, without waiting
+      // for siblings still preparing.
+      for (const c of children) {
+        if (!['Ready', 'Out for Delivery'].includes(c.status)) continue;
+        const outlet = db.prepare('SELECT name_ar, name_en FROM outlets WHERE id = ?').get(c.outlet_id);
+        result.push({
+          id: c.id, status: c.status, updated_at: c.updated_at, point_label: o.point_label,
+          isChild: true, parentOrderId: o.id, outletId: c.outlet_id,
+          outletName: outlet ? outlet.name_ar : null, outletNameEn: outlet ? outlet.name_en : null,
+        });
+      }
+    }
+  }
+  sendJSON(res, 200, result);
 });
 
 function propertyPartnerId(propertyId) { return (db.prepare('SELECT partner_id FROM properties WHERE id=?').get(propertyId) || {}).partner_id; }
@@ -498,6 +540,17 @@ on('GET', '/api/admin/properties', ['SuperAdmin', 'PartnerAdmin'], async (req, r
   let rows = db.prepare('SELECT * FROM properties').all();
   if (session.role === 'PartnerAdmin') rows = rows.filter(pr => pr.partner_id === session.scope);
   sendJSON(res, 200, rows);
+});
+on('PATCH', '/api/admin/properties/:id', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  // Q01: Grouped vs Separate delivery policy lives on the property.
+  const b = await readBody(req);
+  const before = db.prepare('SELECT partner_id, delivery_grouping FROM properties WHERE id = ?').get(p.id);
+  if (!before) return sendJSON(res, 404, { error: 'Property not found' });
+  if (session.role === 'PartnerAdmin' && before.partner_id !== session.scope) { const e = new Error('Forbidden'); e.status = 403; throw e; }
+  if (!['grouped', 'separate'].includes(b.deliveryGrouping)) return sendJSON(res, 400, { error: 'deliveryGrouping must be "grouped" or "separate"' });
+  db.prepare('UPDATE properties SET delivery_grouping = ? WHERE id = ?').run(b.deliveryGrouping, p.id);
+  audit(session.username, session.role, 'delivery_grouping_change', p.id, { deliveryGrouping: before.delivery_grouping }, { deliveryGrouping: b.deliveryGrouping }, null);
+  sendJSON(res, 200, { ok: true });
 });
 on('POST', '/api/admin/partners', ['SuperAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);

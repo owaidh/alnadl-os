@@ -40,4 +40,6 @@
 | Q08 | ✅ **CLOSED** | `lib/migrate.js` + `migrations/001_add_foreign_keys.js` — مُختبَر: تطبيق تلقائي عند الإقلاع، Idempotent (تحقَّق بإعادة التحميل)، معاملة واحدة (BEGIN/COMMIT) مع Rollback عند الفشل |
 | Q09 | ✅ **CLOSED (نطاق محدود صراحة)** | FK فعلية على `order_items`, `child_orders`, `payments`, `revenue_ledger` — مُختبَر: `PRAGMA foreign_key_check` يعيد `[]` (صفر انتهاكات)، ومحاولة إدراج مباشرة بـ`order_id` غير صالح **رُفضت فعليًا** بخطأ SQLite حقيقي. **نطاق متبقٍ صراحة**: بقية الـ23 جدولاً لم تُرحَّل بعد لنفس النمط — موثَّق كمهمة تالية، وليس "منجزًا" زورًا |
 | Q10 | ✅ **CLOSED** | `tests/` (4 ملفات + Runner) — **41/41 اختبارًا ناجحًا** فعليًا عبر `node tests/run-all.js`، بتقرير JSON حقيقي (`tests/last-run-report.json`). يشمل: Regression أساسي (14)، Phase 4 (14)، أمن/عزل (9)، تزامن (4) |
+| Q01 | ✅ **CLOSED** | `migrations/002_delivery_grouping.js` + منطق Runner Queue — مُختبَر آليًا: سياسة `grouped` (افتراضية، تطابق السلوك القديم تمامًا) تُخفي الطلب الجزئي عن Runner، وسياسة `separate` تُظهر تذكرة المنفذ الجاهز فورًا دون انتظار البقية |
+| Q04 | ✅ **CLOSED** | `deriveParentStatus()` يُنتج الآن `Partially Ready`/`Partially Delivered` بدقة — مُختبَر آليًا وبصريًا (لقطة شاشة لتتبع العميل الفعلي تُظهر الحالة والملاحظة التوضيحية بشكل صحيح) |
 

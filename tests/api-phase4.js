@@ -39,12 +39,13 @@ async function run() {
     const children = queue.data.filter(t => t.parentOrderId === order.data.id);
     assertEqual(children.length, 2, 'multi-outlet order produces exactly 2 KDS tickets');
 
-    // Advance one child only — parent must not jump ahead
+    // Advance one child only — parent must reflect a genuine partial state,
+    // not misleadingly report the least-advanced raw status (Q04).
     await api('POST', `/api/child-orders/${children[0].id}/transition`, { to: 'Accepted' }, opToken);
     await api('POST', `/api/child-orders/${children[0].id}/transition`, { to: 'Preparing' }, opToken);
     await api('POST', `/api/child-orders/${children[0].id}/transition`, { to: 'Ready' }, opToken);
     const parentMid = await api('GET', `/api/orders/${order.data.id}`);
-    assertEqual(parentMid.data.status, 'Paid', 'parent stays at least-advanced status while 1 of 2 children is Ready');
+    assertEqual(parentMid.data.status, 'Partially Ready', 'parent reports "Partially Ready" when 1 of 2 outlets is ready and the other is not (Q04)');
 
     await api('POST', `/api/child-orders/${children[1].id}/transition`, { to: 'Accepted' }, opToken);
     await api('POST', `/api/child-orders/${children[1].id}/transition`, { to: 'Preparing' }, opToken);
@@ -84,6 +85,33 @@ async function run() {
     assertEqual(analytics.data.scans, 2, 'QR analytics: 2 scans recorded');
     assertEqual(analytics.data.orders, 1, 'QR analytics: 1 order recorded');
     assertEqual(analytics.data.conversionRate, 50, 'QR analytics: 50% conversion computed correctly');
+
+    // --- Q01/Q04: Grouped vs Separate delivery policy ---
+    // Default property policy is 'grouped' — zero behavior change for any
+    // existing property until explicitly switched.
+    const propsBefore = await api('GET', '/api/admin/properties', null, adminToken);
+    const novaProp = propsBefore.data.find(p => p.id === 'prop_nova_main');
+    assertEqual(novaProp.delivery_grouping, 'grouped', 'default delivery_grouping is "grouped" (matches pre-Q01 behavior)');
+
+    // Grouped: a Runner must NOT see a partially-ready order at all.
+    const order3 = await api('POST', '/api/orders', { pointId: 'PT-014', items: [{ productId: 'p_latte', qty: 1 }, { productId: 'p_grill', qty: 1 }] });
+    await api('POST', `/api/orders/${order3.data.id}/pay`, { method: 'card' });
+    const queue3 = await api('GET', '/api/ops/queue', null, opToken);
+    const kids3 = queue3.data.filter(t => t.parentOrderId === order3.data.id);
+    await api('POST', `/api/child-orders/${kids3[0].id}/transition`, { to: 'Accepted' }, opToken);
+    await api('POST', `/api/child-orders/${kids3[0].id}/transition`, { to: 'Preparing' }, opToken);
+    await api('POST', `/api/child-orders/${kids3[0].id}/transition`, { to: 'Ready' }, opToken);
+    const runnerToken = await loginAs('runner');
+    const runnerQGrouped = await api('GET', '/api/runner/queue', null, runnerToken);
+    assert(!runnerQGrouped.data.some(t => t.id === order3.data.id || t.parentOrderId === order3.data.id),
+      'Grouped policy: Runner does NOT see a partially-ready order (must wait for all outlets)');
+
+    // Switch to Separate: now Runner should see the ready outlet's ticket immediately.
+    await api('PATCH', '/api/admin/properties/prop_nova_main', { deliveryGrouping: 'separate' }, adminToken);
+    const runnerQSeparate = await api('GET', '/api/runner/queue', null, runnerToken);
+    assert(runnerQSeparate.data.some(t => t.parentOrderId === order3.data.id && t.status === 'Ready'),
+      'Separate policy: Runner sees the ready outlet\'s ticket immediately, without waiting for the other outlet');
+    await api('PATCH', '/api/admin/properties/prop_nova_main', { deliveryGrouping: 'grouped' }, adminToken); // restore default
 
   } finally {
     stopServer();

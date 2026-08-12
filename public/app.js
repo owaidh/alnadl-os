@@ -29,6 +29,7 @@ const T = {
     st_created:'تم إنشاء الطلب', st_pending:'بانتظار تأكيد الدفع', st_paid:'تم الاستلام',
     st_accepted:'تم قبول الطلب', st_preparing:'قيد التجهيز', st_ready:'جاهز', st_out:'في الطريق إليك',
     st_delivered:'تم التسليم', st_failed:'فشل الدفع', st_cancelled:'ملغي',
+    st_partially_ready:'جاهز جزئيًا', st_partially_delivered:'تم تسليم جزء',
     backToStart:'طلب جديد',
     howExperience:'كيف كانت تجربتك؟', speed:'سرعة الخدمة', quality:'جودة المنتج', delivery:'التسليم',
     optionalComment:'تعليق اختياري', submitFeedback:'إرسال التقييم', thanksFeedback:'شكرًا لتقييمك!',
@@ -69,6 +70,7 @@ const T = {
     st_created:'Order created', st_pending:'Awaiting payment confirmation', st_paid:'Order received',
     st_accepted:'Order accepted', st_preparing:'Preparing', st_ready:'Ready', st_out:'On the way to you',
     st_delivered:'Delivered', st_failed:'Payment failed', st_cancelled:'Cancelled',
+    st_partially_ready:'Partially ready', st_partially_delivered:'Partially delivered',
     backToStart:'New order',
     howExperience:'How was your experience?', speed:'Service speed', quality:'Product quality', delivery:'Delivery',
     optionalComment:'Optional comment', submitFeedback:'Submit feedback', thanksFeedback:'Thanks for your feedback!',
@@ -525,6 +527,7 @@ function statusBadge(status){
   const map = { 'Created':['pending','st_created'],'Payment Pending':['pending','st_pending'],'Paid':['paid','st_paid'],
     'Accepted':['paid','st_accepted'],'Preparing':['prep','st_preparing'],'Ready':['ready','st_ready'],
     'Out for Delivery':['out','st_out'],'Delivered':['delivered','st_delivered'],
+    'Partially Ready':['ready','st_partially_ready'],'Partially Delivered':['out','st_partially_delivered'],
     'Failed':['cancel','st_failed'],'Cancelled':['cancel','st_cancelled'],'Delivery Failed':['cancel','st_cancelled'] };
   const [cls,label] = map[status] || ['pending', status];
   return `<span class="badge ${cls}">${t(label)||status}</span>`;
@@ -828,10 +831,18 @@ function scrTracking(){
   const o=S.currentOrder; if(!o) return scrWelcome();
   const order=['Paid','Accepted','Preparing','Ready','Out for Delivery','Delivered'];
   const labels=['st_paid','st_accepted','st_preparing','st_ready','st_out','st_delivered'];
-  const curIdx=order.indexOf(o.status);
+  // Partial states (Q04, multi-outlet orders) map onto the same 6-step
+  // visual, but never claim more progress than genuinely happened —
+  // "Partially Ready" sits at the Ready step, "Partially Delivered" at the
+  // Out for Delivery step, both flagged so the UI can say "some of your order".
+  const partialNote = o.status==='Partially Ready' ? (S.lang==='ar'?'بعض عناصر طلبك جاهزة، والباقي قيد التجهيز':'Part of your order is ready, the rest is still being prepared')
+    : o.status==='Partially Delivered' ? (S.lang==='ar'?'تم تسليم جزء من طلبك، والباقي في الطريق':'Part of your order has been delivered, the rest is on the way') : null;
+  const effectiveStatus = o.status==='Partially Ready' ? 'Ready' : o.status==='Partially Delivered' ? 'Out for Delivery' : o.status;
+  const curIdx=order.indexOf(effectiveStatus);
   return `
   <div class="scrhead"><div class="top"><h3>${t('trackTitle')} ${o.id}</h3>${statusBadge(o.status)}</div></div>
   <div class="scrbody">
+    ${partialNote? `<div class="notebox">${partialNote}</div>`:''}
     <div class="steplist">${order.map((st,i)=>{
       const done=curIdx>i, isCur=i===curIdx && o.status!=='Cancelled';
       const cls = o.status==='Cancelled'?'':(done?'done':isCur?'current':'');
