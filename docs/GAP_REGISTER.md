@@ -1,4 +1,4 @@
-> **Version:** v2.0.2 · **Status:** FINAL — 13/20 fully closed, 3/20 partially closed as formally-accepted technical debt (73/73 automated tests, verified count), 4/20 explicitly open (Pre-Go-Live). This is the single authoritative Q01-Q20 status table — no other table in this document contradicts it. · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.2-corrective-2
+> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED — 13/20 fully closed, 3/20 partially closed as formally-accepted technical debt (73/73 automated tests, verified count), 4/20 explicitly open (Pre-Go-Live). P4-GATE-001 through 008 all satisfied (see dedicated section below) — this baseline is now locked per the Phase 5 pre-gate requirement. · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
 
 # Alnadl Hospitality OS — Gap Register (Final Quality & Completion Requirements Response)
 
@@ -36,6 +36,23 @@
 **⚠️ Technical Debt — مُعتمَد رسميًا، ليس Done (3):** Q06 (Application Hardening فقط)، Q07 (قرار معماري فقط، بلا تنفيذ)، Q09 (تغطية FK جزئية 12%)
 
 **❌ Pre-Go-Live Open Items — لا تمنع Technical Handover، لكنها تمنع Production Go-Live (4):** Q05 (بوابة دفع)، Q11 (UAT)، Q17 (Load Test)، Q18 (أجهزة فعلية)
+
+## بوابة إغلاق Phase 4 (P4-GATE-001 إلى 008) — مُنفَّذة بالكامل
+
+استجابةً لـ`P5_وتحديث_p4.docx`، القسم "PRE-PHASE 5 GATE". **هذه البوابة إلزامية قبل أي عمل على Phase 5 Engage**، وقد نُفِّذت بالكامل الآن:
+
+| البوابة | الحالة | الدليل |
+|---|---|---|
+| P4-GATE-001 Baseline Lock | ✅ | هذا القسم نفسه + الوسم أدناه |
+| P4-GATE-002 Regression Evidence | ✅ | **73/73** مُتحقَّق منه برمجيًا فور التنفيذ (لم ينخفض عن آخر رقم مُعلَن) |
+| P4-GATE-003 Documentation/Version Consistency | ✅ | Regression كامل أُعيد تشغيله على هذا الالتزام تحديدًا؛ صفر انخفاض في التغطية |
+| P4-GATE-004 ERD/Schema Truth | ✅ | **خلل حقيقي اكتُشف وأُصلح**: `docs/erd.dot` كان لا يزال يحمل "(v2.0.0)" ثابتة داخل عنوان الرسم رغم كل الترقيات — صُحِّحت لـv2.0.2 وأُعيد توليد `erd.png`/`erd.svg`. كذلك عنوان في `DATABASE_SCHEMA.md` كان لا يزال يحمل "(v2.0.1)" ثابتة — أُزيلت |
+| P4-GATE-005 Production Safety Guards | ✅ | راجع Q06 الحالي — يصف SQLite (المحرك الفعلي المُستخدَم اليوم) بدقة، بما فيها FK الجزئية (4/34) كـTechnical Debt معلن، وليس ادّعاءً باكتمال غير موجود |
+| P4-GATE-006 Core Fulfillment Definition | ✅ | **مُختبَر حيًا الآن، 3 حالات منفصلة**: (أ) DB فارغة بلا SESSION_SECRET ولا بيانات Bootstrap → فشل فوري؛ (ب) SESSION_SECRET موجود لكن DB فارغة بلا بيانات Bootstrap → فشل فوري؛ (ج) كل شيء صحيح → مستخدم واحد بالضبط، صفر شركاء وهميين. فحص SESSION_SECRET المعزول (DB غير فارغة) اختُبر منفصلًا أيضًا وأكَّد الرفض الصحيح |
+| P4-GATE-007 Core Flow Protection | ✅ | **إضافة توثيقية جديدة**: تصريح صريح في `docs/MULTI_OUTLET_SPEC.md` و`docs/ARCHITECTURE.md` أن Runner توصيل داخلي حصري ضمن حدود المنشأة — لا مركبات، لا عناوين، لا GPS، لا توصيل خارجي في أي جزء من الكود الحالي |
+| P4-GATE-008 Phase 4 Closure Decision | ✅ | Regression متصفح كامل عبر السلسلة الكاملة المذكورة حرفيًا (QR→Context→Service Hub→Outlet→Cart→Payment→Parent/Child→KDS→Runner→Delivered→Tracking) + تسجيل دخول الأدوار السبعة — صفر أخطاء |
+
+**النتيجة: `PHASE 1-4 TECHNICAL BASELINE LOCKED`** — Status الرسمي المطلوب في §0/§1 من الوثيقة، مُثبَّت بوسم Git منفصل (`v2.0.3-p4-baseline-locked`).
 
 ## سجل التغييرات عبر الجولات التصحيحية
 

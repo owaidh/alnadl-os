@@ -1,4 +1,4 @@
-> **Version:** v2.0.2 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.2-corrective-2
+> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
 
 # Alnadl Hospitality OS — User Flows (§26.1)
 

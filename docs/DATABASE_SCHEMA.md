@@ -1,4 +1,4 @@
-> **Version:** v2.0.2 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.2-corrective-2
+> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -162,7 +162,7 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ---
 
-## قيود تصميم مقصودة (يجب معرفتها قبل التوسّع) — مُحدَّثة لتصف النسخة الحالية فقط (v2.0.1)
+## قيود تصميم مقصودة (يجب معرفتها قبل التوسّع)
 
 1. **Foreign Key Constraints فعلية مفروضة الآن على 4 جداول فقط من أصل 34** (`order_items`, `child_orders`, `payments`, `revenue_ledger` — مسار المال المباشر، عبر `migrations/001_add_foreign_keys.js`، Q09). بقية الـ30 جدولاً لا تزال تعتمد على منطق التطبيق (`server.js`) فقط دون قيد قاعدة بيانات فعلي — **دَين تقني مُعتمَد رسميًا**، وليس إغفالًا. راجع `docs/GAP_REGISTER.md` بند Q09 للتفصيل والخطة.
 2. **الأسعار مخزنة كـ REAL (Floating point) في كل الجداول المالية دون استثناء** — هذا خطر تقريب (Rounding Risk) حقيقي وغير مُعالَج بعد، ذُكر صراحة في مراجعة الجودة النهائية (بند 13). التوصية المُعتمَدة: الانتقال لتخزين أصغر وحدة عملة كعدد صحيح (halalas، أي الريال × 100 كـ INTEGER) أو `NUMERIC/DECIMAL` عند الانتقال لـPostgreSQL (Q07)، مع قاعدة تقريب موحّدة صريحة للضريبة والخصومات والعمولات والاسترجاعات والتسويات — **هذا العمل لم يبدأ بعد**.

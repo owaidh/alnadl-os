@@ -1,4 +1,4 @@
-> **Version:** v2.0.2 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.2-corrective-2
+> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
 
 # Alnadl Hospitality OS — Multi-Outlet Specification (§6, §8, §13, §26.1)
 
@@ -48,6 +48,9 @@ GET /api/ops/queue?stationId=xxx
 
 ## سياسة التسليم — Grouped مقابل Separate (منجزة، Q01)
 عند اكتمال أجزاء طلب من منافذ مختلفة، `properties.delivery_grouping` يحدد السلوك: `grouped` (الافتراضي، يطابق حرفيًا السلوك القديم قبل هذه الميزة) ينتظر Runner اكتمال كل الأبناء ليسلّمهم دفعة واحدة؛ `separate` يُسلِّم كل Child Order فور جهوزيته بمعزل عن البقية. مُختبَر آليًا (23 اختبارًا في `tests/api-phase4.js`) وبصريًا. راجع `docs/API_DOCUMENTATION.md` §21 لتفاصيل الـAPI (`PATCH /api/admin/properties/:id`).
+
+## نطاق Runner/Fulfillment — توصيل داخلي فقط (P4-GATE-007)
+Runner في هذا النظام يُنفِّذ **توصيلاً داخليًا حصريًا** ضمن حدود المنشأة (Property/Location) إلى Zone/Point/Table — مثال: من المطبخ إلى طاولة في اللوبي، أو غرفة فندقية، أو مكتب داخل مبنى شركة. **لا يُفترض أو يُبنى أي منطق توصيل خارجي** (مركبات، سائقين خارجيين، خرائط طرق، مسافات جغرافية حقيقية، تتبع GPS حي) في أي جزء من الكود الحالي — لا في `lib/statemachine.js` (حالات `Out for Delivery`/`Delivered` تعني "في الطريق داخل المبنى")، ولا في `GET /api/runner/queue`، ولا في أي شاشة. أي توصيل خارجي مستقبلي (مثال: توصيل لمنزل العميل) **نطاق مستقل تمامًا** يتطلب تصميمًا وبنية بيانات منفصلة (عناوين، تسعير مسافة، شركاء توصيل خارجيين)، وليس امتدادًا لمنطق Runner الحالي.
 
 ## القيود المعروفة
 - لا فواتير منفصلة لكل منفذ عند الدفع — دفعة واحدة موحّدة للعميل دائمًا (يطابق §8 "Checkout واحد")؛ التوزيع المالي يحدث داخليًا بعد النجاح فقط

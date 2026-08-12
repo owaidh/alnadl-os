@@ -9,7 +9,7 @@
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 1087)">
 <title>ERD</title>
 <polygon fill="white" stroke="transparent" points="-4,4 -4,-1087 1448,-1087 1448,4 -4,4"/>
-<text text-anchor="middle" x="722" y="-1067.8" font-family="Helvetica,sans-Serif" font-size="14.00">Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.0)</text>
+<text text-anchor="middle" x="722" y="-1067.8" font-family="Helvetica,sans-Serif" font-size="14.00">Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.2)</text>
 <g id="clust1" class="cluster">
 <title>cluster_tenancy</title>
 <polygon fill="none" stroke="#a6752f" stroke-dasharray="5,2" points="8,-545 8,-674 1002,-674 1002,-545 8,-545"/>

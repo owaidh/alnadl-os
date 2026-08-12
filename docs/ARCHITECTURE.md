@@ -1,4 +1,4 @@
-> **Version:** v2.0.2 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.2-corrective-2
+> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
 
 # Alnadl Hospitality OS — System Architecture (§26.1)
 
@@ -32,6 +32,9 @@
 
 ## طبقة الوصول للبيانات
 لا ORM — استدعاءات `db.prepare(...).run()/.get()/.all()` مباشرة عبر الملف كله. هذا قرار مقصود لحجم المشروع الحالي؛ عند الترقية لـPostgreSQL، الاستبدال محصور فعليًا في `db.js` (راجع `docs/DEPLOYMENT.md`).
+
+## نطاق التوصيل (P4-GATE-007)
+Runner يُنفِّذ توصيلاً داخليًا فقط ضمن حدود المنشأة (إلى Zone/Point/Table) — لا توصيل خارجي (مركبات/عناوين/GPS) في أي جزء من النظام الحالي. راجع `docs/MULTI_OUTLET_SPEC.md` للتفصيل الكامل.
 
 ## آلة الحالة كمرجع وحيد
 `lib/statemachine.js` هو **المصدر الوحيد** لمنطق انتقالات حالة الطلب — لا يوجد أي تكرار لهذا المنطق في أي مكان آخر بالكود، لا في `server.js` ولا في الواجهة الأمامية. هذا ينطبق على الطلب الأصلي (Parent) والطلب الفرعي (Child) معًا؛ الفرق الوحيد هو أن حالة الـParent **تُشتق** من أبنائه (`deriveParentStatus()`) بدل أن تُكتب مباشرة.

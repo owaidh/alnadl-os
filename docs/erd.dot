@@ -6,7 +6,7 @@ digraph ERD {
   rankdir=LR;
   node [shape=box, style="rounded,filled", fillcolor="#FEFCF9", color="#C08A3E", fontname="Helvetica", fontsize=11];
   edge [fontname="Helvetica", fontsize=9, color="#8A7C63"];
-  graph [fontname="Helvetica", fontsize=14, labelloc=t, label="Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.0)"];
+  graph [fontname="Helvetica", fontsize=14, labelloc=t, label="Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.2)"];
 
   subgraph cluster_tenancy {
     label="Tenancy & Site (§6, §5)"; style=dashed; color="#A6752F";
