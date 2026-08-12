@@ -1,0 +1,242 @@
+# Alnadl Hospitality OS — API Documentation
+
+مرجع كامل لكل نقاط الـ API. الأساس (base URL) عند التشغيل المحلي: `http://localhost:8787`.
+
+## المصادقة (Authentication)
+
+معظم نقاط `/api/admin/*` و`/api/ops/*` و`/api/runner/*` و`/api/partner/*` و`/api/settlement*` تتطلب رأس تفويض:
+
+```
+Authorization: Bearer <token>
+```
+
+يُستخرج التوكن من `POST /api/auth/login`. صلاحيته 8 ساعات. لا يوجد Refresh Token في هذا الإصدار — عند الانتهاء يُطلب تسجيل دخول جديد.
+
+### أدوار النظام (Roles)
+`Customer` (بدون تسجيل دخول) · `Operator` · `Runner` · `SiteManager` · `PartnerViewer` · `PartnerAdmin` · `AlnadlFinance` · `SuperAdmin`
+
+### نطاق الشريك (Partner Scope)
+المستخدمون بدور `PartnerViewer` أو `PartnerAdmin` مقيّدون بـ `partner_scope` المخزّن في جلستهم — أي محاولة قراءة أو كتابة بيانات شريك آخر تُرفض بـ `403 Forbidden`.
+
+### أشكال الأخطاء الموحّدة
+```json
+{ "error": "Human-readable message" }
+```
+| الحالة | المعنى |
+|---|---|
+| 400 | مدخلات غير صالحة |
+| 401 | غير مُصادَق (توكن مفقود/منتهي) |
+| 402 | **مزايا الباقة (SaaS plan) لا تشمل هذه القدرة** — راجع `lib/plan.js` |
+| 403 | مُصادَق لكن غير مخوّل (دور أو نطاق شريك خاطئ) |
+| 404 | غير موجود |
+| 409 | تعارض حالة (مثال: انتقال غير مسموح في آلة الحالة) |
+
+---
+
+## 1) المصادقة
+
+### `POST /api/auth/login`
+عام (بدون تفويض).
+```json
+// Request
+{ "username": "operator", "password": "operator" }
+// Response 200
+{ "token": "...", "user": { "username": "operator", "role": "Operator", "scope": "pt_nova" } }
+```
+
+---
+
+## 2) العميل — QR والقائمة والطلب (عام، بدون تفويض)
+
+### `GET /api/demo/points`
+**لأغراض العرض التوضيحي فقط** — يسرد كل النقاط ورموزها لمحاكاة "مسح QR" بدون طباعة رموز فعلية. لا تُستخدم هذه النقطة في بيئة إنتاج حقيقية.
+
+### `GET /api/qr/:token`
+يحوّل رمز QR إلى سياق كامل (الشريك/المنشأة/المنطقة/النقطة). هذه هي النقطة التي يستدعيها تطبيق العميل عند فتح رابط QR الحقيقي.
+```json
+// Response 200
+{ "partner": {...}, "property": {...}, "zone": {...}, "point": {...}, "token": "..." }
+// 404 إن كان الرمز غير صالح، 409 إن كانت النقطة موقوفة
+```
+
+### `GET /api/catalog?propertyId=<id>`
+يُرجع التصنيفات والمنتجات (مع Variants وAdd-ons) المتاحة لتلك المنشأة.
+
+### `GET /api/promotions/validate?code=<code>&propertyId=<id>`
+```json
+// Response 200 (صالح)
+{ "valid": true, "code": "WELCOME10", "discountType": "percent", "discountValue": 10 }
+// Response 404 (غير صالح/منتهي)
+{ "valid": false }
+```
+
+### `POST /api/orders`
+ينشئ طلبًا جديدًا (Created → Payment Pending تلقائيًا). **مُقيّد بباقة الشريك** — يرجع `402` إن كانت الباقة `OPERATE` (لا تشمل qrOrdering).
+```json
+// Request
+{
+  "pointId": "PT-014",
+  "customerName": "Khaled",
+  "customerPhone": "+9665xxxxxxx",
+  "promoCode": "WELCOME10",
+  "items": [
+    { "productId": "p_latte", "variantId": "vr_xxx", "addonIds": ["ad_xxx"], "qty": 2, "notes": "no sugar" }
+  ]
+}
+// Response 201
+{ "id": "ORD-1806", "paymentRef": "pay_xxx", "total": 45.54, "status": "Payment Pending" }
+```
+
+### `POST /api/orders/:id/pay`
+**مُقيّد بباقة الشريك** (`digitalPayment`). يمر عبر `lib/payment.js` (راجع `README.md` لتفاصيل ربط بوابة حقيقية لاحقًا).
+```json
+// Request
+{ "method": "card", "simulateFail": false }
+// Response 200
+{ "id": "ORD-1806", "status": "Paid" }
+```
+**Idempotent**: إعادة الاستدعاء لطلب مدفوع/فاشل مسبقًا تُرجع نفس النتيجة مع `"idempotent": true` دون إنشاء دفعة مكررة.
+
+### `POST /api/payments/webhook`
+نقطة استقبال Webhook من بوابة الدفع الحقيقية مستقبلاً (غير مستخدمة في المسار المتزامن الحالي، جاهزة لليوم الذي تُربط فيه بوابة فعلية).
+
+### `GET /api/orders/:id`
+عرض آمن للعميل (بدون بيانات حساسة داخلية).
+
+### `POST /api/orders/:id/feedback`
+يُقبل فقط إن كانت حالة الطلب `Delivered`.
+```json
+{ "stars": 5, "tags": ["Fast","Friendly"], "comment": "..." }
+```
+
+---
+
+## 3) التشغيل (KDS) — يتطلب دور Operator / SiteManager / SuperAdmin
+
+### `GET /api/ops/queue`
+قائمة الطلبات الحيّة (`Paid`→`Out for Delivery`) مرتّبة بالأقدم أولاً.
+
+### `POST /api/orders/:id/transition`
+**المرجع الوحيد لتغيير حالة الطلب.** يتحقق من آلة الحالة (`lib/statemachine.js`) ومن صلاحية الدور في تلك الحالة تحديدًا.
+```json
+{ "to": "Accepted", "reason": "..." }  // reason إلزامي فقط عند to = "Cancelled"
+```
+`409` عند انتقال غير مسموح، `403` عند دور غير مخوّل لهذا الانتقال تحديدًا.
+
+---
+
+## 4) التوصيل — يتطلب دور Runner
+
+### `GET /api/runner/queue`
+### `POST /api/orders/:id/transition` (نفس نقطة القسم 3، بأدوار `Ready→Out for Delivery→Delivered/Delivery Failed`)
+
+---
+
+## 5) لوحة مدير الموقع (M01) — SiteManager / Operator / SuperAdmin
+
+### `GET /api/manager/live?propertyId=<id>`
+مؤشرات اليوم الحية: المبيعات، عدد الطلبات لكل حالة، متوسط زمن التجهيز/التسليم، أفضل منطقة.
+
+---
+
+## 6) لوحة الشريك — PartnerViewer / PartnerAdmin / SuperAdmin / AlnadlFinance
+
+### `GET /api/partner/overview?partnerId=<id>`
+**مُقيّد بباقة الشريك** (`partnerDashboard`) للأدوار الشريكة. مُقيّد بنطاق الشريك.
+
+### `GET /api/settlement?partnerId=<id>&period=YYYY-MM`
+حساب سريع للمعاينة فقط (لا يُخزَّن). للتسوية الرسمية القابلة للاعتماد راجع القسم 9.
+
+---
+
+## 7) الإدارة — الشركاء والباقات (SuperAdmin فقط لمعظمها)
+
+### `GET/POST /api/admin/partners`
+### `GET /api/admin/properties` (SuperAdmin أو PartnerAdmin ضمن نطاقه)
+### `POST /api/admin/onboard`
+ينشئ شريكًا + منشأة + اشتراكًا فعّالاً بضغطة واحدة.
+```json
+{ "partnerNameAr":"...", "partnerNameEn":"...", "propertyNameAr":"...", "propertyNameEn":"...", "planCode":"SMART" }
+```
+### `GET /api/plans`
+عام — يسرد الباقات الثلاث (OPERATE/SMART/PLATFORM) ومزاياها.
+### `GET /api/admin/subscription?partnerId=<id>`
+### `POST /api/admin/subscription`
+تغيير باقة شريك فوريًا: `{ "partnerId":"...", "planCode":"PLATFORM" }`
+
+---
+
+## 8) الإدارة — المناطق/النقاط/QR والقائمة (SuperAdmin أو PartnerAdmin ضمن نطاقه)
+
+`GET/POST /api/admin/zones` · `GET/POST /api/admin/points` · `PATCH /api/admin/points/:id` (تفعيل/إيقاف) · `GET/POST /api/admin/categories` · `GET/POST /api/admin/products` · `PATCH /api/admin/products/:id` · `GET /api/admin/products/:id/options` · `POST /api/admin/products/:id/variants` · `POST /api/admin/products/:id/addons`
+
+كل نقطة كتابة هنا تتحقق أن العنصر المستهدف (Zone/Point/Category/Product) يتبع فعليًا لنطاق `PartnerAdmin` المرسل، وإلا `403`.
+
+---
+
+## 9) الإدارة — التسويات المالية الرسمية (Settlement Center، A06)
+
+### `GET /api/admin/settlements`
+### `POST /api/admin/settlements` (AlnadlFinance/SuperAdmin)
+```json
+{ "partnerId": "pt_nova", "period": "2026-08" }
+```
+### `POST /api/admin/settlements/:id/transition`
+```json
+{ "to": "Reviewed" }
+```
+سير الحالات الإلزامي: `Draft → Reviewed → Partner Review → Approved/Disputed → Paid`. الشريك (`PartnerViewer`/`PartnerAdmin`) يملك فقط صلاحية `Approved` أو `Disputed`، ولا يمكنه تخطي أي خطوة.
+
+---
+
+## 10) الإدارة — المستخدمون والصلاحيات (A05)
+
+`GET/POST /api/admin/users` · `PATCH /api/admin/users/:id` (تفعيل/إيقاف)
+
+`PartnerAdmin` يستطيع إنشاء مستخدمين لشريكه فقط، وبأدوار محدودة (`Operator`, `Runner`, `SiteManager`, `PartnerViewer`) — لا يمكنه إنشاء `SuperAdmin` أو `AlnadlFinance`.
+
+---
+
+## 11) الولاء والمكافآت (Loyalty & Rewards، §15) — عام
+
+### `GET /api/loyalty/:phone`
+يُرجع رصيد نقاط العميل (يُنشئ حسابًا برصيد صفر تلقائيًا إن لم يوجد).
+```json
+{ "pointsBalance": 340 }
+```
+### `GET /api/loyalty/:phone/history`
+سجل آخر 50 حركة (كسب/استبدال) لهذا الحساب.
+
+**آلية الكسب**: 1 نقطة لكل 1 ر.س من إجمالي الطلب، تُضاف تلقائيًا عند انتقال الطلب إلى `Delivered` (إن كان رقم جوال العميل مسجّلاً، وباقة الشريك تشمل `loyalty`).
+**آلية الاستبدال**: تُرسل `redeemPoints` ضمن `POST /api/orders` — كل 20 نقطة = 1 ر.س خصم، بحد أقصى المجموع الفرعي للطلب. **مُقيّدة بباقة الشريك** (`loyalty` feature، PLATFORM فقط) — 402 إن حاول شريك على باقة أقل.
+
+## 12) المحفظة المؤسسية (Corporate Wallet، §8/§14)
+
+### `GET /api/wallets/lookup?ownerRef=<ref>`
+عام — يبحث عن محفظة نشطة بمعرّف الجهة (`owner_ref`، مثال: `dept:engineering`). في نظام إنتاجي حقيقي هذا يُستبدل بجلسة موظف مُصادَق عليها (SSO)، وليس معاملًا في الرابط.
+```json
+{ "id":"wal_...", "ownerName":"Employee Wallet Pool", "remaining": 440, "policy": {"perOrderCap": 60} }
+```
+### `GET/POST /api/admin/wallets`
+إنشاء محفظة جديدة (SuperAdmin أو PartnerAdmin ضمن نطاقه). **مُقيّدة بباقة الشريك** (`corporateWallet`، PLATFORM فقط).
+
+**آلية Split Payment**: عند `POST /api/orders/:id/pay` بـ `method:"wallet"`، يحسب السيرفر تلقائيًا `min(إجمالي الطلب، الرصيد المتبقي، سقف الطلب الواحد إن وُجد)` كتغطية من المحفظة، ويُحصّل الباقي (إن وُجد) عبر البطاقة في نفس عملية الدفع — ويُسجَّل كصفين منفصلين في جدول `payments` (واحد `method:"wallet"` وآخر `method:"card"` أو `"split"`).
+
+## 13) الشركاء التجاريون / Marketplace (Restaurant Integration، §9)
+
+### `GET/POST /api/admin/merchants`
+إدارة الشركاء التجاريين (مطاعم/خدمات الشريك) ضمن منشأة معيّنة. **مُقيّدة بباقة الشريك** (`marketplace`، PLATFORM فقط) — على الباقات الأقل، `GET /api/catalog` يُرجع فقط منتجات الشريك المُشغَّل من النادل نفسه (`kind:"alnadl"`) ويُخفي أي شريك تجاري آخر تلقائيًا دون الحاجة لأي منطق إضافي في الواجهة.
+
+## 14) المحفظة والتدقيق (A01, A07)
+
+### `GET /api/admin/portfolio` (SuperAdmin)
+مقارنة GMV/الطلبات عبر كل الشركاء.
+### `GET /api/audit?limit=100`
+### `GET /api/admin/notifications?limit=100`
+سجل أحداث الإشعارات (بديل مؤقت لمزوّد SMS/Email حقيقي — راجع README).
+
+---
+
+## ملاحظة حول آلة الحالة (State Machine)
+
+جدول الانتقالات المسموحة والأدوار المخوّلة لكل انتقال موثّق بالكامل في `lib/statemachine.js` — هذا الملف هو "مصدر الحقيقة الوحيد" (Single Source of Truth) ولا يوجد أي منطق مكرر له في أي مكان آخر بالكود.

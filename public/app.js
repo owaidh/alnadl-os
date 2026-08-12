@@ -1,0 +1,1085 @@
+/* ==========================================================================
+   ALNADL HOSPITALITY OS — Frontend (talks to the real backend over HTTP)
+   No build step, no framework: plain fetch + template strings.
+   ========================================================================== */
+
+const API = '';
+async function api(method, path, body, auth) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth && S.session) headers['Authorization'] = 'Bearer ' + S.session.token;
+  const res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+const T = {
+  ar:{
+    scanQr:'اختر نقطة (محاكاة مسح QR)', startOrder:'ابدأ الطلب', youAreAt:'أنت في', serviceOn:'الخدمة متاحة الآن', eta:'الوقت المتوقع',
+    search:'بحث عن منتج...', cart:'السلة', items:'منتجات', addToCart:'إضافة للسلة',
+    required:'إلزامي', notes:'ملاحظات خاصة', notesPh:'مثال: بدون سكر',
+    yourCart:'سلتك', subtotal:'المجموع الفرعي', vat:'ضريبة القيمة المضافة',
+    promo:'كود الخصم', apply:'تطبيق',
+    total:'الإجمالي', continueCheckout:'متابعة للدفع', emptyCart:'سلتك فارغة — أضف منتجات من القائمة',
+    checkoutTitle:'إتمام الطلب', deliverTo:'التسليم إلى', nameField:'الاسم', phoneField:'رقم الجوال',
+    payMethod:'طريقة الدفع', card:'بطاقة / Apple Pay', wallet:'رصيد الشركة', payNow:'ادفع الآن',
+    paySuccess:'تم الدفع بنجاح', payFail:'تعذر إتمام الدفع', yourOrder:'طلبك رقم', retry:'إعادة المحاولة',
+    goTrack:'الانتقال إلى متابعة الطلب', trackTitle:'طلب', needHelp:'تحتاج مساعدة؟',
+    st_created:'تم إنشاء الطلب', st_pending:'بانتظار تأكيد الدفع', st_paid:'تم الاستلام',
+    st_accepted:'تم قبول الطلب', st_preparing:'قيد التجهيز', st_ready:'جاهز', st_out:'في الطريق إليك',
+    st_delivered:'تم التسليم', st_failed:'فشل الدفع', st_cancelled:'ملغي',
+    backToStart:'طلب جديد',
+    howExperience:'كيف كانت تجربتك؟', speed:'سرعة الخدمة', quality:'جودة المنتج', delivery:'التسليم',
+    optionalComment:'تعليق اختياري', submitFeedback:'إرسال التقييم', thanksFeedback:'شكرًا لتقييمك!',
+    kds:'شاشة التشغيل — KDS', newCol:'جديد', prepCol:'قيد التجهيز', readyCol:'جاهز',
+    accept:'قبول الطلب', start:'بدء التجهيز', markReady:'تعليم كجاهز', cancelOrder:'إلغاء الطلب',
+    outForDelivery:'خرج للتوصيل', close:'إغلاق', noOrders:'لا توجد طلبات في هذه الحالة',
+    payment:'الدفع', cancelReason:'سبب الإلغاء',
+    runnerQ:'طلبات جاهزة للتسليم', claim:'استلام للتوصيل', deliverBtn:'تم التسليم', failBtn:'تعذر التسليم',
+    adminZones:'المناطق والنقاط ورموز QR', adminCatalog:'القائمة والمنتجات', auditLog:'سجل التدقيق',
+    zoneName:'اسم المنطقة (AR)', zoneNameEn:'اسم المنطقة (EN)', zoneType:'نوع المنطقة', addZone:'إضافة منطقة',
+    pointCode:'اسم/رمز النقطة', pointType:'نوع النقطة', addPoint:'إضافة نقطة وتوليد QR',
+    existingZones:'المناطق الحالية', existingPoints:'النقاط ورموز QR',
+    catName:'اسم التصنيف (AR)', catNameEn:'اسم التصنيف (EN)', addCat:'إضافة تصنيف',
+    prodName:'اسم المنتج (AR)', prodNameEn:'اسم المنتج (EN)', prodPrice:'السعر الأساسي', prodCat:'التصنيف',
+    addProd:'إضافة منتج', currentCatalog:'القائمة الحالية', active:'مفعّل', inactive:'موقوف',
+    partnerOverview:'نظرة عامة — الشريك', grossSales:'إجمالي المبيعات', orders:'الطلبات', aov:'متوسط قيمة الطلب',
+    topZones:'أفضل المناطق', revShareTitle:'تسوية مشاركة الإيراد',
+    discounts:'الخصومات', refunds:'المرتجعات', eligibleBase:'القاعدة المستحقة', partnerShare:'حصة الشريك',
+    approveSettlement:'اعتماد التسوية', statusDraft:'مسودة',
+    login:'دخول', chooseUser:'اختر مستخدمًا تجريبيًا', logout:'خروج',
+    resetHint:'كلمة المرور = اسم المستخدم', role_customer:'العميل واجهة الطلب',
+    scope_note:'كل عملية هنا فعلية عبر واجهة برمجية حقيقية — لا توجد بيانات وهمية على الواجهة',
+    toast_added:'أُضيف للسلة', toast_saved:'تم الحفظ', toast_zone:'تمت إضافة المنطقة', toast_point:'تم توليد QR للنقطة',
+    toast_prod:'أُضيف المنتج للقائمة', toast_transition:'تم تحديث حالة الطلب',
+  },
+  en:{
+    scanQr:'Choose a point (simulated QR scan)', startOrder:'Start Order', youAreAt:'You are at', serviceOn:'Service available now', eta:'Estimated time',
+    search:'Search a product...', cart:'Cart', items:'items', addToCart:'Add to cart',
+    required:'Required', notes:'Special notes', notesPh:'e.g. no sugar',
+    yourCart:'Your cart', subtotal:'Subtotal', vat:'VAT',
+    promo:'Promo code', apply:'Apply',
+    total:'Total', continueCheckout:'Continue to checkout', emptyCart:'Your cart is empty — add items from the menu',
+    checkoutTitle:'Checkout', deliverTo:'Deliver to', nameField:'Name', phoneField:'Mobile number',
+    payMethod:'Payment method', card:'Card / Apple Pay', wallet:'Corporate wallet', payNow:'Pay now',
+    paySuccess:'Payment successful', payFail:'Payment could not be completed', yourOrder:'Your order #', retry:'Retry',
+    goTrack:'Go to order tracking', trackTitle:'Order', needHelp:'Need help?',
+    st_created:'Order created', st_pending:'Awaiting payment confirmation', st_paid:'Order received',
+    st_accepted:'Order accepted', st_preparing:'Preparing', st_ready:'Ready', st_out:'On the way to you',
+    st_delivered:'Delivered', st_failed:'Payment failed', st_cancelled:'Cancelled',
+    backToStart:'New order',
+    howExperience:'How was your experience?', speed:'Service speed', quality:'Product quality', delivery:'Delivery',
+    optionalComment:'Optional comment', submitFeedback:'Submit feedback', thanksFeedback:'Thanks for your feedback!',
+    kds:'Kitchen Display — KDS', newCol:'New', prepCol:'Preparing', readyCol:'Ready',
+    accept:'Accept order', start:'Start preparing', markReady:'Mark ready', cancelOrder:'Cancel order',
+    outForDelivery:'Out for delivery', close:'Close', noOrders:'No orders in this state',
+    payment:'Payment', cancelReason:'Cancellation reason',
+    runnerQ:'Ready for delivery', claim:'Claim for delivery', deliverBtn:'Delivered', failBtn:'Delivery failed',
+    adminZones:'Zones, Points & QR', adminCatalog:'Catalog & Products', auditLog:'Audit Log',
+    zoneName:'Zone name (AR)', zoneNameEn:'Zone name (EN)', zoneType:'Zone type', addZone:'Add zone',
+    pointCode:'Point label/code', pointType:'Point type', addPoint:'Add point & generate QR',
+    existingZones:'Current zones', existingPoints:'Points & QR codes',
+    catName:'Category name (AR)', catNameEn:'Category name (EN)', addCat:'Add category',
+    prodName:'Product name (AR)', prodNameEn:'Product name (EN)', prodPrice:'Base price', prodCat:'Category',
+    addProd:'Add product', currentCatalog:'Current catalog', active:'Active', inactive:'Inactive',
+    partnerOverview:'Partner overview', grossSales:'Gross sales', orders:'Orders', aov:'AOV',
+    topZones:'Top zones', revShareTitle:'Revenue-share settlement',
+    discounts:'Discounts', refunds:'Refunds', eligibleBase:'Eligible base', partnerShare:'Partner share',
+    approveSettlement:'Approve settlement', statusDraft:'Draft',
+    login:'Log in', chooseUser:'Choose a demo user', logout:'Log out',
+    resetHint:'Password = username', role_customer:'Customer ordering UI',
+    scope_note:'Every action here is real over the HTTP API — nothing on screen is mocked',
+    toast_added:'Added to cart', toast_saved:'Saved', toast_zone:'Zone added', toast_point:'QR generated for point',
+    toast_prod:'Product added to catalog', toast_transition:'Order status updated',
+  }
+};
+function t(k){ return T[S.lang][k] ?? k; }
+function money(n){ return Number(n||0).toFixed(2); }
+function unitCur(){ return S.lang==='ar' ? 'ر.س' : 'SAR'; }
+
+const S = {
+  lang:'ar', mode:'customer', screen:'welcome',
+  session:null, // {token, user:{username,role,scope}}
+  qrContext:null, catalog:null, activeCatId:null, activeProduct:null,
+  cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null,
+  checkoutName:'', checkoutPhone:'',
+  ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
+  partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[],
+  ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
+  PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
+};
+
+function showToast(msg){ S.toast=msg; const d=document.createElement('div'); d.className='toast'; d.textContent=msg; document.body.appendChild(d); setTimeout(()=>d.remove(),1700); }
+function showErr(msg){ S.ui.err = msg; render(); }
+
+/* ============================== ACTIONS ============================== */
+const App = {
+  setLang(l){ S.lang=l; document.documentElement.lang=l; document.documentElement.dir = l==='ar'?'rtl':'ltr'; render(); },
+
+  /* ---- customer boot ---- */
+  async pickPoint(token){
+    history.replaceState(null,'','/?t='+token);
+    await App.loadQrContext(token);
+  },
+  async loadQrContext(token){
+    try{
+      const ctx = await api('GET', '/api/qr/'+token);
+      S.qrContext = ctx; S.mode='customer'; S.screen='welcome'; render();
+    }catch(e){ showErr(e.message); }
+  },
+  async goScreen(scr){ S.screen=scr; render(); window.scrollTo(0,0);
+    if(scr==='menu' && !S.catalog){ await App.loadCatalog(); }
+  },
+  async loadCatalog(){
+    const data = await api('GET', '/api/catalog?propertyId='+S.qrContext.property.id);
+    S.catalog = data; S.activeCatId = data.categories[0]?.id; render();
+  },
+  setCat(id){ S.activeCatId=id; render(); },
+
+  openProduct(pid){
+    const def = S.catalog.products.find(p=>p.id===pid);
+    S.activeProduct = { def, variantIdx: def.variants.length?0:-1, addons:{}, qty:1, notes:'' };
+    render();
+  },
+  closeProduct(){ S.activeProduct=null; render(); },
+  pickVariant(idx){ S.activeProduct.variantIdx=idx; render(); },
+  toggleAddon(id){ S.activeProduct.addons[id]=!S.activeProduct.addons[id]; render(); },
+  stepQty(d){ S.activeProduct.qty=Math.max(1,S.activeProduct.qty+d); render(); },
+  setNotes(v){ S.activeProduct.notes=v; },
+  addActiveToCart(){
+    const ap=S.activeProduct, def=ap.def;
+    const variant = ap.variantIdx>=0 ? def.variants[ap.variantIdx] : null;
+    const addonList = def.addons.filter(a=>ap.addons[a.id]);
+    const unit = def.base_price + (variant?variant.price_delta:0) + addonList.reduce((s,a)=>s+a.price,0);
+    S.cart.push({ key:'ci'+Math.random().toString(36).slice(2), productId:def.id, ar:def.name_ar, en:def.name_en, icon:'🍽️',
+      variantId: variant?variant.id:null, variantLabel: variant?{ar:variant.name_ar,en:variant.name_en}:null,
+      addonIds: addonList.map(a=>a.id), addonLabels: addonList.map(a=>({ar:a.name_ar,en:a.name_en})),
+      notes:ap.notes, qty:ap.qty, unit, lineTotal:unit*ap.qty });
+    S.activeProduct=null; showToast(t('toast_added')); render();
+  },
+  cartStep(key,d){ const r=S.cart.find(c=>c.key===key); if(!r)return; r.qty=Math.max(1,r.qty+d); r.lineTotal=r.unit*r.qty; render(); },
+  cartRemove(key){ S.cart=S.cart.filter(c=>c.key!==key); render(); },
+  cartTotal(){ return S.cart.reduce((s,c)=>s+c.lineTotal,0); },
+  cartCount(){ return S.cart.reduce((s,c)=>s+c.qty,0); },
+  computeTotals(){
+    const subtotal = App.cartTotal();
+    const promoDiscount = S.promo? (S.promo.discountType==='percent'? subtotal*(S.promo.discountValue/100) : Math.min(S.promo.discountValue, subtotal)) : 0;
+    const afterPromo = subtotal - promoDiscount;
+    const loyaltyDiscount = S.redeemPoints>0 ? Math.min(S.redeemPoints * 0.05, afterPromo) : 0;
+    const eligible = Math.max(0, afterPromo - loyaltyDiscount);
+    const vat = eligible * 0.15;
+    const total = eligible + vat;
+    return { subtotal, promoDiscount, loyaltyDiscount, eligible, vat, total };
+  },
+  setPayMethod(m){ S.payMethod=m; render(); },
+  async applyPromo(){
+    const code = document.getElementById('promoInput')?.value.trim();
+    if(!code){ S.promo=null; S.ui.promoMsg=null; render(); return; }
+    try{
+      const r = await api('GET', `/api/promotions/validate?code=${encodeURIComponent(code)}&propertyId=${S.qrContext.property.id}`);
+      if(r.valid){ S.promo = { code:r.code, discountType:r.discountType, discountValue:r.discountValue }; S.ui.promoMsg = S.lang==='ar'?'تم تطبيق الكود':'Code applied'; }
+      else { S.promo=null; S.ui.promoMsg = S.lang==='ar'?'كود غير صالح':'Invalid code'; }
+    }catch{ S.promo=null; S.ui.promoMsg = S.lang==='ar'?'كود غير صالح':'Invalid code'; }
+    render();
+  },
+  async lookupLoyalty(){
+    const phone = S.checkoutPhone;
+    if(!phone || !S.qrContext.features?.loyalty){ return; }
+    try{ const r = await api('GET', `/api/loyalty/${encodeURIComponent(phone)}`); S.loyaltyBalance = r.pointsBalance; render(); }catch{}
+  },
+  setRedeemPoints(v){
+    const n = Math.max(0, Math.min(parseInt(v)||0, S.loyaltyBalance||0));
+    S.redeemPoints = n; render();
+  },
+  async lookupWallet(){
+    const ref = document.getElementById('employeeRef')?.value.trim();
+    if(!ref) return;
+    try{
+      const r = await api('GET', `/api/wallets/lookup?ownerRef=${encodeURIComponent(ref)}`);
+      S.wallet = { ...r, ownerRef: ref }; S.payMethod='wallet'; showToast(S.lang==='ar'?'تم العثور على المحفظة':'Wallet found'); render();
+    }catch(e){ S.wallet=null; showErr(S.lang==='ar'?'لا توجد محفظة بهذا المعرّف':'No wallet found for this ID'); }
+  },
+
+  async goCheckout(){ if(S.cart.length===0) return; App.goScreen('checkout'); },
+
+  async submitPayment(simulateFail){
+    S.ui.err=null;
+    try{
+      if(!S.currentOrder){
+        const payload = {
+          pointId: S.qrContext.point.id,
+          customerName: S.checkoutName || null,
+          customerPhone: S.checkoutPhone || null,
+          promoCode: S.promo ? S.promo.code : null,
+          redeemPoints: S.redeemPoints || 0,
+          walletId: (S.payMethod==='wallet' && S.wallet) ? S.wallet.id : null,
+          items: S.cart.map(c=>({ productId:c.productId, variantId:c.variantId, addonIds:c.addonIds, qty:c.qty, notes:c.notes })),
+        };
+        const created = await api('POST', '/api/orders', payload);
+        S.currentOrder = { id: created.id, status: created.status };
+      }
+      const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod, simulateFail: !!simulateFail });
+      S.currentOrder.status = result.status;
+      App.goScreen('paymentResult');
+    }catch(e){ showErr(e.message); }
+  },
+  retryPayment(){ App.goScreen('checkout'); },
+  async goTrack(){ await App.refreshOrder(); App.goScreen('tracking'); },
+  async refreshOrder(){
+    if(!S.currentOrder) return;
+    try{ const o = await api('GET', '/api/orders/'+S.currentOrder.id); S.currentOrder = { ...S.currentOrder, ...o }; render(); }catch{}
+  },
+  startNewOrder(){ S.cart=[]; S.currentOrder=null; S.promo=null; S.redeemPoints=0; S.loyaltyBalance=null; S.wallet=null; S.payMethod='card'; S.checkoutName=''; S.checkoutPhone=''; App.goScreen('welcome'); },
+  setStar(n){ S.feedback = S.feedback||{stars:0,tags:[],comment:''}; S.feedback.stars=n; render(); },
+  toggleTag(tag){ S.feedback = S.feedback||{stars:0,tags:[],comment:''}; const i=S.feedback.tags.indexOf(tag); if(i>-1) S.feedback.tags.splice(i,1); else S.feedback.tags.push(tag); render(); },
+  async submitFeedback(){
+    try{
+      await api('POST', `/api/orders/${S.currentOrder.id}/feedback`, { stars:S.feedback.stars||5, tags:S.feedback.tags||[], comment:S.feedback.comment||'' });
+      App.goScreen('feedbackThanks');
+    }catch(e){ showErr(e.message); }
+  },
+
+  /* ---- auth ---- */
+  openLogin(){ S.screen='login'; render(); },
+  async quickLogin(username){
+    try{
+      const r = await api('POST', '/api/auth/login', { username, password: username });
+      S.session = r; S.mode = App.roleHome(r.user.role);
+      S.screen = App.roleDefaultScreen(r.user.role);
+      await App.loadForRole();
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  logout(){ S.session=null; S.mode='customer'; S.screen='welcome'; render(); },
+  roleHome(role){ return { Operator:'ops', SiteManager:'ops', Runner:'runner', SuperAdmin:'admin', AlnadlFinance:'finance', PartnerViewer:'partner', PartnerAdmin:'partneradmin' }[role] || 'customer'; },
+  roleDefaultScreen(role){ return { Operator:'kds', SiteManager:'live', Runner:'runnerq', SuperAdmin:'tenants', AlnadlFinance:'settlements', PartnerViewer:'overview', PartnerAdmin:'zones' }[role] || 'welcome'; },
+  async loadForRole(){
+    const role = S.session.user.role;
+    if(role==='Operator') return App.loadOpsQueue();
+    if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive()]);
+    if(role==='Runner') return App.loadRunnerQueue();
+    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans()]);
+    if(role==='AlnadlFinance') return Promise.all([App.loadSettlements(), App.loadAudit()]);
+    if(role==='PartnerViewer') return Promise.all([App.loadPartnerOverview(), App.loadSettlements(), App.loadSubscription()]);
+    if(role==='PartnerAdmin'){ S.PARTNER_ID = S.session.user.scope; return Promise.all([App.loadOwnProperty(), App.loadAdminAll(), App.loadSubscription()]); }
+  },
+  async loadOwnProperty(){
+    const props = await api('GET','/api/admin/properties',null,true);
+    if(props[0]){ S.PROPERTY_ID = props[0].id; }
+  },
+  async setStaffScreen(scr){ S.screen=scr; render();
+    if(scr==='audit') await App.loadAudit();
+    if(scr==='zones') await App.loadAdminAll();
+    if(scr==='catalog') await App.loadAdminAll();
+    if(scr==='tenants') await Promise.all([App.loadTenants(), App.loadPlans()]);
+    if(scr==='billing') await Promise.all([App.loadSubscription(), App.loadPlans()]);
+    if(scr==='portfolio') await App.loadPortfolio();
+    if(scr==='live') await App.loadLive();
+    if(scr==='users') await App.loadUsers();
+    if(scr==='settlements') await App.loadSettlements();
+    if(scr==='merchants') await App.loadMerchants();
+    if(scr==='wallets') await App.loadWallets();
+  },
+  async loadPortfolio(){ S.portfolio = await api('GET','/api/admin/portfolio',null,true); render(); },
+  async loadLive(){ try{ S.live = await api('GET',`/api/manager/live?propertyId=${S.PROPERTY_ID}`,null,true); }catch(e){} render(); },
+  async loadUsers(){ S.users = await api('GET','/api/admin/users',null,true); render(); },
+  async createUser(){
+    const username=document.getElementById('newUserName').value.trim(), role=document.getElementById('newUserRole').value;
+    if(!username) return;
+    try{ await api('POST','/api/admin/users',{username,role,partner_scope:S.PARTNER_ID},true); showToast(t('toast_saved')); await App.loadUsers(); }
+    catch(e){ showErr(e.message); }
+  },
+  async toggleUser(id,active){ try{ await api('PATCH',`/api/admin/users/${id}`,{active:!active},true); await App.loadUsers(); }catch(e){ showErr(e.message); } },
+
+  /* ---- merchants (Restaurant/Marketplace Integration) ---- */
+  async loadMerchants(){ S.merchants = await api('GET','/api/admin/merchants',null,true); render(); },
+  async addMerchant(){
+    const name_ar=document.getElementById('merAr').value.trim(), name_en=document.getElementById('merEn').value.trim();
+    const commissionRate=(parseFloat(document.getElementById('merCommission').value)||10)/100;
+    if(!name_ar && !name_en) return;
+    try{ await api('POST','/api/admin/merchants',{propertyId:S.PROPERTY_ID,name_ar:name_ar||name_en,name_en:name_en||name_ar,kind:'partner_restaurant',commissionRate},true); showToast(t('toast_saved')); await App.loadMerchants(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  /* ---- corporate wallets ---- */
+  async loadWallets(){ S.wallets = await api('GET','/api/admin/wallets',null,true); render(); },
+  async addWallet(){
+    const ownerName=document.getElementById('walOwner').value.trim(), ownerRef=document.getElementById('walRef').value.trim();
+    const monthlyBudget=parseFloat(document.getElementById('walBudget').value)||0;
+    const perOrderCap=parseFloat(document.getElementById('walCap').value)||null;
+    if(!ownerName || !ownerRef) return;
+    try{ await api('POST','/api/admin/wallets',{partnerId:S.PARTNER_ID,ownerName,ownerRef,monthlyBudget,perOrderCap},true); showToast(t('toast_saved')); await App.loadWallets(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  async loadSettlements(){ S.settlements = await api('GET','/api/admin/settlements',null,true); render(); },
+  async createSettlement(){
+    const period = new Date().toISOString().slice(0,7);
+    try{ await api('POST','/api/admin/settlements',{partnerId:S.PARTNER_ID,period},true); showToast(t('toast_saved')); await App.loadSettlements(); }
+    catch(e){ showErr(e.message); }
+  },
+  async settlementTransition(id,to){
+    try{ await api('POST',`/api/admin/settlements/${id}/transition`,{to},true); await App.loadSettlements(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  /* ---- SaaS: tenants & plans (SuperAdmin) ---- */
+  async loadTenants(){ S.tenants = await api('GET','/api/admin/partners',null,true); render(); },
+  async loadPlans(){ S.plans = await api('GET','/api/plans'); render(); },
+  async loadSubscription(){
+    try{ S.subscription = await api('GET',`/api/admin/subscription?partnerId=${S.PARTNER_ID}`,null,true); }catch(e){ S.subscription=null; }
+    render();
+  },
+  async onboardTenant(){
+    const b = {
+      partnerNameAr: document.getElementById('obNameAr').value.trim(),
+      partnerNameEn: document.getElementById('obNameEn').value.trim(),
+      propertyNameAr: document.getElementById('obPropAr').value.trim(),
+      propertyNameEn: document.getElementById('obPropEn').value.trim(),
+      planCode: document.getElementById('obPlan').value,
+    };
+    if(!b.partnerNameAr && !b.partnerNameEn) return;
+    try{ const r = await api('POST','/api/admin/onboard', b, true); showToast(t('toast_saved')); S.selectedPartnerId=r.partnerId; await App.loadTenants(); }
+    catch(e){ showErr(e.message); }
+  },
+  selectTenantForAdmin(partnerId){
+    S.selectedPartnerId = partnerId;
+    api('GET','/api/admin/properties',null,true).then(props=>{
+      const prop = props.find(p=>p.partner_id===partnerId);
+      if(prop){ S.PARTNER_ID=partnerId; S.PROPERTY_ID=prop.id; App.loadAdminAll(); }
+    });
+  },
+  async changePlan(partnerId){
+    const planCode = document.getElementById('planSelect_'+partnerId)?.value;
+    if(!planCode) return;
+    try{ await api('POST','/api/admin/subscription',{partnerId,planCode},true); showToast(t('toast_saved')); await App.loadTenants(); if(S.PARTNER_ID===partnerId) await App.loadSubscription(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  /* ---- ops / KDS ---- */
+  async loadOpsQueue(){ S.ops.queue = await api('GET','/api/ops/queue',null,true); render(); },
+  openOrderDetail(id){ S.ui.openOrder=id; render(); },
+  closeOrderDetail(){ S.ui.openOrder=null; render(); },
+  async opsTransition(id,to){
+    try{ await api('POST',`/api/orders/${id}/transition`,{to},true); showToast(t('toast_transition')); await App.loadOpsQueue(); S.ui.openOrder=null; render(); }
+    catch(e){ showErr(e.message); }
+  },
+  opsCancel(id){ S.ui.cancelFor=id; render(); },
+  async confirmCancel(id){
+    const reason = document.getElementById('cancelReasonInput')?.value || '—';
+    try{ await api('POST',`/api/orders/${id}/transition`,{to:'Cancelled',reason},true); S.ui.cancelFor=null; S.ui.openOrder=null; await App.loadOpsQueue(); }
+    catch(e){ showErr(e.message); }
+  },
+  dismissCancel(){ S.ui.cancelFor=null; render(); },
+
+  /* ---- runner ---- */
+  async loadRunnerQueue(){ S.runnerQ = await api('GET','/api/runner/queue',null,true); render(); },
+  async runnerTransition(id,to){
+    try{ await api('POST',`/api/orders/${id}/transition`,{to},true); await App.loadRunnerQueue(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  /* ---- admin ---- */
+  async loadAdminAll(){
+    const [zones,points,categories,products] = await Promise.all([
+      api('GET','/api/admin/zones',null,true), api('GET','/api/admin/points',null,true),
+      api('GET','/api/admin/categories',null,true), api('GET','/api/admin/products',null,true)]);
+    S.admin = { zones, points, categories, products }; render();
+  },
+  async addZone(){
+    const name_ar=document.getElementById('zoneAr').value.trim(), name_en=document.getElementById('zoneEn').value.trim(), type=document.getElementById('zoneType').value;
+    if(!name_ar && !name_en) return;
+    try{ await api('POST','/api/admin/zones',{propertyId:S.PROPERTY_ID,name_ar:name_ar||name_en,name_en:name_en||name_ar,type},true); showToast(t('toast_zone')); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+  async addPoint(){
+    const zoneId=document.getElementById('pointZone').value, label=document.getElementById('pointLabel').value.trim(), type=document.getElementById('pointType').value;
+    if(!label) return;
+    try{ await api('POST','/api/admin/points',{zoneId,label,type},true); showToast(t('toast_point')); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+  async togglePoint(id,active){
+    try{ await api('PATCH',`/api/admin/points/${id}`,{active:!active},true); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+  async addCategory(){
+    const name_ar=document.getElementById('catAr').value.trim(), name_en=document.getElementById('catEn').value.trim();
+    if(!name_ar && !name_en) return;
+    try{ await api('POST','/api/admin/categories',{propertyId:S.PROPERTY_ID,name_ar:name_ar||name_en,name_en:name_en||name_ar},true); showToast(t('toast_saved')); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+  async addProduct(){
+    const name_ar=document.getElementById('prodAr').value.trim(), name_en=document.getElementById('prodEn').value.trim();
+    const basePrice=parseFloat(document.getElementById('prodPrice').value)||0, categoryId=document.getElementById('prodCatSel').value;
+    if(!name_ar && !name_en) return;
+    try{ await api('POST','/api/admin/products',{categoryId,name_ar:name_ar||name_en,name_en:name_en||name_ar,basePrice},true); showToast(t('toast_prod')); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+  async toggleProdStatus(id,status){
+    try{ await api('PATCH',`/api/admin/products/${id}`,{status: status==='Active'?'Inactive':'Active'},true); await App.loadAdminAll(); }
+    catch(e){ showErr(e.message); }
+  },
+
+  /* ---- partner / finance ---- */
+  async loadPartnerOverview(){ S.partner.overview = await api('GET',`/api/partner/overview?partnerId=${S.PARTNER_ID}`,null,true); render(); },
+  async loadAudit(){ S.audit = await api('GET','/api/audit?limit=40',null,true); render(); },
+};
+window.App = App;
+
+/* ============================== RENDER ============================== */
+function statusBadge(status){
+  const map = { 'Created':['pending','st_created'],'Payment Pending':['pending','st_pending'],'Paid':['paid','st_paid'],
+    'Accepted':['paid','st_accepted'],'Preparing':['prep','st_preparing'],'Ready':['ready','st_ready'],
+    'Out for Delivery':['out','st_out'],'Delivered':['delivered','st_delivered'],
+    'Failed':['cancel','st_failed'],'Cancelled':['cancel','st_cancelled'],'Delivery Failed':['cancel','st_cancelled'] };
+  const [cls,label] = map[status] || ['pending', status];
+  return `<span class="badge ${cls}">${t(label)||status}</span>`;
+}
+function elapsedStr(ts){ const d=Date.now()-ts; const m=Math.floor(d/60000), s=Math.floor((d%60000)/1000); return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'); }
+
+function renderProtobar(){
+  const bar = document.getElementById('protobar');
+  const loggedIn = !!S.session;
+  bar.innerHTML = `
+    <div class="brand"><span class="mark">ن</span> ALNADL <span style="color:var(--ink-400);font-weight:600;font-size:11px;">Hospitality OS · live API</span></div>
+    <div class="spacer"></div>
+    ${loggedIn ? `
+      <div class="sessionpill">${S.session.user.username} <span class="rl">· ${S.session.user.role}</span></div>
+      <button class="ghostbtn" onclick="App.logout()">${t('logout')}</button>
+    ` : `
+      <button class="ghostbtn" onclick="App.openLogin()">${t('login')} (staff)</button>
+    `}
+    <div class="langtoggle">
+      <button class="${S.lang==='ar'?'active':''}" onclick="App.setLang('ar')">AR</button>
+      <button class="${S.lang==='en'?'active':''}" onclick="App.setLang('en')">EN</button>
+    </div>
+  `;
+}
+
+function render(){
+  renderProtobar();
+  const app = document.getElementById('app');
+  if(S.screen==='login'){ app.innerHTML = renderLogin(); return; }
+  if(S.session){ app.innerHTML = renderStaffShell(); return; }
+  app.innerHTML = renderCustomerShell();
+}
+
+function renderLogin(){
+  const users = [
+    ['operator','Operator','KDS · accept/prepare/ready orders'],
+    ['runner','Runner','Deliver Ready orders'],
+    ['manager','SiteManager','Site oversight, can also work the KDS'],
+    ['partner','PartnerViewer','Revenue & settlement for their own site only'],
+    ['partneradmin','PartnerAdmin','Self-service: manage own zones/QR/catalog + billing'],
+    ['finance','AlnadlFinance','Settlement approval + audit log'],
+    ['admin','SuperAdmin','Full platform: tenants, plans, zones, catalog, audit'],
+  ];
+  return `<div class="loginwrap"><div class="loginbox">
+    <h2>${t('login')}</h2><p>${t('chooseUser')} · ${t('resetHint')}</p>
+    ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
+    ${users.map(([u,r,desc])=>`<div class="userchip" onclick="App.quickLogin('${u}')"><div><b>${u}</b><br><span>${desc}</span></div><span>${r}</span></div>`).join('')}
+    <button class="ghostbtn" style="margin-top:10px;width:100%" onclick="S.screen='welcome';render()">← ${t('role_customer')}</button>
+  </div></div>`;
+}
+
+/* ---------------- CUSTOMER ---------------- */
+function renderCustomerShell(){
+  if(!S.qrContext) return renderQrPicker();
+  let inner='';
+  switch(S.screen){
+    case 'welcome': inner=scrWelcome(); break;
+    case 'menu': inner=scrMenu(); break;
+    case 'cart': inner=scrCart(); break;
+    case 'checkout': inner=scrCheckout(); break;
+    case 'paymentResult': inner=scrPaymentResult(); break;
+    case 'tracking': inner=scrTracking(); break;
+    case 'feedback': inner=scrFeedback(); break;
+    case 'feedbackThanks': inner=scrFeedbackThanks(); break;
+    default: inner=scrWelcome();
+  }
+  return `<div class="fohshell"><div class="phone">${inner}${S.activeProduct?renderProductModal():''}</div></div>`;
+}
+
+function renderQrPicker(){
+  if(!S._demoPoints){ App._loadDemoPoints(); }
+  const list = S._demoPoints || [];
+  return `<div class="fohshell"><div class="phone"><div class="welcome">
+    <div class="crest">ن</div>
+    <h2 style="margin:0">${t('scanQr')}</h2>
+    <div class="qrpicklist">
+      ${list.map(p=>`<button class="qrpickitem" onclick="App.pickPoint('${p.token}')">${p.label}<span>${S.lang==='ar'?p.zone_ar:p.zone_en} · ${p.id}</span></button>`).join('') || '<div class="empty-hint">Loading…</div>'}
+    </div>
+  </div></div></div>`;
+}
+App._loadDemoPoints = async function(){
+  try{ S._demoPoints = await api('GET','/api/demo/points'); render(); }catch(e){}
+};
+
+function scrWelcome(){
+  const c = S.qrContext;
+  const nm = S.lang==='ar'?c.partner.name_ar:c.partner.name_en;
+  const zn = S.lang==='ar'?c.zone.name_ar:c.zone.name_en;
+  return `
+  <div class="welcome">
+    <div class="crest">ن</div>
+    <div class="locpill">${t('youAreAt')}: ${nm} — ${zn} — ${c.point.label}</div>
+    <div class="etarow"><span class="dot"></span>${t('serviceOn')} · ${t('eta')} 8–12 ${S.lang==='ar'?'دقيقة':'min'}</div>
+    <h2>${nm}</h2>
+    <button class="btn-primary" style="max-width:260px" onclick="App.goScreen('menu')">${t('startOrder')}</button>
+  </div>`;
+}
+
+function scrMenu(){
+  if(!S.catalog) return `<div class="scrbody"><div class="empty-hint">Loading…</div></div>`;
+  const cats = S.catalog.categories, prods = S.catalog.products.filter(p=>p.category_id===S.activeCatId);
+  const c = S.qrContext;
+  const merchants = S.catalog.merchants || [];
+  const showMerchantGroups = merchants.length > 1;
+  const merchantOf = (id) => merchants.find(m=>m.id===id);
+  // group by merchant only when the marketplace feature exposes more than one (§9 Restaurant/Marketplace Integration)
+  let prodBlocks = '';
+  if(showMerchantGroups){
+    const byMerchant = {};
+    for(const p of prods){ (byMerchant[p.merchant_id] = byMerchant[p.merchant_id]||[]).push(p); }
+    prodBlocks = Object.entries(byMerchant).map(([mid, list])=>{
+      const m = merchantOf(mid);
+      const label = m ? (S.lang==='ar'?m.name_ar:m.name_en) : '';
+      return `${m && m.kind!=='alnadl'? `<div class="merchant-header"><span class="merchant-dot"></span>${label}<span class="merchant-tag">${S.lang==='ar'?'شريك':'Partner'}</span></div>` : (merchants.length>1? `<div class="merchant-header"><span class="merchant-dot brass"></span>${label}</div>`:'')}
+        <div class="prodgrid">${list.map(prodCard).join('')}</div>`;
+    }).join('');
+  } else {
+    prodBlocks = `<div class="prodgrid">${prods.map(prodCard).join('')}</div>`;
+  }
+  return `
+  <div class="scrhead">
+    <div class="top"><h3>${S.lang==='ar'?c.partner.name_ar:c.partner.name_en} — ${S.lang==='ar'?c.zone.name_ar:c.zone.name_en}</h3>
+      ${S.loyalty && S.loyalty.pointsBalance>0? `<div class="ptsbadge" onclick="App.goScreen('loyalty')">★ ${S.loyalty.pointsBalance}</div>` : '<div style="width:32px"></div>'}</div>
+    <div class="cattabs">${cats.map(cat=>`<button class="${S.activeCatId===cat.id?'active':''}" onclick="App.setCat('${cat.id}')">${S.lang==='ar'?cat.name_ar:cat.name_en}</button>`).join('')}</div>
+  </div>
+  <div class="scrbody">
+    ${prodBlocks}
+  </div>
+  ${S.cart.length? `<div class="cartbar"><div class="l">${App.cartCount()} ${t('items')}<b>${money(App.cartTotal())} ${unitCur()}</b></div>
+    <button onclick="App.goScreen('cart')">${t('cart')} ←</button></div>`:''}
+  `;
+}
+function prodCard(p){
+  return `
+    <div class="prodcard ${p.available?'':'oos'}">
+      <div class="thumb">🍽️</div>
+      <p class="nm">${S.lang==='ar'?p.name_ar:p.name_en}</p>
+      <div class="pricerow"><span class="price">${money(p.base_price)} ${unitCur()}</span>
+      <button class="addbtn" onclick="App.openProduct('${p.id}')">+</button></div>
+    </div>`;
+}
+
+function renderProductModal(){
+  const ap=S.activeProduct, def=ap.def;
+  const variant = ap.variantIdx>=0? def.variants[ap.variantIdx]:null;
+  const addonTotal = def.addons.filter(a=>ap.addons[a.id]).reduce((s,a)=>s+a.price,0);
+  const unit = def.base_price + (variant?variant.price_delta:0) + addonTotal;
+  return `
+  <div class="modalwrap"><div class="modalsheet">
+    <div class="hero">🍽️<button class="close" onclick="App.closeProduct()">✕</button></div>
+    <div class="modalbody">
+      <h3>${S.lang==='ar'?def.name_ar:def.name_en}</h3><p class="desc">${money(def.base_price)} ${unitCur()}</p>
+      ${def.variants.length? `<div class="optgroup"><div class="lbl"><span>${S.lang==='ar'?'الحجم':'Size'}</span><span style="color:var(--red-500);font-size:10.5px">${t('required')}</span></div>
+        ${def.variants.map((v,i)=>`<div class="optrow ${ap.variantIdx===i?'sel':''}" onclick="App.pickVariant(${i})">
+          <div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${ap.variantIdx===i?'on':''}"></div>${S.lang==='ar'?v.name_ar:v.name_en}</div>
+          <span>${v.price_delta>0?'+'+money(v.price_delta):''}</span></div>`).join('')}</div>`:''}
+      ${def.addons.length? `<div class="optgroup"><div class="lbl"><span>${S.lang==='ar'?'الإضافات':'Add-ons'}</span></div>
+        ${def.addons.map(a=>`<div class="optrow ${ap.addons[a.id]?'sel':''}" onclick="App.toggleAddon('${a.id}')">
+          <div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${ap.addons[a.id]?'on':''}" style="border-radius:5px"></div>${S.lang==='ar'?a.name_ar:a.name_en}</div>
+          <span>${a.price?'+'+money(a.price):''}</span></div>`).join('')}</div>`:''}
+      <div class="optgroup"><div class="lbl"><span>${t('notes')}</span></div>
+        <textarea class="noteinput" rows="2" placeholder="${t('notesPh')}" oninput="App.setNotes(this.value)">${ap.notes||''}</textarea></div>
+      <div class="qtystepper"><button onclick="App.stepQty(-1)">–</button><span class="n">${ap.qty}</span><button onclick="App.stepQty(1)">+</button></div>
+      <button class="btn-primary" onclick="App.addActiveToCart()">${t('addToCart')} — ${money(unit*ap.qty)} ${unitCur()}</button>
+    </div>
+  </div></div>`;
+}
+
+function scrCart(){
+  const t1 = App.computeTotals();
+  return `
+  <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('menu')">${S.lang==='ar'?'→':'←'}</button><h3>${t('yourCart')}</h3><div style="width:32px"></div></div></div>
+  <div class="scrbody">
+    ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : S.cart.map(c=>`
+      <div class="cartrow"><div class="th">🍽️</div><div class="mid">
+        <p class="nm">${S.lang==='ar'?c.ar:c.en}</p>
+        <p class="opt">${[c.variantLabel?(S.lang==='ar'?c.variantLabel.ar:c.variantLabel.en):null, ...c.addonLabels.map(a=>S.lang==='ar'?a.ar:a.en)].filter(Boolean).join(' · ')||'&nbsp;'}</p>
+        <div class="stepper" style="display:flex;align-items:center;gap:8px"><button onclick="App.cartStep('${c.key}',-1)">–</button><span>${c.qty}</span><button onclick="App.cartStep('${c.key}',1)">+</button></div>
+      </div><div style="text-align:end"><div class="price">${money(c.lineTotal)}</div><button class="rm" onclick="App.cartRemove('${c.key}')">${S.lang==='ar'?'حذف':'Remove'}</button></div></div>`).join('')}
+    ${S.cart.length? `
+      <div class="promorow" style="display:flex;gap:8px;margin:14px 0;">
+        <input id="promoInput" placeholder="${t('promo')}" value="${S.promo?S.promo.code:''}" style="flex:1;border:1px solid var(--cream-200);border-radius:9px;padding:9px 12px;font-size:12.5px;background:var(--white);">
+        <button onclick="App.applyPromo()" style="border:1px solid var(--ink-800);background:var(--white);border-radius:9px;padding:9px 14px;font-size:12px;font-weight:700;">${t('apply')}</button>
+      </div>
+      ${S.ui.promoMsg? `<div style="font-size:11.5px;color:${S.promo?'var(--sage-500)':'var(--red-500)'};margin:-8px 0 8px">${S.ui.promoMsg}</div>`:''}
+      <div class="totalsbox">
+      <div class="totalline"><span>${t('subtotal')}</span><span>${money(t1.subtotal)}</span></div>
+      ${t1.promoDiscount>0? `<div class="totalline" style="color:var(--sage-500)"><span>${t('promo')} (${S.promo.code})</span><span>-${money(t1.promoDiscount)}</span></div>`:''}
+      <div class="totalline"><span>${t('vat')} (15%)</span><span>${money(t1.vat)}</span></div>
+      <div class="totalline grand"><span>${t('total')}</span><span>${money(t1.total)} ${unitCur()}</span></div></div>`:''}
+  </div>
+  ${S.cart.length? `<div style="position:absolute;bottom:0;inset-inline:0;padding:14px 18px;background:var(--cream-050);border-top:1px solid var(--cream-200);">
+    <button class="btn-primary" onclick="App.goCheckout()">${t('continueCheckout')}</button></div>`:''}
+  `;
+}
+
+function scrCheckout(){
+  const t1 = App.computeTotals();
+  const feat = S.qrContext.features || {};
+  const walletCoverPreview = S.wallet ? Math.min(t1.total, S.wallet.remaining, S.wallet.policy?.perOrderCap ?? Infinity) : 0;
+  return `
+  <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('cart')">${S.lang==='ar'?'→':'←'}</button><h3>${t('checkoutTitle')}</h3><div style="width:32px"></div></div></div>
+  <div class="scrbody">
+    ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
+    <div class="deliverybox"><div><div class="l">${t('deliverTo')}</div><div class="v">${S.lang==='ar'?S.qrContext.zone.name_ar:S.qrContext.zone.name_en} — ${S.qrContext.point.label}</div></div><div style="font-size:20px">📍</div></div>
+    <div class="formfield" style="margin-top:16px"><label>${t('nameField')}</label><input id="custName" placeholder="Khaled AlHarbi" value="${S.checkoutName}" oninput="S.checkoutName=this.value"></div>
+    <div class="formfield"><label>${t('phoneField')}</label><input id="custPhone" placeholder="+966 5x xxx xxxx" value="${S.checkoutPhone}" oninput="S.checkoutPhone=this.value" onblur="App.lookupLoyalty()"></div>
+
+    ${feat.loyalty ? `
+      <div class="loyaltybox">
+        <div class="loyaltybox-head">★ ${S.lang==='ar'?'نقاط الولاء':'Loyalty points'}
+          <span>${S.loyaltyBalance!=null? (S.lang==='ar'?`الرصيد: ${S.loyaltyBalance}`:`Balance: ${S.loyaltyBalance}`) : (S.lang==='ar'?'أدخل رقم الجوال لعرض رصيدك':'Enter your phone to see your balance')}</span>
+        </div>
+        ${S.loyaltyBalance>0? `
+          <div class="formfield" style="margin:10px 0 0">
+            <label>${S.lang==='ar'?`استبدال نقاط (كل 20 نقطة = 1 ر.س)`:`Redeem points (20 pts = 1 SAR)`}</label>
+            <input type="number" min="0" max="${S.loyaltyBalance}" value="${S.redeemPoints||0}" oninput="App.setRedeemPoints(this.value)">
+          </div>`:''}
+      </div>` : ''}
+
+    <div class="formfield"><label>${t('payMethod')}</label>
+      <div class="paymethodrow ${S.payMethod==='card'?'sel':''}" onclick="App.setPayMethod('card')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='card'?'on':''}"></div>💳 ${t('card')}</div></div>
+      ${feat.corporateWallet? `
+      <div class="paymethodrow ${S.payMethod==='wallet'?'sel':''}" style="flex-direction:column;align-items:stretch;gap:8px" onclick="${S.wallet?"App.setPayMethod('wallet')":''}">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='wallet'?'on':''}"></div>🏢 ${t('wallet')}</div>
+          ${S.wallet? `<span style="font-size:11px;color:var(--sage-500);font-weight:700">${S.lang==='ar'?'متصل':'Linked'}</span>`:''}
+        </div>
+        ${!S.wallet? `<div style="display:flex;gap:6px" onclick="event.stopPropagation()">
+            <input id="employeeRef" placeholder="${S.lang==='ar'?'معرّف الموظف (dept:engineering)':'Employee ID (dept:engineering)'}" style="flex:1;border:1px solid var(--cream-200);border-radius:8px;padding:8px 10px;font-size:12px;background:var(--white)">
+            <button onclick="App.lookupWallet()" style="border:1px solid var(--ink-800);background:var(--white);border-radius:8px;padding:8px 12px;font-size:11.5px;font-weight:700">${S.lang==='ar'?'ربط':'Link'}</button>
+          </div>` : `<div style="font-size:11px;color:var(--ink-400)">${S.lang==='ar'?'ستُغطّى':'Will cover'} ${money(walletCoverPreview)} ${unitCur()} ${S.lang==='ar'?'من إجمالي':'of'} ${money(t1.total)}</div>`}
+      </div>`:''}
+    </div>
+
+    <div class="totalsbox">
+      <div class="totalline"><span>${t('subtotal')}</span><span>${money(t1.subtotal)}</span></div>
+      ${t1.promoDiscount>0? `<div class="totalline" style="color:var(--sage-500)"><span>${t('promo')}</span><span>-${money(t1.promoDiscount)}</span></div>`:''}
+      ${t1.loyaltyDiscount>0? `<div class="totalline" style="color:var(--sage-500)"><span>★ ${S.lang==='ar'?'نقاط':'Points'}</span><span>-${money(t1.loyaltyDiscount)}</span></div>`:''}
+      <div class="totalline"><span>${t('vat')}</span><span>${money(t1.vat)}</span></div>
+      <div class="totalline grand"><span>${t('total')}</span><span>${money(t1.total)} ${unitCur()}</span></div></div>
+  </div>
+  <div style="position:absolute;bottom:0;inset-inline:0;padding:14px 18px;background:var(--cream-050);border-top:1px solid var(--cream-200);display:flex;flex-direction:column;gap:8px;">
+    <button class="btn-primary" onclick="App.submitPayment(false)">${t('payNow')} · ${money(t1.total)} ${unitCur()}</button>
+    <button style="border:none;background:none;color:var(--ink-400);font-size:11px" onclick="App.submitPayment(true)">${S.lang==='ar'?'محاكاة فشل الدفع (اختبار)':'Simulate payment failure (test)'}</button>
+  </div>`;
+}
+
+function scrPaymentResult(){
+  const o = S.currentOrder; const ok = o && o.status!=='Failed';
+  return `<div class="resultwrap"><div class="resulticon ${ok?'ok':'fail'}">${ok?'✓':'✕'}</div>
+    <h2 style="margin:0">${ok?t('paySuccess'):t('payFail')}</h2>
+    ${ok? `<div class="orderno">${t('yourOrder')}${o.id}</div>`:`<p style="color:var(--ink-400);font-size:12.5px;max-width:260px">${S.lang==='ar'?'لم يتم إنشاء طلب مكرر — يمكنك إعادة المحاولة بأمان.':'No duplicate order was created — you can safely retry.'}</p>`}
+    ${ok? `<button class="btn-primary" style="max-width:260px" onclick="App.goTrack()">${t('goTrack')}</button>` : `<button class="btn-primary" style="max-width:260px" onclick="App.retryPayment()">${t('retry')}</button>`}
+  </div>`;
+}
+
+function scrTracking(){
+  const o=S.currentOrder; if(!o) return scrWelcome();
+  const order=['Paid','Accepted','Preparing','Ready','Out for Delivery','Delivered'];
+  const labels=['st_paid','st_accepted','st_preparing','st_ready','st_out','st_delivered'];
+  const curIdx=order.indexOf(o.status);
+  return `
+  <div class="scrhead"><div class="top"><h3>${t('trackTitle')} ${o.id}</h3>${statusBadge(o.status)}</div></div>
+  <div class="scrbody">
+    <div class="steplist">${order.map((st,i)=>{
+      const done=curIdx>i, isCur=i===curIdx && o.status!=='Cancelled';
+      const cls = o.status==='Cancelled'?'':(done?'done':isCur?'current':'');
+      return `<div class="stepitem ${cls}"><div class="line"></div><div class="stepdot">${done?'✓':(i+1)}</div><div class="txt"><b>${t(labels[i])}</b></div></div>`;
+    }).join('')}</div>
+    ${o.status==='Cancelled'? `<div class="notebox" style="background:var(--red-100);color:var(--red-500)">${S.lang==='ar'?'تم إلغاء هذا الطلب':'This order was cancelled'}</div>`:''}
+    <div class="deliverybox"><div><div class="l">${t('deliverTo')}</div><div class="v">${o.pointLabel||S.qrContext.point.label}</div></div><div style="font-size:20px">📍</div></div>
+    ${o.status==='Delivered'? `<button class="btn-primary" style="margin-top:16px" onclick="App.goScreen('feedback')">${t('howExperience')}</button>`:''}
+  </div>`;
+}
+
+function scrFeedback(){
+  const fb = S.feedback || (S.feedback = {stars:0,tags:[],comment:''});
+  const tags = S.lang==='ar'? ['سريع','ودود','نظيف','طلب ناقص','تأخر'] : ['Fast','Friendly','Clean','Missing item','Delayed'];
+  return `
+  <div class="scrhead"><div class="top"><h3>${t('howExperience')}</h3><div style="width:32px"></div></div></div>
+  <div class="scrbody" style="text-align:center">
+    <div class="starrow" style="display:flex;gap:6px;justify-content:center;font-size:30px;margin:6px 0 18px">
+      ${[1,2,3,4,5].map(n=>`<span style="cursor:pointer;color:${fb.stars>=n?'var(--brass-500)':'var(--ink-200)'}" onclick="App.setStar(${n})">★</span>`).join('')}
+    </div>
+    <div style="text-align:start">
+      ${tags.map(tg=>`<span class="tagchip" style="display:inline-block;border:1px solid ${fb.tags.includes(tg)?'var(--ink-900)':'var(--cream-200)'};background:${fb.tags.includes(tg)?'var(--ink-900)':'var(--white)'};color:${fb.tags.includes(tg)?'var(--cream-050)':'var(--ink-900)'};padding:8px 14px;border-radius:999px;font-size:12px;font-weight:700;margin:0 5px 8px 0;cursor:pointer" onclick="App.toggleTag('${tg}')">${tg}</span>`).join('')}
+    </div>
+    <textarea id="fbComment" class="noteinput" rows="3" placeholder="${t('optionalComment')}" style="margin-top:14px" oninput="S.feedback.comment=this.value">${fb.comment||''}</textarea>
+    <button class="btn-primary" style="margin-top:16px" onclick="App.submitFeedback()">${t('submitFeedback')}</button>
+  </div>`;
+}
+function scrFeedbackThanks(){
+  return `<div class="resultwrap"><div class="resulticon ok">✓</div><h2 style="margin:0">${t('thanksFeedback')}</h2>
+    <button class="btn-primary" style="max-width:220px" onclick="App.startNewOrder()">${t('backToStart')}</button></div>`;
+}
+
+/* ---------------- STAFF SHELL ---------------- */
+function renderStaffShell(){
+  const role = S.session.user.role;
+  const navByRole = {
+    Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
+    Runner:[['runnerq', t('runnerQ')]],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
+    AlnadlFinance:[['settlements', t('revShareTitle')],['audit', t('auditLog')]],
+    PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    PartnerAdmin:[['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+  };
+  const nav = navByRole[role] || [];
+  let inner = '';
+  if(S.screen==='kds') inner = renderKds();
+  else if(S.screen==='runnerq') inner = renderRunner();
+  else if(S.screen==='tenants') inner = renderTenants();
+  else if(S.screen==='portfolio') inner = renderPortfolio();
+  else if(S.screen==='live') inner = renderLiveManager();
+  else if(S.screen==='zones') inner = renderAdminZones();
+  else if(S.screen==='catalog') inner = renderAdminCatalog();
+  else if(S.screen==='users') inner = renderUsers();
+  else if(S.screen==='audit') inner = renderAudit();
+  else if(S.screen==='overview') inner = renderPartnerOverview();
+  else if(S.screen==='settlements') inner = renderSettlements();
+  else if(S.screen==='billing') inner = renderBilling();
+  else if(S.screen==='merchants') inner = renderMerchants();
+  else if(S.screen==='wallets') inner = renderWallets();
+  else inner = `<div class="empty-hint">—</div>`;
+
+  return `<div class="bohshell"><div class="bohwrap">
+    <div class="boh-header">
+      <div class="boh-title"><h1>${nav.find(n=>n[0]===S.screen)?.[1] || ''}</h1><p>${t('scope_note')}</p></div>
+      <div class="boh-nav">${nav.map(([id,lbl])=>`<button class="${S.screen===id?'active':''}" onclick="App.setStaffScreen('${id}')">${lbl}</button>`).join('')}</div>
+    </div>
+    ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
+    ${inner}
+  </div></div>
+  ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}`;
+}
+
+function renderKds(){
+  const cols=[['New',['Paid']],['Preparing',['Accepted','Preparing']],['Ready',['Ready','Out for Delivery']]];
+  const labelKey={New:'newCol',Preparing:'prepCol',Ready:'readyCol'};
+  return `<div class="kdscols">${cols.map(([name,statuses])=>{
+    const list=S.ops.queue.filter(o=>statuses.includes(o.status)).sort((a,b)=>a.created_at-b.created_at);
+    return `<div class="kdscol"><h4>${t(labelKey[name])}<span class="cnt">${list.length}</span></h4>
+      ${list.length? list.map(o=>{
+        const mins=Math.floor((Date.now()-o.created_at)/60000);
+        const warn = mins>=8?'late':mins>=5?'warn':'';
+        return `<div class="ticket" onclick="App.openOrderDetail('${o.id}')">
+          <div class="trow"><span class="id">${o.id}</span><span class="timer ${warn}">${elapsedStr(o.created_at)}</span></div>
+          <div class="pt">${o.point_label||'—'}</div><div class="items">${o.itemsSummary}</div></div>`;
+      }).join('') : `<div class="kdsempty">${t('noOrders')}</div>`}
+    </div>`;
+  }).join('')}</div>`;
+}
+function renderOrderDetail(id){
+  const o=S.ops.queue.find(x=>x.id===id) || S.runnerQ.find(x=>x.id===id); if(!o) return '';
+  const nextByStatus = { Paid:['Accepted'], Accepted:['Preparing'], Preparing:['Ready'], Ready:['Out for Delivery','Delivered'] };
+  const next = nextByStatus[o.status] || [];
+  const showCancel = S.ui.cancelFor===id;
+  return `<div class="ordmodal" onclick="if(event.target===this) App.closeOrderDetail()"><div class="ordsheet">
+    <h3>${o.id}</h3><div class="pt">${o.point_label||'—'} · ${statusBadge(o.status)}</div>
+    <div class="notebox">${o.itemsSummary}</div>
+    ${showCancel? `<div class="formfield"><label>${t('cancelReason')}</label><input id="cancelReasonInput" placeholder="${S.lang==='ar'?'مثال: نفاد المنتج':'e.g. out of stock'}"></div>
+      <div class="actrow"><button class="btn-secondary" onclick="App.confirmCancel('${o.id}')">${t('cancelOrder')}</button><button class="ghostbtn" onclick="App.dismissCancel()">${t('close')}</button></div>`
+    : `<div class="actrow">
+        ${o.status==='Paid'? `<button class="btn-primary" onclick="App.opsTransition('${o.id}','Accepted')">${t('accept')}</button>`:''}
+        ${o.status==='Accepted'? `<button class="btn-primary" onclick="App.opsTransition('${o.id}','Preparing')">${t('start')}</button>`:''}
+        ${o.status==='Preparing'? `<button class="btn-primary" onclick="App.opsTransition('${o.id}','Ready')">${t('markReady')}</button>`:''}
+        ${o.status==='Ready'? `<button class="btn-primary" onclick="App.opsTransition('${o.id}','Out for Delivery')">${t('outForDelivery')}</button>`:''}
+        ${['Paid','Accepted','Preparing'].includes(o.status)? `<button class="btn-danger-line" onclick="App.opsCancel('${o.id}')">${t('cancelOrder')}</button>`:''}
+        <button class="ghostbtn" onclick="App.closeOrderDetail()">${t('close')}</button>
+      </div>`}
+  </div></div>`;
+}
+
+function renderRunner(){
+  const list=S.runnerQ;
+  return list.length? list.map(o=>`
+    <div class="panel" style="display:flex;align-items:center;gap:14px;">
+      <div style="flex:1"><div style="color:var(--cream-050);font-family:var(--mono);font-weight:800">${o.id} — ${o.point_label||'—'}</div>${statusBadge(o.status)}</div>
+      <div style="display:flex;flex-direction:column;gap:6px;min-width:150px">
+        ${o.status==='Ready'? `<button class="btn-small brass" onclick="App.runnerTransition('${o.id}','Out for Delivery')">${t('claim')}</button>`:''}
+        ${o.status==='Out for Delivery'? `<button class="btn-small brass" onclick="App.runnerTransition('${o.id}','Delivered')">${t('deliverBtn')}</button>
+          <button class="btn-small" style="color:var(--red-500);border-color:var(--red-500)" onclick="App.runnerTransition('${o.id}','Delivery Failed')">${t('failBtn')}</button>`:''}
+      </div></div>`).join('') : `<div class="panel"><div class="empty-hint" style="color:var(--ink-300)">${t('noOrders')}</div></div>`;
+}
+
+function renderTenants(){
+  const plans = S.plans || [];
+  return `<div class="grid2">
+    <div>
+      <div class="panel"><h3>${S.lang==='ar'?'شركاء جدد':'Onboard a new tenant'}</h3>
+        <p class="ph">${S.lang==='ar'?'ينشئ شريكًا + منشأة + اشتراكًا فعالاً بضغطة واحدة':'Creates a Partner + Property + active Subscription in one call'}</p>
+        <div class="formgrid">
+          <div class="darkfield"><label>${S.lang==='ar'?'اسم الشريك (AR)':'Partner name (AR)'}</label><input id="obNameAr" placeholder="مدينة الألعاب الذهبية"></div>
+          <div class="darkfield"><label>${S.lang==='ar'?'اسم الشريك (EN)':'Partner name (EN)'}</label><input id="obNameEn" placeholder="Golden Playland"></div>
+          <div class="darkfield"><label>${S.lang==='ar'?'اسم المنشأة (AR)':'Property name (AR)'}</label><input id="obPropAr" placeholder="الفرع الرئيسي"></div>
+          <div class="darkfield"><label>${S.lang==='ar'?'اسم المنشأة (EN)':'Property name (EN)'}</label><input id="obPropEn" placeholder="Main Branch"></div>
+          <div class="darkfield" style="grid-column:1/-1"><label>${S.lang==='ar'?'الباقة':'Plan'}</label>
+            <select id="obPlan">${plans.map(p=>`<option value="${p.code}">${S.lang==='ar'?p.name_ar:p.name_en} — ${p.monthly_fee} SAR/mo</option>`).join('')}</select></div>
+        </div>
+        <button class="btn-small brass" onclick="App.onboardTenant()">+ ${S.lang==='ar'?'إنشاء الشريك':'Create tenant'}</button>
+      </div>
+    </div>
+    <div class="panel"><h3>${S.lang==='ar'?'الشركاء الحاليون':'Current tenants'}</h3>
+      ${(S.tenants||[]).map(pt=>{
+        const sub = pt.subscription;
+        return `<div class="pointrow" style="align-items:flex-start;flex-direction:column;gap:8px">
+          <div style="display:flex;justify-content:space-between;width:100%;align-items:center"><b style="color:var(--cream-050)">${S.lang==='ar'?pt.name_ar:pt.name_en}</b>
+          <span class="badge paid">${pt.subscription? pt.subscription.plan_code : '—'}</span>
+          <button class="togglepill active" onclick="App.selectTenantForAdmin('${pt.id}')">${S.lang==='ar'?'إدارة':'Manage'}</button></div>
+          <div style="display:flex;gap:8px;align-items:center;width:100%">
+            <select id="planSelect_${pt.id}" style="flex:1;background:var(--ink-800);color:var(--cream-050);border:1px solid var(--ink-700);border-radius:7px;padding:6px 8px;font-size:11.5px;">
+              ${plans.map(p=>`<option value="${p.code}">${p.code} — ${p.monthly_fee} SAR/mo</option>`).join('')}
+            </select>
+            <button class="btn-small" onclick="App.changePlan('${pt.id}')">${S.lang==='ar'?'تغيير الباقة':'Change plan'}</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderBilling(){
+  const sub = S.subscription; const plans = S.plans||[];
+  if(!sub) return `<div class="empty-hint">Loading…</div>`;
+  const featureLabels = { qrOrdering: S.lang==='ar'?'الطلب عبر QR':'QR Ordering', digitalPayment: S.lang==='ar'?'الدفع الإلكتروني':'Digital Payment',
+    partnerDashboard: S.lang==='ar'?'لوحة الشريك':'Partner Dashboard', loyalty:'Loyalty', marketplace:'Marketplace', analytics:'Analytics' };
+  return `<div class="panel">
+    <h3>${sub.plan_code} — ${S.lang==='ar'?sub.name_ar:sub.name_en}</h3>
+    <p class="ph">${S.lang==='ar'?'الرسوم الشهرية':'Monthly fee'}: ${money(sub.monthly_fee)} SAR · ${S.lang==='ar'?'رسم تقني':'Tech fee'}: ${Math.round(sub.tech_fee_rate*100)}% · <span class="badge paid">${sub.status}</span></p>
+    <div class="section-sm">${S.lang==='ar'?'المزايا المفعّلة':'Enabled capabilities'}</div>
+    ${Object.entries(sub.features).map(([k,v])=>`<div class="prodlistrow"><div class="nm">${featureLabels[k]||k}</div><span class="togglepill ${v?'active':'inactive'}">${v?t('active'):t('inactive')}</span></div>`).join('')}
+  </div>`;
+}
+
+function renderAdminZones(){
+  const tenantNote = S.session.user.role==='SuperAdmin'
+    ? `<div class="notebox" style="background:var(--ink-800);color:var(--brass-300)">${S.lang==='ar'?'تُدار الآن منشأة':'Currently managing property'}: <b>${S.PROPERTY_ID}</b> — ${S.lang==='ar'?'اختر شريكًا آخر من تبويب "الشركاء والباقات"':'pick another tenant from the "Tenants & Plans" tab'}</div>` : '';
+  const zoneOpts = S.admin.zones.map(z=>`<option value="${z.id}">${S.lang==='ar'?z.name_ar:z.name_en}</option>`).join('');
+  return `${tenantNote}<div class="grid2"><div>
+    <div class="panel"><h3>${t('addZone')}</h3>
+      <div class="formgrid">
+        <div class="darkfield"><label>${t('zoneName')}</label><input id="zoneAr" placeholder="اللوبي"></div>
+        <div class="darkfield"><label>${t('zoneNameEn')}</label><input id="zoneEn" placeholder="Lobby"></div>
+        <div class="darkfield"><label>${t('zoneType')}</label><select id="zoneType"><option>Lounge</option><option>Leisure</option><option>Business</option><option>Guest Room</option></select></div>
+      </div><button class="btn-small brass" onclick="App.addZone()">+ ${t('addZone')}</button>
+      <div class="section-sm">${t('existingZones')}</div>
+      ${S.admin.zones.map(z=>`<div class="pointrow"><div class="meta"><b>${S.lang==='ar'?z.name_ar:z.name_en}</b><span>${z.type} · ${z.id}</span></div></div>`).join('')}
+    </div>
+    <div class="panel"><h3>${t('addPoint')}</h3>
+      <div class="formgrid">
+        <div class="darkfield"><label>${S.lang==='ar'?'المنطقة':'Zone'}</label><select id="pointZone">${zoneOpts}</select></div>
+        <div class="darkfield"><label>${t('pointType')}</label><select id="pointType"><option>Table</option><option>Room</option><option>Seat</option><option>Office</option><option>Area</option></select></div>
+        <div class="darkfield" style="grid-column:1/-1"><label>${t('pointCode')}</label><input id="pointLabel" placeholder="Table 24"></div>
+      </div><button class="btn-small brass" onclick="App.addPoint()">+ ${t('addPoint')}</button>
+    </div></div>
+    <div class="panel"><h3>${t('existingPoints')}</h3>
+      ${S.admin.points.map(p=>{
+        const z=S.admin.zones.find(zz=>zz.id===p.zone_id);
+        return `<div class="pointrow"><div class="qrmini">${Array.from({length:36}).map((_,i)=>{
+            const h=((p.token||'0').charCodeAt(i%(p.token||'0').length)+i*7)%5; return `<div class="${h===0?'off':''}"></div>`; }).join('')}</div>
+          <div class="meta"><b>${p.label} — ${z?(S.lang==='ar'?z.name_ar:z.name_en):''}</b><span>${p.id} · token:${p.token}</span></div>
+          <button class="togglepill ${p.active?'active':'inactive'}" onclick="App.togglePoint('${p.id}',${!!p.active})">${p.active?t('active'):t('inactive')}</button></div>`;
+      }).join('')}
+    </div></div>`;
+}
+
+function renderAdminCatalog(){
+  return `<div class="grid2"><div>
+    <div class="panel"><h3>${t('addCat')}</h3>
+      <div class="formgrid"><div class="darkfield"><label>${t('catName')}</label><input id="catAr" placeholder="مشروبات باردة"></div>
+      <div class="darkfield"><label>${t('catNameEn')}</label><input id="catEn" placeholder="Cold Drinks"></div></div>
+      <button class="btn-small brass" onclick="App.addCategory()">+ ${t('addCat')}</button></div>
+    <div class="panel"><h3>${t('addProd')}</h3>
+      <div class="formgrid">
+        <div class="darkfield"><label>${t('prodName')}</label><input id="prodAr" placeholder="آيس لاتيه"></div>
+        <div class="darkfield"><label>${t('prodNameEn')}</label><input id="prodEn" placeholder="Iced Latte"></div>
+        <div class="darkfield"><label>${t('prodPrice')}</label><input id="prodPrice" type="number" placeholder="20"></div>
+        <div class="darkfield"><label>${t('prodCat')}</label><select id="prodCatSel">${S.admin.categories.map(c=>`<option value="${c.id}">${S.lang==='ar'?c.name_ar:c.name_en}</option>`).join('')}</select></div>
+      </div><button class="btn-small brass" onclick="App.addProduct()">+ ${t('addProd')}</button></div>
+    </div>
+    <div class="panel"><h3>${t('currentCatalog')}</h3>
+      ${S.admin.categories.map(c=>`<div class="section-sm">${S.lang==='ar'?c.name_ar:c.name_en}</div>
+        ${S.admin.products.filter(p=>p.category_id===c.id).map(p=>`
+          <div class="prodlistrow"><div class="nm">${S.lang==='ar'?p.name_ar:p.name_en}</div>
+          <button class="togglepill ${p.status==='Active'?'active':'inactive'}" onclick="App.toggleProdStatus('${p.id}','${p.status}')">${p.status==='Active'?t('active'):t('inactive')}</button></div>`).join('')}`).join('')}
+    </div></div>`;
+}
+
+function renderAudit(){
+  return `<div class="panel"><table class="datatable"><tr><th>Actor</th><th>Role</th><th>Action</th><th>Entity</th><th>When</th></tr>
+    ${S.audit.map(a=>`<tr><td>${a.actor}</td><td>${a.role}</td><td>${a.action}</td><td style="font-family:var(--mono)">${a.entity}</td><td>${new Date(a.ts).toLocaleString(S.lang==='ar'?'ar-SA':'en-US')}</td></tr>`).join('')}
+  </table></div>`;
+}
+
+function renderPartnerOverview(){
+  const ov = S.partner.overview; if(!ov) return `<div class="empty-hint">Loading…</div>`;
+  return `<div class="kpirow">
+    <div class="kpi"><div class="lbl">${t('grossSales')}</div><div class="val">${money(ov.grossSales)}</div><div class="sub">SAR</div></div>
+    <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${ov.orders}</div></div>
+    <div class="kpi"><div class="lbl">${t('aov')}</div><div class="val">${money(ov.aov)}</div><div class="sub">SAR</div></div>
+    <div class="kpi"><div class="lbl">${t('topZones')}</div><div class="val" style="font-size:13px">${ov.topZones[0]? ov.topZones[0].zone : '—'}</div></div>
+  </div>
+  <div class="panel"><h3>${t('topZones')}</h3><table class="datatable"><tr><th>${S.lang==='ar'?'المنطقة':'Zone'}</th><th>${t('orders')}</th></tr>
+    ${ov.topZones.map(z=>`<tr><td>${z.zone}</td><td>${z.count}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}</table></div>`;
+}
+
+function renderSettlements(){
+  const rows = S.settlements || [];
+  const role = S.session.user.role;
+  const canCreate = role==='AlnadlFinance' || role==='SuperAdmin';
+  const flow = { Draft:['Reviewed'], Reviewed:['Partner Review'], 'Partner Review':['Approved','Disputed'], Disputed:['Reviewed'], Approved:['Paid'] };
+  const partnerCanAct = role==='PartnerViewer' || role==='PartnerAdmin';
+  return `
+    ${canCreate? `<div class="panel" style="display:flex;justify-content:space-between;align-items:center">
+      <div><h3 style="margin:0">${t('revShareTitle')}</h3><p class="ph" style="margin:4px 0 0">${S.lang==='ar'?'إنشاء تسوية للفترة الحالية':'Create a settlement for the current period'}</p></div>
+      <button class="btn-small brass" onclick="App.createSettlement()">+ ${S.lang==='ar'?'إنشاء تسوية':'New settlement'}</button>
+    </div>`:''}
+    ${rows.length===0? `<div class="panel"><div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا توجد تسويات بعد':'No settlements yet'}</div></div>` : rows.map(s=>{
+      const next = flow[s.status] || [];
+      const actionable = next.filter(n => partnerCanAct ? ['Approved','Disputed'].includes(n) : true);
+      return `<div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div><h3 style="margin:0">${s.period}</h3><p class="ph" style="margin:4px 0 10px">${s.partner_id}</p></div>
+          <span class="badge ${s.status==='Approved'||s.status==='Paid'?'ready':s.status==='Disputed'?'cancel':'pending'}">${s.status}</span>
+        </div>
+        <div class="totalline" style="color:var(--ink-200)"><span>${t('grossSales')}</span><span>${money(s.gross)}</span></div>
+        <div class="totalline" style="color:var(--ink-200)"><span>${t('discounts')}</span><span>${money(s.discounts)}</span></div>
+        <div class="totalline" style="color:var(--ink-200)"><span>${t('refunds')}</span><span>${money(s.refunds)}</span></div>
+        <div class="totalline" style="color:var(--ink-200)"><span>${t('eligibleBase')}</span><span>${money(s.eligible_base)}</span></div>
+        <div class="totalline" style="color:var(--brass-300);font-weight:800;font-size:15px;border-top:1px dashed var(--ink-600);padding-top:8px;margin-top:6px;">
+          <span>${t('partnerShare')} (${Math.round(s.share_rate*100)}%)</span><span>${money(s.partner_share)}</span></div>
+        ${actionable.length? `<div class="actrow">${actionable.map(n=>`<button class="btn-small ${n==='Disputed'?'':'brass'}" onclick="App.settlementTransition('${s.id}','${n}')">${n}</button>`).join('')}</div>`:''}
+      </div>`;
+    }).join('')}
+  `;
+}
+
+function renderPortfolio(){
+  const pf = S.portfolio; if(!pf) return `<div class="empty-hint">Loading…</div>`;
+  return `<div class="kpirow">
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'إجمالي المبيعات (GMV)':'Total GMV'}</div><div class="val">${money(pf.totalGmv)}</div><div class="sub">SAR</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'عدد المواقع':'Sites'}</div><div class="val">${pf.sites}</div></div>
+    <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${pf.totalOrders}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'تنبيهات تشغيلية':'Operational alerts'}</div><div class="val" style="color:${pf.alerts>0?'var(--red-500)':'var(--cream-050)'}">${pf.alerts}</div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h3>${S.lang==='ar'?'أفضل موقع':'Top site'}</h3>${pf.topSite? `<p style="color:var(--cream-050);font-size:14px;font-weight:700">${S.lang==='ar'?pf.topSite.name_ar:pf.topSite.name_en}</p><p class="ph">${money(pf.topSite.gmv)} SAR · ${pf.topSite.orders} ${S.lang==='ar'?'طلب':'orders'}</p>`:'—'}</div>
+    <div class="panel"><h3>${S.lang==='ar'?'أضعف موقع':'Lowest site'}</h3>${pf.lowestSite? `<p style="color:var(--cream-050);font-size:14px;font-weight:700">${S.lang==='ar'?pf.lowestSite.name_ar:pf.lowestSite.name_en}</p><p class="ph">${money(pf.lowestSite.gmv)} SAR · ${pf.lowestSite.orders} ${S.lang==='ar'?'طلب':'orders'}</p>`:'—'}</div>
+  </div>
+  <div class="panel"><h3>${S.lang==='ar'?'كل المواقع':'All sites'}</h3><table class="datatable">
+    <tr><th>${S.lang==='ar'?'الشريك':'Partner'}</th><th>GMV</th><th>${t('orders')}</th></tr>
+    ${pf.bySite.map(s=>`<tr><td>${S.lang==='ar'?s.name_ar:s.name_en}</td><td>${money(s.gmv)}</td><td>${s.orders}</td></tr>`).join('')}
+  </table></div>`;
+}
+
+function renderLiveManager(){
+  const l = S.live; if(!l) return `<div class="empty-hint">Loading…</div>`;
+  return `<div class="kpirow">
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'مبيعات اليوم':'Sales today'}</div><div class="val">${money(l.salesToday)}</div><div class="sub">SAR</div></div>
+    <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${l.ordersToday}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'متوسط التجهيز':'Avg prep'}</div><div class="val">${l.avgPrepMin}</div><div class="sub">${S.lang==='ar'?'دقيقة':'min'}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'متوسط التسليم':'Avg delivery'}</div><div class="val">${l.avgDeliveryMin}</div><div class="sub">${S.lang==='ar'?'دقيقة':'min'}</div></div>
+  </div>
+  <div class="panel"><h3>${S.lang==='ar'?'الحالة الآن':'Right now'}</h3>
+    <div class="kpirow" style="margin-bottom:0">
+      <div class="kpi"><div class="lbl">${t('newCol')}</div><div class="val">${l.counts.New}</div></div>
+      <div class="kpi"><div class="lbl">${t('prepCol')}</div><div class="val">${l.counts.Preparing}</div></div>
+      <div class="kpi"><div class="lbl">${t('readyCol')}</div><div class="val">${l.counts.Ready}</div></div>
+      <div class="kpi"><div class="lbl">${S.lang==='ar'?'متأخر':'Delayed'}</div><div class="val" style="color:${l.counts.Delayed>0?'var(--red-500)':'var(--cream-050)'}">${l.counts.Delayed}</div></div>
+    </div>
+  </div>
+  ${l.topZone? `<div class="panel"><h3>${S.lang==='ar'?'أفضل منطقة':'Top zone'}</h3><p style="color:var(--brass-300);font-weight:800">${l.topZone}</p></div>`:''}`;
+}
+
+function renderMerchants(){
+  const rows = S.merchants || [];
+  const featureOn = S.subscription ? S.subscription.features?.marketplace : true; // SuperAdmin has no single subscription context; PartnerAdmin's is loaded
+  return `<div class="grid2"><div>
+    <div class="panel"><h3>${S.lang==='ar'?'إضافة شريك تجاري (مطعم/خدمة)':'Add a merchant (restaurant/service)'}</h3>
+      <p class="ph">${S.lang==='ar'?'يظهر منتجاته ضمن قائمة العميل تحت قسم منفصل بعلامة "شريك" — يتطلب باقة PLATFORM':'Shows up in the customer menu under a separate "Partner" section — requires the PLATFORM plan'}</p>
+      <div class="darkfield"><label>${S.lang==='ar'?'اسم الشريك (AR)':'Merchant name (AR)'}</label><input id="merAr" placeholder="مطعم الواحة"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'اسم الشريك (EN)':'Merchant name (EN)'}</label><input id="merEn" placeholder="Oasis Restaurant"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'نسبة العمولة %':'Commission rate %'}</label><input id="merCommission" type="number" value="10"></div>
+      <button class="btn-small brass" onclick="App.addMerchant()">+ ${S.lang==='ar'?'إضافة':'Add'}</button>
+    </div></div>
+    <div class="panel"><h3>${S.lang==='ar'?'الشركاء الحاليون':'Current merchants'}</h3>
+      ${rows.length? rows.map(m=>`<div class="prodlistrow"><div class="nm">${S.lang==='ar'?m.name_ar:m.name_en}<span style="display:block">${m.kind==='alnadl'?(S.lang==='ar'?'مُدار من النادل':'Alnadl-operated'):(S.lang==='ar'?`شريك · عمولة ${Math.round(m.commission_rate*100)}%`:`Partner · ${Math.round(m.commission_rate*100)}% commission`)}</span></div>
+        <span class="badge ${m.status==='Active'?'ready':'cancel'}">${m.status}</span></div>`).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا يوجد شركاء بعد':'No merchants yet'}</div>`}
+    </div></div>`;
+}
+
+function renderWallets(){
+  const rows = S.wallets || [];
+  return `<div class="grid2"><div>
+    <div class="panel"><h3>${S.lang==='ar'?'محفظة شركة جديدة':'New corporate wallet'}</h3>
+      <p class="ph">${S.lang==='ar'?'للعملاء المؤسسيين — رصيد شهري مشترك مع سقف اختياري لكل طلب':'For corporate clients — a shared monthly budget with an optional per-order cap'}</p>
+      <div class="darkfield"><label>${S.lang==='ar'?'اسم الجهة':'Owner name'}</label><input id="walOwner" placeholder="Engineering Dept"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'معرّف الربط (يُستخدم عند الدفع)':'Owner reference (used at checkout)'}</label><input id="walRef" placeholder="dept:engineering"></div>
+      <div class="formgrid">
+        <div class="darkfield"><label>${S.lang==='ar'?'الميزانية الشهرية':'Monthly budget'}</label><input id="walBudget" type="number" placeholder="500"></div>
+        <div class="darkfield"><label>${S.lang==='ar'?'سقف لكل طلب (اختياري)':'Per-order cap (optional)'}</label><input id="walCap" type="number" placeholder="60"></div>
+      </div>
+      <button class="btn-small brass" onclick="App.addWallet()">+ ${S.lang==='ar'?'إنشاء':'Create'}</button>
+    </div></div>
+    <div class="panel"><h3>${S.lang==='ar'?'المحافظ الحالية':'Current wallets'}</h3>
+      ${rows.length? rows.map(w=>{
+        const pct = w.monthly_budget>0 ? Math.min(100, Math.round((w.spent_this_period/w.monthly_budget)*100)) : 0;
+        const policy = JSON.parse(w.policy_json||'{}');
+        return `<div class="pointrow" style="flex-direction:column;align-items:stretch;gap:8px">
+          <div style="display:flex;justify-content:space-between"><b style="color:var(--cream-050)">${w.owner_name}</b><span style="font-family:var(--mono);font-size:11px;color:var(--ink-300)">${w.owner_ref}</span></div>
+          <div style="background:var(--ink-800);border-radius:999px;height:6px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${pct>85?'var(--red-500)':'var(--brass-500)'}"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-300)">
+            <span style="direction:ltr;unicode-bidi:embed">${money(w.spent_this_period)} / ${money(w.monthly_budget)} SAR</span>
+            ${policy.perOrderCap? `<span>${S.lang==='ar'?'سقف الطلب':'order cap'}: ${money(policy.perOrderCap)}</span>`:''}
+          </div>
+        </div>`;
+      }).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا توجد محافظ بعد':'No wallets yet'}</div>`}
+    </div></div>`;
+}
+
+function renderUsers(){
+  const rows = S.users || [];
+  const roleOpts = S.session.user.role==='PartnerAdmin'
+    ? ['Operator','Runner','SiteManager','PartnerViewer']
+    : ['Operator','Runner','SiteManager','PartnerViewer','PartnerAdmin','AlnadlFinance','SuperAdmin'];
+  return `<div class="grid2"><div>
+    <div class="panel"><h3>${S.lang==='ar'?'مستخدم جديد':'New user'}</h3>
+      <div class="darkfield"><label>${S.lang==='ar'?'اسم المستخدم':'Username'}</label><input id="newUserName" placeholder="jane_operator"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'الدور':'Role'}</label><select id="newUserRole">${roleOpts.map(r=>`<option value="${r}">${r}</option>`).join('')}</select></div>
+      <button class="btn-small brass" onclick="App.createUser()">+ ${S.lang==='ar'?'إنشاء':'Create'}</button>
+      <p class="ph" style="margin-top:8px">${t('resetHint')}</p>
+    </div></div>
+    <div class="panel"><h3>${S.lang==='ar'?'المستخدمون الحاليون':'Current users'}</h3>
+      ${rows.map(u=>`<div class="prodlistrow"><div class="nm">${u.username}<span style="display:block">${u.role}${u.last_login? ' · '+new Date(u.last_login).toLocaleDateString('en-US') : (S.lang==='ar'?' · لم يسجل دخول بعد':' · never logged in')}</span></div>
+        <button class="togglepill ${u.active?'active':'inactive'}" onclick="App.toggleUser('${u.id}',${!!u.active})">${u.active?t('active'):t('inactive')}</button></div>`).join('')}
+    </div></div>`;
+}
+
+/* ---------------- boot ---------------- */
+(async function init(){
+  document.documentElement.dir='rtl';
+  const params = new URLSearchParams(location.search);
+  const tkn = params.get('t');
+  if(tkn){ await App.loadQrContext(tkn); } else { render(); }
+  setInterval(()=>{
+    if(S.session && S.screen==='kds') App.loadOpsQueue();
+    if(S.session && S.screen==='runnerq') App.loadRunnerQueue();
+    if(!S.session && S.screen==='tracking') App.refreshOrder();
+  }, 3000);
+})();

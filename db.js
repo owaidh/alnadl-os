@@ -1,0 +1,310 @@
+// db.js — Alnadl Hospitality OS
+// Schema follows Screen Spec §11 (نموذج البيانات الأساسي). Zero external
+// dependencies: uses Node's built-in node:sqlite (Node >= 22).
+'use strict';
+const { DatabaseSync } = require('node:sqlite');
+const crypto = require('crypto');
+const path = require('path');
+
+const DB_PATH = process.env.SQLITE_PATH || path.join(__dirname, 'data.sqlite');
+const db = new DatabaseSync(DB_PATH);
+db.exec('PRAGMA foreign_keys = ON;');
+
+function uid(prefix) { return prefix + '_' + crypto.randomBytes(5).toString('hex'); }
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS partners (
+  id TEXT PRIMARY KEY, name_ar TEXT, name_en TEXT, legal_name TEXT,
+  contract_ref TEXT, status TEXT DEFAULT 'Active'
+);
+CREATE TABLE IF NOT EXISTS properties (
+  id TEXT PRIMARY KEY, partner_id TEXT, name_ar TEXT, name_en TEXT,
+  timezone TEXT DEFAULT 'Asia/Riyadh', address TEXT, status TEXT DEFAULT 'Active'
+);
+CREATE TABLE IF NOT EXISTS zones (
+  id TEXT PRIMARY KEY, property_id TEXT, name_ar TEXT, name_en TEXT, type TEXT, status TEXT DEFAULT 'Active'
+);
+CREATE TABLE IF NOT EXISTS points (
+  id TEXT PRIMARY KEY, zone_id TEXT, code TEXT, label TEXT, type TEXT, active INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS qr_tokens (
+  id TEXT PRIMARY KEY, point_id TEXT, token TEXT UNIQUE, active INTEGER DEFAULT 1, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS categories (
+  id TEXT PRIMARY KEY, property_id TEXT, name_ar TEXT, name_en TEXT, sort_order INTEGER DEFAULT 0, status TEXT DEFAULT 'Active'
+);
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY, category_id TEXT, merchant_id TEXT, sku TEXT, name_ar TEXT, name_en TEXT,
+  description_ar TEXT, description_en TEXT, base_price REAL, tax_code TEXT DEFAULT 'VAT15',
+  status TEXT DEFAULT 'Active'
+);
+CREATE TABLE IF NOT EXISTS variants (
+  id TEXT PRIMARY KEY, product_id TEXT, name_ar TEXT, name_en TEXT, price_delta REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS addons (
+  id TEXT PRIMARY KEY, product_id TEXT, name_ar TEXT, name_en TEXT, price REAL DEFAULT 0, required INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY, partner_id TEXT, property_id TEXT, zone_id TEXT, point_id TEXT,
+  customer_name TEXT, customer_phone TEXT, status TEXT DEFAULT 'Created',
+  subtotal REAL, vat REAL, total REAL, payment_ref TEXT, cancel_reason TEXT,
+  promo_code TEXT, discount_amount REAL DEFAULT 0,
+  loyalty_points_used INTEGER DEFAULT 0, loyalty_account_id TEXT,
+  wallet_id TEXT, wallet_covered REAL DEFAULT 0,
+  created_at INTEGER, updated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS order_items (
+  id TEXT PRIMARY KEY, order_id TEXT, product_id TEXT, merchant_id TEXT, name_ar TEXT, name_en TEXT,
+  qty INTEGER, unit_price REAL, variant_json TEXT, addons_json TEXT, notes TEXT, line_total REAL
+);
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY, order_id TEXT, gateway_ref TEXT, amount REAL, status TEXT,
+  method TEXT, fees REAL DEFAULT 0, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS fulfillment (
+  order_id TEXT PRIMARY KEY, station TEXT, runner_id TEXT,
+  accepted_at INTEGER, preparing_at INTEGER, ready_at INTEGER, out_at INTEGER, delivered_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS settlements (
+  id TEXT PRIMARY KEY, partner_id TEXT, period TEXT, gross REAL, discounts REAL, refunds REAL,
+  eligible_base REAL, share_rate REAL, partner_share REAL, status TEXT DEFAULT 'Draft', created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, role TEXT, action TEXT, entity TEXT,
+  before TEXT, after TEXT, reason TEXT, ts INTEGER
+);
+CREATE TABLE IF NOT EXISTS plans (
+  id TEXT PRIMARY KEY, code TEXT UNIQUE, name_ar TEXT, name_en TEXT,
+  monthly_fee REAL, tech_fee_rate REAL, features_json TEXT
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id TEXT PRIMARY KEY, partner_id TEXT UNIQUE, plan_id TEXT, status TEXT DEFAULT 'Active',
+  started_at INTEGER, renews_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS feedback (
+  id TEXT PRIMARY KEY, order_id TEXT, stars INTEGER, tags_json TEXT, comment TEXT, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS promotions (
+  id TEXT PRIMARY KEY, property_id TEXT, code TEXT UNIQUE, discount_type TEXT, discount_value REAL,
+  valid_from INTEGER, valid_to INTEGER, active INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, order_id TEXT, recipient_role TEXT, channel TEXT, payload TEXT, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, role TEXT,
+  partner_scope TEXT, active INTEGER DEFAULT 1, last_login INTEGER, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS settlement_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, settlement_id TEXT, from_status TEXT, to_status TEXT, actor TEXT, ts INTEGER
+);
+-- ===== Phase 2/3: Loyalty, Corporate Wallet, Restaurant/Marketplace (§15, §19, §9) =====
+CREATE TABLE IF NOT EXISTS loyalty_accounts (
+  id TEXT PRIMARY KEY, customer_key TEXT UNIQUE, points_balance INTEGER DEFAULT 0, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS loyalty_transactions (
+  id TEXT PRIMARY KEY, account_id TEXT, order_id TEXT, points_delta INTEGER, reason TEXT, created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS merchants (
+  id TEXT PRIMARY KEY, property_id TEXT, name_ar TEXT, name_en TEXT, kind TEXT DEFAULT 'alnadl',
+  commission_rate REAL DEFAULT 0, status TEXT DEFAULT 'Active'
+);
+CREATE TABLE IF NOT EXISTS wallet_accounts (
+  id TEXT PRIMARY KEY, partner_id TEXT, owner_name TEXT, owner_ref TEXT,
+  monthly_budget REAL, spent_this_period REAL DEFAULT 0, period_start INTEGER,
+  policy_json TEXT, status TEXT DEFAULT 'Active', created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id TEXT PRIMARY KEY, wallet_id TEXT, order_id TEXT, amount REAL, type TEXT, created_at INTEGER
+);
+`);
+
+function hash(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); }
+
+function seedIfEmpty() {
+  const has = db.prepare('SELECT COUNT(*) c FROM partners').get().c;
+  if (has > 0) return;
+
+  const partnerId = 'pt_nova';
+  db.prepare(`INSERT INTO partners (id,name_ar,name_en,legal_name,contract_ref,status) VALUES (?,?,?,?,?,?)`)
+    .run(partnerId, 'فندق نوفا', 'Hotel Nova', 'Nova Hospitality Co.', 'CNT-2026-014', 'Active');
+
+  const propId = 'prop_nova_main';
+  db.prepare(`INSERT INTO properties (id,partner_id,name_ar,name_en,timezone,address,status) VALUES (?,?,?,?,?,?,?)`)
+    .run(propId, partnerId, 'اللوبي والمسبح', 'Lobby & Pool Deck', 'Asia/Riyadh', 'Riyadh, KSA', 'Active');
+
+  const zones = [
+    ['z_lobby', 'اللوبي', 'Lobby', 'Lounge'],
+    ['z_pool', 'المسبح', 'Pool Deck', 'Leisure'],
+    ['z_meet', 'قاعات الاجتماعات', 'Meeting Rooms', 'Business'],
+  ];
+  for (const [id, ar, en, type] of zones) {
+    db.prepare(`INSERT INTO zones (id,property_id,name_ar,name_en,type,status) VALUES (?,?,?,?,?,'Active')`)
+      .run(id, propId, ar, en, type);
+  }
+
+  const points = [
+    ['PT-014', 'z_lobby', 'Table 17', 'Table'],
+    ['PT-021', 'z_pool', 'Pool P08', 'Seat'],
+    ['PT-033', 'z_meet', 'Meeting M3', 'Room'],
+  ];
+  for (const [id, zoneId, label, type] of points) {
+    db.prepare(`INSERT INTO points (id,zone_id,code,label,type,active) VALUES (?,?,?,?,?,1)`)
+      .run(id, zoneId, id, label, type);
+    db.prepare(`INSERT INTO qr_tokens (id,point_id,token,active,created_at) VALUES (?,?,?,1,?)`)
+      .run(uid('qr'), id, crypto.randomBytes(6).toString('hex'), Date.now());
+  }
+
+  const cats = [
+    ['cat_coffee', 'قهوة', 'Coffee', 1],
+    ['cat_bakery', 'مخبوزات', 'Bakery', 2],
+    ['cat_food', 'أطعمة', 'Food', 3],
+    ['cat_dessert', 'حلويات', 'Desserts', 4],
+  ];
+  for (const [id, ar, en, order] of cats) {
+    db.prepare(`INSERT INTO categories (id,property_id,name_ar,name_en,sort_order,status) VALUES (?,?,?,?,?,'Active')`)
+      .run(id, propId, ar, en, order);
+  }
+
+  // ---- Merchants (Restaurant/Marketplace Integration, §9/§15) ----
+  const merchantAlnadl = 'mer_alnadl';
+  db.prepare(`INSERT INTO merchants (id,property_id,name_ar,name_en,kind,commission_rate,status) VALUES (?,?,?,?,?,?,'Active')`)
+    .run(merchantAlnadl, propId, 'قهوة النادل', 'Coffee by Alnadl', 'alnadl', 0);
+  const merchantRestaurant = 'mer_novarest';
+  db.prepare(`INSERT INTO merchants (id,property_id,name_ar,name_en,kind,commission_rate,status) VALUES (?,?,?,?,?,?,'Active')`)
+    .run(merchantRestaurant, propId, 'مطعم نوفا', 'Nova Restaurant (Partner)', 'partner_restaurant', 0.12);
+
+  const products = [
+    ['p_latte', 'cat_coffee', merchantAlnadl, 'SKU-001', 'لاتيه إسباني', 'Spanish Latte', 22],
+    ['p_amer', 'cat_coffee', merchantAlnadl, 'SKU-002', 'قهوة أمريكانو', 'Americano', 16],
+    ['p_capp', 'cat_coffee', merchantAlnadl, 'SKU-003', 'كابتشينو', 'Cappuccino', 19],
+    ['p_croi', 'cat_bakery', merchantAlnadl, 'SKU-004', 'كرواسون', 'Croissant', 14],
+    ['p_muff', 'cat_bakery', merchantAlnadl, 'SKU-005', 'مافن توت', 'Berry Muffin', 15],
+    ['p_sand', 'cat_food', merchantAlnadl, 'SKU-006', 'ساندويتش دجاج', 'Chicken Sandwich', 32],
+    ['p_cake', 'cat_dessert', merchantAlnadl, 'SKU-007', 'تشيز كيك', 'Cheesecake', 24],
+    ['p_grill', 'cat_food', merchantRestaurant, 'SKU-008', 'مشاوير مشكلة', 'Mixed Grill Platter', 68],
+    ['p_pasta', 'cat_food', merchantRestaurant, 'SKU-009', 'باستا ألفريدو', 'Alfredo Pasta', 46],
+  ];
+  for (const [id, catId, merchantId, sku, ar, en, price] of products) {
+    db.prepare(`INSERT INTO products (id,category_id,merchant_id,sku,name_ar,name_en,base_price,status) VALUES (?,?,?,?,?,?,?,'Active')`)
+      .run(id, catId, merchantId, sku, ar, en, price);
+  }
+  db.prepare("UPDATE products SET status='Inactive' WHERE id='p_muff'").run();
+
+  const variants = [
+    ['p_latte', 'صغير', 'Small', 0], ['p_latte', 'وسط', 'Medium', 3], ['p_latte', 'كبير', 'Large', 6],
+    ['p_amer', 'صغير', 'Small', 0], ['p_amer', 'وسط', 'Medium', 3], ['p_amer', 'كبير', 'Large', 5],
+    ['p_capp', 'صغير', 'Small', 0], ['p_capp', 'كبير', 'Large', 5],
+  ];
+  for (const [pid, ar, en, delta] of variants) {
+    db.prepare(`INSERT INTO variants (id,product_id,name_ar,name_en,price_delta) VALUES (?,?,?,?,?)`)
+      .run(uid('vr'), pid, ar, en, delta);
+  }
+
+  const addonsSeed = [
+    ['p_latte', 'شوت إضافي', 'Extra Shot', 5], ['p_latte', 'حليب شوفان', 'Oat Milk', 6], ['p_latte', 'شراب فانيليا', 'Vanilla Syrup', 4],
+    ['p_amer', 'شوت إضافي', 'Extra Shot', 5],
+    ['p_croi', 'مربى', 'Jam', 3], ['p_croi', 'زبدة إضافية', 'Extra Butter', 2],
+    ['p_sand', 'بطاطس', 'Fries', 8],
+  ];
+  for (const [pid, ar, en, price] of addonsSeed) {
+    db.prepare(`INSERT INTO addons (id,product_id,name_ar,name_en,price,required) VALUES (?,?,?,?,?,0)`)
+      .run(uid('ad'), pid, ar, en, price);
+  }
+
+  // ---- SaaS commercial packages (§12 من وثيقة المفهوم) ----
+  const now = Date.now();
+  const plans = [
+    ['plan_operate', 'OPERATE', 'ALNADL OPERATE', 'ALNADL OPERATE', 0, 0,
+      { qrOrdering:false, digitalPayment:false, partnerDashboard:false, loyalty:false, marketplace:false, analytics:false, corporateWallet:false }],
+    ['plan_smart', 'SMART', 'ALNADL SMART', 'ALNADL SMART', 2500, 0.02,
+      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:false, marketplace:false, analytics:true, corporateWallet:false }],
+    ['plan_platform', 'PLATFORM', 'ALNADL PLATFORM', 'ALNADL PLATFORM', 6000, 0.025,
+      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:true, marketplace:true, analytics:true, corporateWallet:true }],
+  ];
+  for (const [id, code, ar, en, fee, techRate, features] of plans) {
+    db.prepare(`INSERT INTO plans (id,code,name_ar,name_en,monthly_fee,tech_fee_rate,features_json) VALUES (?,?,?,?,?,?,?)`)
+      .run(id, code, ar, en, fee, techRate, JSON.stringify(features));
+  }
+  db.prepare(`INSERT INTO subscriptions (id,partner_id,plan_id,status,started_at,renews_at) VALUES (?,?,?,?,?,?)`)
+    .run(uid('sub'), partnerId, 'plan_platform', 'Active', now, now + 30 * 86400000);
+
+  // ---- second tenant, to prove real multi-tenant isolation, not a single-client build ----
+  const partner2 = 'pt_alrowad';
+  db.prepare(`INSERT INTO partners (id,name_ar,name_en,legal_name,contract_ref,status) VALUES (?,?,?,?,?,?)`)
+    .run(partner2, 'شركة الرواد', 'Al-Rowad Corporate HQ', 'Al-Rowad Holding', 'CNT-2026-021', 'Active');
+  const prop2 = 'prop_alrowad_hq';
+  db.prepare(`INSERT INTO properties (id,partner_id,name_ar,name_en,timezone,address,status) VALUES (?,?,?,?,?,?,?)`)
+    .run(prop2, partner2, 'المقر الرئيسي', 'Head Office', 'Asia/Riyadh', 'Riyadh, KSA', 'Active');
+  db.prepare(`INSERT INTO subscriptions (id,partner_id,plan_id,status,started_at,renews_at) VALUES (?,?,?,?,?,?)`)
+    .run(uid('sub'), partner2, 'plan_platform', 'Active', now, now + 30 * 86400000);
+
+  // ---- corporate wallet demo (Al-Rowad HQ is exactly the "corporate" use case from §8) ----
+  const walletId = uid('wal');
+  db.prepare(`INSERT INTO wallet_accounts (id,partner_id,owner_name,owner_ref,monthly_budget,spent_this_period,period_start,policy_json,status,created_at)
+              VALUES (?,?,?,?,?,?,?,?,'Active',?)`)
+    .run(walletId, partner2, 'Employee Wallet Pool', 'dept:engineering', 500, 0, now, JSON.stringify({ perOrderCap: 60 }), now);
+  // also on Hotel Nova (PLATFORM tier), so the seeded QR points can demo split payment out of the box
+  db.prepare(`INSERT INTO wallet_accounts (id,partner_id,owner_name,owner_ref,monthly_budget,spent_this_period,period_start,policy_json,status,created_at)
+              VALUES (?,?,?,?,?,?,?,?,'Active',?)`)
+    .run(uid('wal'), partnerId, 'Executive Lounge Wallet', 'guest:exec-lounge', 300, 0, now, JSON.stringify({ perOrderCap: 40 }), now);
+
+  // ---- loyalty account demo ----
+  const loyaltyId = uid('loy');
+  db.prepare(`INSERT INTO loyalty_accounts (id,customer_key,points_balance,created_at) VALUES (?,?,?,?)`)
+    .run(loyaltyId, '+9665xxxxxxx', 340, now);
+
+  const users = [
+    ['customer_demo', 'Customer', partnerId],
+    ['operator', 'Operator', partnerId],
+    ['runner', 'Runner', partnerId],
+    ['manager', 'SiteManager', partnerId],
+    ['partner', 'PartnerViewer', partnerId],
+    ['partneradmin', 'PartnerAdmin', partnerId],
+    ['finance', 'AlnadlFinance', null],
+    ['admin', 'SuperAdmin', null],
+  ];
+  for (const [username, role, scope] of users) {
+    db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)
+      .run(uid('u'), username, hash(username), role, scope, Date.now());
+  }
+
+  // a couple of demo promo codes
+  db.prepare(`INSERT INTO promotions (id,property_id,code,discount_type,discount_value,valid_from,valid_to,active) VALUES (?,?,?,?,?,?,?,?)`)
+    .run(uid('promo'), propId, 'WELCOME10', 'percent', 10, 0, now + 365 * 86400000, 1);
+  db.prepare(`INSERT INTO promotions (id,property_id,code,discount_type,discount_value,valid_from,valid_to,active) VALUES (?,?,?,?,?,?,?,?)`)
+    .run(uid('promo'), propId, 'SAVE5', 'flat', 5, 0, now + 365 * 86400000, 1);
+
+  // a little order history so KDS / partner screens aren't empty on first boot
+  seedOrders(propId, partnerId);
+}
+
+function seedOrders(propId, partnerId) {
+  const now = Date.now();
+  const rows = [
+    ['ORD-1836', 'z_meet', 'PT-033', 'Delivered', 48, [['p_sand', 2, 32, 'Chicken Sandwich x2 + Fries']]],
+    ['ORD-1839', 'z_meet', 'PT-033', 'Ready', 9, [['p_cake', 1, 24, 'Cheesecake']]],
+    ['ORD-1842', 'z_lobby', 'PT-014', 'Preparing', 3, [['p_latte', 2, 31, 'Spanish Latte (Large, Oat Milk)'], ['p_croi', 1, 14, 'Croissant']]],
+    ['ORD-1843', 'z_pool', 'PT-021', 'Accepted', 1, [['p_amer', 4, 16, 'Americano']]],
+    ['ORD-1844', 'z_lobby', 'PT-014', 'Delivered', 22, [['p_capp', 1, 19, 'Cappuccino']]],
+  ];
+  for (const [id, zoneId, pointId, status, minAgo, items] of rows) {
+    const createdAt = now - minAgo * 60000;
+    const subtotal = items.reduce((s, it) => s + it[1] * it[2], 0);
+    const vat = subtotal * 0.15;
+    db.prepare(`INSERT INTO orders (id,partner_id,property_id,zone_id,point_id,status,subtotal,vat,total,payment_ref,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, partnerId, propId, zoneId, pointId, status, subtotal, vat, subtotal + vat, uid('pay'), createdAt, createdAt);
+    for (const [pid, qty, unit, label] of items) {
+      db.prepare(`INSERT INTO order_items (id,order_id,product_id,name_ar,name_en,qty,unit_price,variant_json,addons_json,notes,line_total)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(uid('oi'), id, pid, label, label, qty, unit, '{}', '[]', '', qty * unit);
+    }
+    db.prepare(`INSERT INTO payments (id,order_id,gateway_ref,amount,status,method,created_at) VALUES (?,?,?,?,?,?,?)`)
+      .run(uid('pay'), id, uid('gw'), subtotal + vat, 'Captured', 'card', createdAt);
+  }
+}
+
+seedIfEmpty();
+
+module.exports = { db, uid, hash };
