@@ -235,7 +235,7 @@ Authorization: Bearer <token>
 مقارنة GMV/الطلبات عبر كل الشركاء.
 ### `GET /api/audit?limit=100`
 ### `GET /api/admin/notifications?limit=100`
-سجل أحداث الإشعارات (بديل مؤقت لمزوّد SMS/Email حقيقي — راجع README).
+**⚠️ Q16 — Integration Pending، ليس خدمة إشعار عاملة**: يُرجع سجل أحداث فقط (`notifications` table) — لا SMS ولا Email ولا Push فعلي يصل لأي مستخدم حقيقي. راجع التعليق في `notify()` بـ`server.js` ونمط `lib/payment.js` (نقطة تمديد واحدة واضحة لمزوّد حقيقي لاحقًا).
 
 ---
 

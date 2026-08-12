@@ -61,6 +61,14 @@ const NOTIFY_MATRIX = { // event -> which roles would receive it in production
   order_delivered: ['Customer'], order_cancelled: ['Customer', 'SiteManager'], sla_breach: ['SiteManager'],
   order_refunded: ['Customer', 'AlnadlFinance'],
 };
+// Q16: this records notification EVENTS to a database log — it is NOT a
+// working SMS/Email/Push notification service. No message is ever actually
+// sent to anyone. Status: INTEGRATION PENDING (matches the same
+// architecture pattern as lib/payment.js — one clear extension point, not
+// wired to a real provider). A real integration would replace/extend this
+// function to call an actual provider SDK (Twilio, SendGrid, FCM...) after
+// writing the log row, and should handle provider failures/retries
+// separately from the log write itself.
 function notify(event, orderId, channel) {
   const recipients = NOTIFY_MATRIX[event] || [];
   for (const role of recipients) {
