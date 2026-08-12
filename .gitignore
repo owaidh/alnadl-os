@@ -1,3 +1,10 @@
 data.sqlite
+data.sqlite-shm
+data.sqlite-wal
+data.sqlite-journal
+test-*.sqlite
+test-*.sqlite-shm
+test-*.sqlite-wal
+test-*.sqlite-journal
 *.log
 node_modules/
