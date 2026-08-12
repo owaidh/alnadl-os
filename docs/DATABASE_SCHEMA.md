@@ -1,3 +1,5 @@
+> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+
 # Alnadl Hospitality OS — Database Schema
 
 المصدر الفعلي (Single Source of Truth) لهذا المخطط هو `db.js`. هذا المستند شرح مقروء له، وليس بديلاً عنه — عند أي تعارض، الكود هو المرجع.

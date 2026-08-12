@@ -1,3 +1,5 @@
+> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+
 # Alnadl Hospitality OS — التسليم الفني النهائي (Final Technical Handover)
 
 هذا المستند هو نقطة الدخول الرسمية لكل ما سلَّمته شركة (أداة) التنفيذ، ويطابق قائمة المخرجات المطلوبة في §27 من وثيقة `05_Alnadl_Hospitality_OS_Screen_Spec_Wireframes_Developer_Handoff_v1.docx`.

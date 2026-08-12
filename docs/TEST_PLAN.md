@@ -1,3 +1,5 @@
+> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+
 # Alnadl Hospitality OS — Test Plan & UAT Checklist
 
 هذا المستند يغطي مطلبين من §22 و§21 (معايير القبول العامة للـMVP) في مواصفات الشاشات: خطة اختبار قبل الإطلاق، وقائمة قبول (UAT) يوقّع عليها فريق النادل قبل التشغيل الفعلي.

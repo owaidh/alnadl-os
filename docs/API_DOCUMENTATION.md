@@ -1,3 +1,5 @@
+> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+
 # Alnadl Hospitality OS — API Documentation
 
 مرجع كامل لكل نقاط الـ API. الأساس (base URL) عند التشغيل المحلي: `http://localhost:8787`.
