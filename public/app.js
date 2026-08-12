@@ -110,6 +110,7 @@ const S = {
   ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
+  refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
   ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
 };
@@ -393,6 +394,28 @@ const App = {
   },
 
   async loadSettlements(){ S.settlements = await api('GET','/api/admin/settlements',null,true); render(); },
+
+  /* ---- refunds (Q03) ---- */
+  async lookupOrderForRefund(){
+    const orderId = (S.refundOrderIdInput || document.getElementById('refundOrderId')?.value || '').trim();
+    if(!orderId) return;
+    S.refundOrderIdInput = orderId;
+    try{
+      const order = await api('GET', `/api/orders/${orderId}`);
+      const refunds = await api('GET', `/api/orders/${orderId}/refunds`, null, true);
+      S.refundLookupOrder = order; S.refundLookupRefunds = refunds; render();
+    }catch(e){ showErr(S.lang==='ar'?'لم يتم العثور على الطلب':'Order not found'); }
+  },
+  async submitRefund(){
+    const amount = document.getElementById('refundAmount').value;
+    const reason = document.getElementById('refundReason').value.trim();
+    if(!reason){ showErr(S.lang==='ar'?'سبب الاسترجاع إلزامي':'Refund reason is required'); return; }
+    try{
+      await api('POST', `/api/orders/${S.refundLookupOrder.id}/refund`, { amount, reason }, true);
+      showToast(S.lang==='ar'?'تمت معالجة الاسترجاع':'Refund processed');
+      await App.lookupOrderForRefund();
+    }catch(e){ showErr(e.message); }
+  },
   async createSettlement(){
     const period = new Date().toISOString().slice(0,7);
     try{ await api('POST','/api/admin/settlements',{partnerId:S.PARTNER_ID,period},true); showToast(t('toast_saved')); await App.loadSettlements(); }
@@ -881,8 +904,8 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
-    AlnadlFinance:[['settlements', t('revShareTitle')],['audit', t('auditLog')]],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
+    AlnadlFinance:[['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
     PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
     PartnerAdmin:[['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
@@ -903,6 +926,7 @@ function renderStaffShell(){
   else if(S.screen==='outlets') inner = renderOutlets();
   else if(S.screen==='revenue') inner = renderRevenueModels();
   else if(S.screen==='branding') inner = renderBranding();
+  else if(S.screen==='refunds') inner = renderRefunds();
   else if(S.screen==='merchants') inner = renderMerchants();
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
@@ -1305,6 +1329,41 @@ function renderBranding(){
     </div>
     <button class="btn-small brass" onclick="App.saveBranding()">${t('save')}</button>
   </div>`;
+}
+
+function renderRefunds(){
+  const o = S.refundLookupOrder;
+  const totalPaid = o ? o.total : 0;
+  const alreadyRefunded = (S.refundLookupRefunds||[]).filter(r=>r.status==='Refunded').reduce((s,r)=>s+r.amount,0);
+  const remaining = Math.round((totalPaid - alreadyRefunded) * 100) / 100;
+  const refundable = o && ['Delivered','Partially Refunded','Cancelled'].includes(o.status);
+  return `
+  <div class="panel"><h3>${S.lang==='ar'?'البحث عن طلب':'Look up an order'}</h3>
+    <p class="ph">${S.lang==='ar'?'أدخل رقم الطلب (مثال: ORD-1806) لمعالجة استرجاع كامل أو جزئي':'Enter an order ID (e.g. ORD-1806) to process a full or partial refund'}</p>
+    <div style="display:flex;gap:8px">
+      <input id="refundOrderId" placeholder="ORD-1806" value="${S.refundOrderIdInput||''}" oninput="S.refundOrderIdInput=this.value" style="flex:1;background:var(--ink-800);border:1px solid var(--ink-700);border-radius:8px;padding:9px 12px;color:var(--cream-050)">
+      <button class="btn-small brass" onclick="App.lookupOrderForRefund()">${S.lang==='ar'?'بحث':'Search'}</button>
+    </div>
+  </div>
+  ${o? `
+  <div class="grid2">
+    <div class="panel">
+      <h3>${o.id} <span class="badge ${refundable?'ready':'cancel'}" style="margin-inline-start:8px">${o.status}</span></h3>
+      <div class="notebox" style="direction:ltr;unicode-bidi:embed;text-align:start">
+        Total paid: ${totalPaid} SAR &nbsp;·&nbsp; Already refunded: ${alreadyRefunded} SAR &nbsp;·&nbsp; Remaining refundable: ${remaining} SAR
+      </div>
+      ${refundable? `
+        <div class="darkfield" style="margin-top:12px"><label>${S.lang==='ar'?'المبلغ (ر.س)':'Amount (SAR)'}</label><input id="refundAmount" type="number" max="${remaining}" value="${remaining}"></div>
+        <div class="darkfield"><label>${S.lang==='ar'?'السبب (إلزامي لسجل التدقيق)':'Reason (required for audit trail)'}</label><input id="refundReason" placeholder="${S.lang==='ar'?'مثال: خطأ في الطلب':'e.g. Order error'}"></div>
+        <button class="btn-small brass" onclick="App.submitRefund()">${S.lang==='ar'?'معالجة الاسترجاع':'Process Refund'}</button>
+      ` : `<p class="ph">${S.lang==='ar'?'هذا الطلب غير قابل للاسترجاع في حالته الحالية (يتطلب Delivered أو Cancelled)':'This order is not refundable in its current state (requires Delivered or Cancelled)'}</p>`}
+    </div>
+    <div class="panel"><h3>${S.lang==='ar'?'سجل الاسترجاعات لهذا الطلب':'Refund history for this order'}</h3>
+      <table class="datatable"><tr><th>${S.lang==='ar'?'المبلغ':'Amount'}</th><th>${S.lang==='ar'?'النوع':'Type'}</th><th>${S.lang==='ar'?'السبب':'Reason'}</th><th>${S.lang==='ar'?'بواسطة':'By'}</th></tr>
+      ${(S.refundLookupRefunds||[]).map(r=>`<tr><td>${money(r.amount)}</td><td>${r.type}</td><td>${r.reason&&r.reason.startsWith('__idem__')?'—':r.reason}</td><td>${r.actor}</td></tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--ink-400)">${S.lang==='ar'?'لا استرجاعات سابقة':'No prior refunds'}</td></tr>`}
+      </table>
+    </div>
+  </div>`:''}`;
 }
 
 function renderMerchants(){

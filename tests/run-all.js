@@ -10,6 +10,7 @@ const suites = [
   './api-phase4.js',
   './api-security.js',
   './concurrency.js',
+  './financial-regression.js',
 ];
 
 (async () => {

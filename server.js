@@ -16,7 +16,7 @@ const { getSubscription, requireFeature } = require('./lib/plan.js');
 const { getGateway } = require('./lib/payment.js');
 const { getOrCreateAccount, earnPoints, quoteRedemption, commitRedemption } = require('./lib/loyalty.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
-const { getActiveModel, computeAmounts, recordOrderRevenue } = require('./lib/revenue-engine.js');
+const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const gateway = getGateway();
 
 const PORT = process.env.PORT || 8787;
@@ -59,6 +59,7 @@ const NOTIFY_MATRIX = { // event -> which roles would receive it in production
   order_created: ['Customer'], payment_success: ['Customer'], payment_failed: ['Customer'],
   order_accepted: ['Customer'], order_ready: ['Customer', 'Runner'], order_out: ['Customer'],
   order_delivered: ['Customer'], order_cancelled: ['Customer', 'SiteManager'], sla_breach: ['SiteManager'],
+  order_refunded: ['Customer', 'AlnadlFinance'],
 };
 function notify(event, orderId, channel) {
   const recipients = NOTIFY_MATRIX[event] || [];
@@ -350,6 +351,76 @@ on('GET', '/api/orders/:id', null, async (req, res, p) => {
   const ctx = getOrderWithContext(p.id);
   if (!ctx) return sendJSON(res, 404, { error: 'Not found' });
   sendJSON(res, 200, orderPublicView(ctx.order, ctx.items));
+});
+
+/* ------------------------------ REFUNDS (Q03) --------------------------------- */
+on('POST', '/api/orders/:id/refund', ['AlnadlFinance', 'SiteManager', 'SuperAdmin'], async (req, res, p, q, session) => {
+  const body = await readBody(req);
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(p.id);
+  if (!order) return sendJSON(res, 404, { error: 'Order not found' });
+
+  // Idempotency: an optional client-supplied key. A repeated call with the
+  // SAME key returns the original result rather than refunding twice —
+  // distinct from two legitimately separate partial refunds, which use
+  // different keys (or none).
+  if (body.idempotencyKey) {
+    const existing = db.prepare('SELECT * FROM refunds WHERE order_id = ? AND reason = ?').get(p.id, '__idem__' + body.idempotencyKey);
+    if (existing) return sendJSON(res, 200, { id: existing.id, status: order.status, idempotent: true });
+  }
+
+  // Refund authorization comes from the route-level role guard
+  // (AlnadlFinance/SiteManager/SuperAdmin) — NOT from actorAllowed() against
+  // the order's current status, which governs ordinary KDS/Runner
+  // transitions and would incorrectly reject e.g. AlnadlFinance acting on
+  // a 'Paid' order (a state AlnadlFinance has no normal transition from).
+  // The state check below is what actually governs whether THIS order can
+  // be refunded right now.
+  if (!['Delivered', 'Partially Refunded', 'Cancelled'].includes(order.status)) {
+    return sendJSON(res, 409, { error: `Order in status ${order.status} is not refundable` });
+  }
+
+  const totalPaid = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM payments WHERE order_id = ? AND status = 'Captured'`).get(p.id).s;
+  const alreadyRefunded = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE order_id = ? AND status = 'Refunded'`).get(p.id).s;
+  const remaining = Math.round((totalPaid - alreadyRefunded) * 100) / 100;
+  const amount = Math.round((parseFloat(body.amount) || 0) * 100) / 100;
+
+  if (amount <= 0) return sendJSON(res, 400, { error: 'Refund amount must be positive' });
+  if (amount > remaining + 0.01) return sendJSON(res, 409, { error: `Refund amount (${amount}) exceeds remaining refundable balance (${remaining}) — prevents double/over-refund` });
+  if (!body.reason) return sendJSON(res, 400, { error: 'Refund reason is required for the audit trail' });
+
+  // --- gateway call (Q03: prevent double capture/refund; real adapters
+  //     must also verify the webhook and handle provider timeouts here) ---
+  const gatewayResult = await gateway.refund(order.payment_ref, amount);
+  if (gatewayResult.status !== 'Refunded') {
+    return sendJSON(res, 502, { error: 'Payment provider declined or failed to process the refund' });
+  }
+
+  const isFull = Math.abs(remaining - amount) < 0.01;
+  const targetStatus = isFull ? 'Refunded' : 'Partially Refunded';
+  const refundId = uid('rf');
+  db.prepare(`INSERT INTO refunds (id,order_id,amount,type,reason,gateway_ref,status,actor,actor_role,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(refundId, p.id, amount, isFull ? 'full' : 'partial', body.idempotencyKey ? '__idem__' + body.idempotencyKey : body.reason, gatewayResult.refundRef, 'Refunded', session.username, session.role, Date.now());
+
+  if (targetStatus !== order.status) {
+    if (!canTransition(order.status, targetStatus)) return sendJSON(res, 409, { error: `Invalid transition ${order.status} → ${targetStatus}` });
+    db.prepare('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?').run(targetStatus, Date.now(), p.id);
+  }
+  audit(session.username, session.role, 'refund', p.id, { status: order.status, alreadyRefunded }, { status: targetStatus, refundAmount: amount, reason: body.reason }, body.reason);
+
+  // Q03: reverse the Revenue Ledger proportionally so this refund is never
+  // counted in a future settlement's Eligible Base. VAT is a pass-through
+  // tax, never part of eligible_base to begin with (see recordOrderRevenue),
+  // so the refund must be converted to its pre-VAT equivalent before being
+  // reversed — refunding the VAT-inclusive amount directly would over-correct
+  // the ledger by the VAT portion.
+  recordRefundRevenue(p.id, amount / 1.15);
+
+  notify('order_refunded', p.id, 'push');
+  sendJSON(res, 200, { id: refundId, orderId: p.id, amount, status: targetStatus, remaining: Math.round((remaining - amount) * 100) / 100 });
+});
+
+on('GET', '/api/orders/:id/refunds', ['AlnadlFinance', 'SiteManager', 'SuperAdmin'], async (req, res, p) => {
+  sendJSON(res, 200, db.prepare('SELECT * FROM refunds WHERE order_id = ? ORDER BY created_at DESC').all(p.id));
 });
 
 /* ------------------------------ OPERATIONS (KDS) --------------------------------- */
