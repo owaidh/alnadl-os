@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at INTEGER, updated_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS order_items (
-  id TEXT PRIMARY KEY, order_id TEXT, product_id TEXT, merchant_id TEXT, name_ar TEXT, name_en TEXT,
+  id TEXT PRIMARY KEY, order_id TEXT, product_id TEXT, merchant_id TEXT, outlet_id TEXT, child_order_id TEXT, name_ar TEXT, name_en TEXT,
   qty INTEGER, unit_price REAL, variant_json TEXT, addons_json TEXT, notes TEXT, line_total REAL
 );
 CREATE TABLE IF NOT EXISTS payments (
@@ -150,6 +150,18 @@ CREATE TABLE IF NOT EXISTS outlet_availability (
 -- QR analytics events (§5) — scans vs resulting orders, per token.
 CREATE TABLE IF NOT EXISTS qr_analytics_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT, event_type TEXT, order_id TEXT, ts INTEGER
+);
+-- ===== Phase 4 Increment 2: Unified Cart / Parent-Child Orders (§8) =====
+-- Purely additive. An "orders" row is created EXACTLY as before for every
+-- single-outlet cart (the overwhelming majority, and 100% of everything
+-- built before Phase 4) -- "child_orders" rows only get created when a cart
+-- actually spans more than one outlet AND the partner's plan includes
+-- unifiedCart. "orders.status" remains the single source of truth the
+-- customer tracking screen reads; when children exist it is derived from
+-- them (see deriveParentStatus in server.js) rather than set directly.
+CREATE TABLE IF NOT EXISTS child_orders (
+  id TEXT PRIMARY KEY, parent_order_id TEXT, outlet_id TEXT, status TEXT DEFAULT 'Paid',
+  subtotal REAL, station_id TEXT, cancel_reason TEXT, created_at INTEGER, updated_at INTEGER
 );
 `);
 
@@ -364,6 +376,8 @@ function migratePhase4Outlets() {
   const tryAlter = (sql) => { try { db.exec(sql); } catch (e) { /* column already exists — fine */ } };
   tryAlter(`ALTER TABLE qr_tokens ADD COLUMN qr_type TEXT DEFAULT 'table'`);
   tryAlter(`ALTER TABLE products ADD COLUMN outlet_id TEXT`);
+  tryAlter(`ALTER TABLE order_items ADD COLUMN outlet_id TEXT`);
+  tryAlter(`ALTER TABLE order_items ADD COLUMN child_order_id TEXT`);
 
   // --- 2) Backfill: every property with zero outlets gets one created from
   //        its existing merchants (Phase 3) — or a single default outlet if

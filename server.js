@@ -214,11 +214,37 @@ on('POST', '/api/orders', null, async (req, res) => {
   db.prepare(`INSERT INTO orders (id,partner_id,property_id,zone_id,point_id,customer_name,customer_phone,status,subtotal,vat,total,payment_ref,promo_code,discount_amount,loyalty_points_used,loyalty_account_id,wallet_id,created_at,updated_at)
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(id, property.partner_id, property.id, zone.id, point.id, customerName || null, customerPhone || null, 'Created', subtotal, vat, total, paymentRef, appliedCode, discountAmount + loyaltyDiscount, loyaltyPointsUsed, loyaltyAccountId, body.walletId || null, now, now);
+  const insertedItemIds = [];
   for (const ri of resolvedItems) {
-    db.prepare(`INSERT INTO order_items (id,order_id,product_id,merchant_id,name_ar,name_en,qty,unit_price,variant_json,addons_json,notes,line_total)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(uid('oi'), id, ri.prod.id, ri.prod.merchant_id, ri.prod.name_ar, ri.prod.name_en, ri.qty, ri.unit, JSON.stringify(ri.variant), JSON.stringify(ri.addonRows), ri.notes, ri.lineTotal);
+    const itemId = uid('oi');
+    db.prepare(`INSERT INTO order_items (id,order_id,product_id,merchant_id,outlet_id,name_ar,name_en,qty,unit_price,variant_json,addons_json,notes,line_total)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(itemId, id, ri.prod.id, ri.prod.merchant_id, ri.prod.outlet_id || null, ri.prod.name_ar, ri.prod.name_en, ri.qty, ri.unit, JSON.stringify(ri.variant), JSON.stringify(ri.addonRows), ri.notes, ri.lineTotal);
+    insertedItemIds.push({ itemId, outletId: ri.prod.outlet_id || null });
   }
+
+  // Unified Cart (Phase 4 §8): if this cart's items span more than one Outlet
+  // AND the partner's plan includes unifiedCart, fan the order out into
+  // child_orders — one per outlet — so KDS can route each independently.
+  // A single-outlet cart (or a plan without unifiedCart) creates ZERO
+  // child_orders and behaves 100% exactly like every order before Phase 4.
+  const distinctOutlets = [...new Set(insertedItemIds.map(x => x.outletId).filter(Boolean))];
+  const sub4 = getSubscription(property.partner_id);
+  if (distinctOutlets.length > 1 && sub4 && sub4.features.unifiedCart) {
+    for (const outletId of distinctOutlets) {
+      const outlet = db.prepare('SELECT * FROM outlets WHERE id = ?').get(outletId);
+      const childId = 'CHD-' + uid('');
+      const childSubtotal = insertedItemIds.filter(x => x.outletId === outletId)
+        .reduce((s, x) => s + (db.prepare('SELECT line_total FROM order_items WHERE id=?').get(x.itemId)?.line_total || 0), 0);
+      db.prepare(`INSERT INTO child_orders (id,parent_order_id,outlet_id,status,subtotal,station_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`)
+        .run(childId, id, outletId, 'Created', childSubtotal, outlet ? outlet.station_id : null, now, now);
+      for (const x of insertedItemIds.filter(x => x.outletId === outletId)) {
+        db.prepare('UPDATE order_items SET child_order_id = ? WHERE id = ?').run(childId, x.itemId);
+      }
+    }
+    audit('system', 'System', 'unified_cart_split', id, null, { outlets: distinctOutlets.length }, null);
+  }
+
   // Created -> Payment Pending (system-driven, matches §10 first transition)
   db.prepare(`UPDATE orders SET status='Payment Pending', updated_at=? WHERE id=?`).run(Date.now(), id);
   audit('system', 'System', 'order_create', id, null, { status: 'Payment Pending' }, null);
@@ -277,6 +303,12 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
   db.prepare('UPDATE orders SET status=?, updated_at=?, wallet_covered=? WHERE id=?').run(newStatus, Date.now(), walletCovered, order.id);
   audit('gateway:' + gateway.name, 'Gateway', 'payment_webhook', order.id, { status: order.status }, { status: newStatus }, null);
   notify(newStatus === 'Paid' ? 'payment_success' : 'payment_failed', order.id, 'push');
+  // Unified Cart: cascade Paid to every child order fanned out at creation (§8).
+  // If payment failed, children stay in 'Created' — nothing to cascade, since
+  // they were never sent to KDS in the first place.
+  if (succeeded) {
+    db.prepare(`UPDATE child_orders SET status='Paid', updated_at=? WHERE parent_order_id=? AND status='Created'`).run(Date.now(), order.id);
+  }
 
   // Loyalty: commit any point redemption now that payment actually succeeded (§15)
   if (succeeded && order.loyalty_points_used > 0 && order.loyalty_account_id) {
@@ -307,11 +339,32 @@ on('GET', '/api/ops/queue', ['Operator', 'SiteManager', 'SuperAdmin'], async (re
   const rows = db.prepare(`
     SELECT o.*, pt.label AS point_label FROM orders o LEFT JOIN points pt ON pt.id = o.point_id
     WHERE o.status IN ('Paid','Accepted','Preparing','Ready','Out for Delivery') ORDER BY o.created_at ASC`).all();
-  const withItems = rows.map(o => {
-    const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(o.id);
-    return { ...o, itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', ') };
-  });
-  sendJSON(res, 200, withItems);
+  const result = [];
+  for (const o of rows) {
+    const children = db.prepare('SELECT * FROM child_orders WHERE parent_order_id = ?').all(o.id);
+    if (children.length === 0) {
+      // Legacy single-outlet path — identical shape to every version before Phase 4.
+      const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(o.id);
+      result.push({ ...o, itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', ') });
+    } else {
+      // Unified Cart (§8, §13): the Parent itself isn't independently
+      // actionable once split — each Outlet's portion is its own ticket.
+      // Filtering by ?stationId lets a KDS screen show only its own station.
+      for (const c of children) {
+        if (['Paid', 'Accepted', 'Preparing', 'Ready', 'Out for Delivery'].indexOf(c.status) === -1) continue;
+        if (query.stationId && c.station_id !== query.stationId) continue;
+        const outlet = db.prepare('SELECT name_ar, name_en FROM outlets WHERE id = ?').get(c.outlet_id);
+        const items = db.prepare('SELECT * FROM order_items WHERE child_order_id = ?').all(c.id);
+        result.push({
+          id: c.id, status: c.status, created_at: c.created_at, point_label: o.point_label,
+          itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', '),
+          isChild: true, parentOrderId: o.id, outletId: c.outlet_id,
+          outletName: outlet ? outlet.name_ar : null, outletNameEn: outlet ? outlet.name_en : null,
+        });
+      }
+    }
+  }
+  sendJSON(res, 200, result);
 });
 
 on('POST', '/api/orders/:id/transition', ['Operator', 'SiteManager', 'Runner', 'AlnadlFinance', 'SuperAdmin'], async (req, res, p, query, session) => {
@@ -343,6 +396,56 @@ on('POST', '/api/orders/:id/transition', ['Operator', 'SiteManager', 'Runner', '
     if (sub && sub.features.loyalty) loyaltyEarned = earnPoints(order.customer_phone, order.id, order.total);
   }
   sendJSON(res, 200, { id: order.id, status: to, loyaltyEarned: loyaltyEarned ? loyaltyEarned.points_balance : undefined });
+});
+
+/* Derive the Parent order's status from its children (§13 design in Gap
+   Analysis §3.3): the Parent is only as advanced as its LEAST advanced
+   active child — an order isn't "Ready" until every outlet's portion is
+   ready. All-Delivered → Delivered. All-Cancelled → Cancelled. Only called
+   for orders that actually have child_orders; legacy single-outlet orders
+   never enter this path and keep managing their own status exactly as
+   before Phase 4. */
+function deriveParentStatus(parentOrderId) {
+  const children = db.prepare('SELECT status FROM child_orders WHERE parent_order_id = ?').all(parentOrderId);
+  if (!children.length) return;
+  const order = ['Paid', 'Accepted', 'Preparing', 'Ready', 'Out for Delivery', 'Delivered'];
+  const active = children.filter(c => c.status !== 'Cancelled');
+  let newStatus;
+  if (active.length === 0) newStatus = 'Cancelled';
+  else if (active.every(c => c.status === 'Delivered')) newStatus = 'Delivered';
+  else {
+    let minIdx = order.length;
+    for (const c of active) { const idx = order.indexOf(c.status); if (idx >= 0 && idx < minIdx) minIdx = idx; }
+    newStatus = minIdx < order.length ? order[minIdx] : active[0].status;
+  }
+  const before = db.prepare('SELECT status FROM orders WHERE id = ?').get(parentOrderId);
+  if (before && before.status !== newStatus) {
+    db.prepare('UPDATE orders SET status=?, updated_at=? WHERE id=?').run(newStatus, Date.now(), parentOrderId);
+    audit('system', 'System', 'parent_status_derive', parentOrderId, { status: before.status }, { status: newStatus }, null);
+    const notifyEvent = { Ready: 'order_ready', 'Out for Delivery': 'order_out', Delivered: 'order_delivered', Cancelled: 'order_cancelled' }[newStatus];
+    if (notifyEvent) notify(notifyEvent, parentOrderId, 'push');
+  }
+}
+
+/* Child-order transitions (§8, §13) — a separate endpoint from the legacy
+   /api/orders/:id/transition above, which is left completely untouched.
+   Same state machine, same role rules, applied to a child_order row instead
+   of an orders row, then the Parent's derived status is recomputed. */
+on('POST', '/api/child-orders/:id/transition', ['Operator', 'SiteManager', 'Runner', 'AlnadlFinance', 'SuperAdmin'], async (req, res, p, query, session) => {
+  const body = await readBody(req);
+  const child = db.prepare('SELECT * FROM child_orders WHERE id = ?').get(p.id);
+  if (!child) return sendJSON(res, 404, { error: 'Child order not found' });
+  const to = body.to;
+  if (!canTransition(child.status, to)) return sendJSON(res, 409, { error: `Invalid transition ${child.status} → ${to}` });
+  if (session.role !== 'SuperAdmin' && !actorAllowed(child.status, session.role)) {
+    return sendJSON(res, 403, { error: `Role ${session.role} cannot perform this transition` });
+  }
+  if (to === 'Cancelled' && !body.reason) return sendJSON(res, 400, { error: 'Cancellation requires a reason' });
+  db.prepare('UPDATE child_orders SET status=?, updated_at=?, cancel_reason=? WHERE id=?')
+    .run(to, Date.now(), to === 'Cancelled' ? body.reason : child.cancel_reason, child.id);
+  audit(session.username, session.role, 'child_status_change', child.id, { status: child.status }, { status: to }, body.reason || null);
+  deriveParentStatus(child.parent_order_id);
+  sendJSON(res, 200, { id: child.id, status: to, parentOrderId: child.parent_order_id });
 });
 
 /* ------------------------------ RUNNER --------------------------------- */

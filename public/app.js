@@ -375,14 +375,18 @@ const App = {
   async loadOpsQueue(){ S.ops.queue = await api('GET','/api/ops/queue',null,true); render(); },
   openOrderDetail(id){ S.ui.openOrder=id; render(); },
   closeOrderDetail(){ S.ui.openOrder=null; render(); },
+  // A ticket id starting with 'CHD-' is a child order (Unified Cart, Phase 4
+  // §8) and routes to its own transition endpoint; everything else is the
+  // legacy single-outlet order endpoint, unchanged since before Phase 4.
+  transitionEndpoint(id){ return id.startsWith('CHD-') ? `/api/child-orders/${id}/transition` : `/api/orders/${id}/transition`; },
   async opsTransition(id,to){
-    try{ await api('POST',`/api/orders/${id}/transition`,{to},true); showToast(t('toast_transition')); await App.loadOpsQueue(); S.ui.openOrder=null; render(); }
+    try{ await api('POST',App.transitionEndpoint(id),{to},true); showToast(t('toast_transition')); await App.loadOpsQueue(); S.ui.openOrder=null; render(); }
     catch(e){ showErr(e.message); }
   },
   opsCancel(id){ S.ui.cancelFor=id; render(); },
   async confirmCancel(id){
     const reason = document.getElementById('cancelReasonInput')?.value || '—';
-    try{ await api('POST',`/api/orders/${id}/transition`,{to:'Cancelled',reason},true); S.ui.cancelFor=null; S.ui.openOrder=null; await App.loadOpsQueue(); }
+    try{ await api('POST',App.transitionEndpoint(id),{to:'Cancelled',reason},true); S.ui.cancelFor=null; S.ui.openOrder=null; await App.loadOpsQueue(); }
     catch(e){ showErr(e.message); }
   },
   dismissCancel(){ S.ui.cancelFor=null; render(); },
@@ -390,7 +394,7 @@ const App = {
   /* ---- runner ---- */
   async loadRunnerQueue(){ S.runnerQ = await api('GET','/api/runner/queue',null,true); render(); },
   async runnerTransition(id,to){
-    try{ await api('POST',`/api/orders/${id}/transition`,{to},true); await App.loadRunnerQueue(); }
+    try{ await api('POST',App.transitionEndpoint(id),{to},true); await App.loadRunnerQueue(); }
     catch(e){ showErr(e.message); }
   },
 
@@ -795,7 +799,7 @@ function renderKds(){
         const warn = mins>=8?'late':mins>=5?'warn':'';
         return `<div class="ticket" onclick="App.openOrderDetail('${o.id}')">
           <div class="trow"><span class="id">${o.id}</span><span class="timer ${warn}">${elapsedStr(o.created_at)}</span></div>
-          <div class="pt">${o.point_label||'—'}</div><div class="items">${o.itemsSummary}</div></div>`;
+          <div class="pt">${o.point_label||'—'}${o.isChild? ` <span class="merchant-tag" style="margin-inline-start:4px">${S.lang==='ar'?o.outletName:o.outletNameEn}</span>`:''}</div><div class="items">${o.itemsSummary}</div></div>`;
       }).join('') : `<div class="kdsempty">${t('noOrders')}</div>`}
     </div>`;
   }).join('')}</div>`;
