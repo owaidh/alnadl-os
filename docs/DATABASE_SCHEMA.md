@@ -1,4 +1,4 @@
-> **Version:** v1.8.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
+> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -8,24 +8,42 @@
 
 ---
 
-## خريطة العلاقات (ERD نصي)
+## خريطة العلاقات (ERD، Q15)
 
+**رسم فعلي محدَّث** (وليس نصيًا تقريبيًا) — يُولَّد من `docs/erd.dot` عبر Graphviz:
+```
+dot -Tpng docs/erd.dot -o docs/erd.png
+```
+
+![Alnadl Hospitality OS ERD](erd.png)
+
+الرسم النصي أدناه يبقى كمرجع سريع (لا يغطي كل الجداول الـ34 — راجع الرسم أعلاه أو `db.js` نفسه للقائمة الكاملة):
 ```
 partners (1) ──< properties (1) ──< zones (1) ──< points (1) ──< qr_tokens
    │                  │
+   │                  ├──< outlets (1) ──< outlet_availability
+   │                  │            └──< products (Phase 4، يحل محل merchants تدريجيًا)
    │                  └──< categories (1) ──< products (1) ──< variants
    │                                              │        └──< addons
    │
    ├──< subscriptions (1:1) >── plans
    ├──< settlements ──< settlement_events
+   ├──< wallet_accounts ──< wallet_transactions
+   ├──< partner_branding (1:1)
    └──< orders ──< order_items
+                ├──< child_orders (Phase 4، عند تعدد المنافذ فقط) ──< order_items
                 ├──< payments
+                ├──< refunds (Phase 4، Q03)
                 ├──< fulfillment (1:1)
                 └──< feedback
 
+outlets ──< revenue_models (نموذج واحد نشط) ──< revenue_ledger >── orders
+loyalty_accounts ──< loyalty_transactions
+qr_tokens ──< qr_analytics_events
 users (كل مستخدم مرتبط بـ partner_scope اختياري لعزل الشركاء)
 audit_log / notifications (سجلات مستقلة، مرتبطة بـ order_id أو entity id نصيًا وليس FK صارم)
 promotions (مرتبط بـ property_id)
+schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 ```
 
 ---
@@ -124,8 +142,23 @@ promotions (مرتبط بـ property_id)
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
 
+### `refunds` — الاسترجاعات الكاملة/الجزئية (Q03)
+سجل غير قابل للتعديل — كل استرجاع صف جديد، لا يُعدَّل أي صف قائم أبدًا. `reason` تحمل بادئة `__idem__` عند استخدام مفتاح Idempotency بدل سبب نصي حر.
+
+### `schema_migrations` (Q08)
+سجل كل Migration طُبِّقت فعليًا، بترتيبها الزمني — يمنع إعادة تطبيق نفس الترحيل مرتين. راجع `lib/migrate.js` و`migrations/`.
+
+### قيود المفاتيح الأجنبية (Foreign Keys، Q09)
+`PRAGMA foreign_keys = ON` مُفعَّل على مستوى الاتصال. قيود FK فعلية (وليست توثيقًا فقط) مُطبَّقة حاليًا على: `order_items`, `child_orders`, `payments`, `revenue_ledger` — وهي مسار المال المباشر في النظام، عبر `migrations/001_add_foreign_keys.js`. **نطاق متبقٍ صراحة**: بقية الجداول (`zones`, `points`, `products`...) لم تُرحَّل بعد لنفس النمط — انظر `docs/GAP_REGISTER.md` بند Q09.
+
+### `properties.delivery_grouping` (Q01)
+`'grouped'` (افتراضي) أو `'separate'` — يتحكم بسياسة توصيل الطلبات متعددة المنافذ. راجع `docs/MULTI_OUTLET_SPEC.md`.
+
+### `revenue_ledger.type` (Q03)
+`'sale'` (المعاملة الأصلية) أو `'refund_adjustment'` (سطر عكسي عند استرجاع) — لا يُحذف أو يُعدَّل أي سطر `sale` عند الاسترجاع، بل يُضاف سطر `refund_adjustment` جديد بمبلغ سالب.
+
 ### `users` — حسابات النظام
-`partner_scope` هو FK اختياري لـ `partners.id` — `NULL` تعني مستخدمًا على مستوى النادل (SuperAdmin/AlnadlFinance) وليس مقيّدًا بشريك واحد. `password_hash` هو SHA-256 بسيط **لأغراض العرض التوضيحي فقط** — راجع README لملاحظات الأمان قبل الإنتاج.
+`partner_scope` هو FK اختياري لـ `partners.id` — `NULL` تعني مستخدمًا على مستوى النادل (SuperAdmin/AlnadlFinance) وليس مقيّدًا بشريك واحد. `password_hash` بصيغة `pbkdf2:<iterations>:<salt>:<hash>` (Q06 — 100,000 تكرار، Salt فريد لكل مستخدم عبر `node:crypto`)؛ أي صف قديم بصيغة SHA-256 مجرد (بلا بادئة `pbkdf2:`) لا يزال يُتحقَّق منه للتوافق الخلفي، لكن لا يُنتَج بهذه الصيغة القديمة أبدًا لمستخدم جديد.
 
 ---
 

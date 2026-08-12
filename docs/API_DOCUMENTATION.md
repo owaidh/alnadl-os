@@ -302,6 +302,42 @@ Authorization: Bearer <token>
 
 ---
 
+## 20) الاسترجاعات (Refunds) — Q03
+
+### `POST /api/orders/:id/refund`
+الأدوار: `AlnadlFinance`, `SiteManager`, `SuperAdmin` فقط.
+```json
+{ "amount": 25.30, "reason": "Customer complaint", "idempotencyKey": "optional-client-generated-key" }
+```
+**قواعد الرفض الصارمة:**
+- `400` إن غاب `reason` (إلزامي لسجل التدقيق) أو كان `amount` ≤ 0
+- `409` إن كان المبلغ يتجاوز **الرصيد المتبقي القابل للاسترجاع فعليًا** (المدفوع − المُسترجَع سابقًا) — يمنع الاسترجاع المزدوج أو الزائد
+- `409` إن كانت حالة الطلب ليست `Delivered`/`Partially Refunded`/`Cancelled`
+
+**Idempotency:** إرسال نفس `idempotencyKey` مرتين يُرجع نفس النتيجة الأولى (`idempotent:true`) دون معالجة مزدوجة — مختلف عن استرجاعين جزئيين منفصلين شرعيين (بمفاتيح مختلفة أو بدونها).
+
+**الأثر المالي:** عند النجاح، يُستدعى `recordRefundRevenue()` تلقائيًا فيُضاف سطر `refund_adjustment` سالب في `revenue_ledger` **يستثني ضريبة القيمة المضافة بشكل صحيح** (المبلغ يُحوَّل لمعادله قبل الضريبة قبل العكس) — لا يُعدَّل سطر البيع الأصلي أبدًا.
+
+### `GET /api/orders/:id/refunds`
+سجل كل استرجاعات هذا الطلب.
+
+---
+
+## 21) سياسة التسليم Grouped/Separate — Q01
+
+### `PATCH /api/admin/properties/:id`
+```json
+{ "deliveryGrouping": "grouped" }  // أو "separate"
+```
+الافتراضي `grouped` لكل منشأة — يطابق حرفيًا السلوك القائم قبل هذه الميزة (Runner لا يرى الطلب إلا عند اكتمال كل منافذه). `separate` يجعل `GET /api/runner/queue` يُظهر تذكرة كل منفذ فور جاهزيته بمعزل عن البقية. راجع `docs/MULTI_OUTLET_SPEC.md`.
+
+---
+
 ## ملاحظة حول آلة الحالة (State Machine)
 
 جدول الانتقالات المسموحة والأدوار المخوّلة لكل انتقال موثّق بالكامل في `lib/statemachine.js` — هذا الملف هو "مصدر الحقيقة الوحيد" (Single Source of Truth) ولا يوجد أي منطق مكرر له في أي مكان آخر بالكود.
+
+## ملاحظة حول Idempotency وWebhooks (Q03، §18)
+- `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل
+- `POST /api/orders/:id/refund` idempotent عبر `idempotencyKey` اختياري (راجع القسم 20)
+- `verifyWebhook()` في `lib/payment.js` نقطة تكامل جاهزة — أي Adapter حقيقي **يجب** أن يُنفِّذ التحقق الفعلي من توقيع HMAC هنا قبل أي إنتاج (راجع `docs/GAP_REGISTER.md` بند Q05)
