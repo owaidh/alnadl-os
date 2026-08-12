@@ -212,7 +212,21 @@ partner_branding: ... + fee_model ('included'|'setup'|'monthly'|'annual'|'setup_
 ## 8ج. الالتزامات التوثيقية في §26 — لم تُعالَج في المسودة الأولى، هذا هيكلها الفعلي
 
 ### نظام Requirement ID (مطلوب لـ§26.3 Traceability Matrix)
-يُقترح الترميز: `P4-<AREA>-<NUM>` مطابقًا لأمثلة الوثيقة نفسها (`P4-OUT-01`, `P4-REV-01`, `P4-WL-01`). المجالات: `OUT` (Outlet) · `HUB` (Service Hub) · `CART` (Unified Cart) · `REV` (Revenue Engine) · `WL` (White Label) · `QR` (QR/Site Mapping) · `PKG` (Packages/Flags) · `SEC` (Security). كل بند Acceptance Criteria في §20 (24 بندًا) وكل Test Scenario في §21 (12 سيناريو) يجب أن يحمل معرّفًا من هذا النظام فور تحويله لمهمة تنفيذ فعلية — **هذا لم يبدأ بعد** ويجب أن يبدأ مع أول سطر كود يُكتب في Increment 1، وليس بعد اكتماله.
+يُقترح الترميز: `P4-<AREA>-<NUM>` مطابقًا لأمثلة الوثيقة نفسها (`P4-OUT-01`, `P4-REV-01`, `P4-WL-01`). المجالات: `OUT` (Outlet) · `HUB` (Service Hub) · `CART` (Unified Cart) · `REV` (Revenue Engine) · `WL` (White Label) · `QR` (QR/Site Mapping) · `PKG` (Packages/Flags) · `SEC` (Security).
+
+### Traceability Matrix — Increment 1 (منفَّذ ومُختبَر فعليًا)
+أول سطور فعلية في هذا النظام، بأدلة اختبار حقيقية وليست افتراضية:
+
+| Requirement ID | المتطلب | UI/Screen | API/Service | DB Entity | Test Evidence | الحالة |
+|---|---|---|---|---|---|---|
+| P4-OUT-01 | إنشاء Outlet مستقل لكل منفذ | A-OutletManager | `POST /api/admin/outlets` | `outlets` | اختُبر عبر متصفح حقيقي: إنشاء "مخبز الفجر" فعليًا وظهوره في القائمة فورًا (لقطة شاشة) | **Pass** |
+| P4-OUT-02 | Migration: كل Property قائم يحصل Default Outlet | — (تلقائي عند الإقلاع) | `migratePhase4Outlets()` في `db.js` | `outlets`, `products.outlet_id` | اختُبر: DB جديدة → Hotel Nova حصل على منفذين من `merchants` الحالية بنفس النسب، Al-Rowad (بلا merchants) حصل منفذًا افتراضيًا | **Pass** |
+| P4-OUT-03 | Migration idempotent (لا تكرار عند إعادة التشغيل) | — | نفس الدالة أعلاه | `outlets` | اختُبر: استدعاء الدالة مرتين → العدد ثابت (3 وليس 6) | **Pass** |
+| P4-PKG-01 | باقة CONNECT جديدة بمزايا Multi-Outlet | A-TenantsPlans | `GET /api/plans` | `plans` | اختُبر: 4 باقات تُرجَع (OPERATE/SMART/**CONNECT**/PLATFORM) | **Pass** |
+| P4-PKG-02 | حظر إنشاء Outlet إضافي بدون مزايا الباقة | A-OutletManager | `POST /api/admin/outlets` (feature gate) | `subscriptions.features_json` | اختُبر: تخفيض Hotel Nova لباقة SMART → محاولة إضافة منفذ ثالث تُرفض 402، والمنفذان المُرحَّلان يبقيان سليمين وقابلين للقراءة | **Pass** |
+| P4-HUB-01 | Service Hub تظهر فقط عند تعدد المنافذ الفعلي | — (Backend فقط حتى الآن، الواجهة الأمامية لم تُبنَ بعد) | `GET /api/service-hub/:token` | `outlets`, `outlet_availability` | اختُبر: Hotel Nova (منفذان، PLATFORM) → `hub:true`؛ Al-Rowad (منفذ واحد) → `hub:false` تلقائيًا | **Pass** |
+| P4-HUB-02 | Zone/Point↔Outlet مع بُعد زمني | — | نفس نقطة أعلاه | `outlet_availability` | مبني ومُختبَر منطقيًا (فلترة day_of_week/time_from/time_to)؛ **لا يوجد بعد سيناريو اختبار بوقت فعلي مضبوط** (يحتاج اختبارًا إضافيًا عند ربط بيانات توفر حقيقية) | **Partial** |
+| P4-SEC-01 | Regression: النظام القائم لا يتأثر إطلاقًا | كل الشاشات القائمة | `GET /api/qr/:token` (بلا تغيير) | — | اختُبر 4 مرات متتالية عبر كل هذه الزيادة: رحلة العميل الكاملة + تسجيل دخول كل الأدوار السبعة — **صفر أخطاء في كل مرة** | **Pass** |
 
 ### هيكل Final Delivery Package (§26.5) — تخطيط مبدئي لمطابقة `docs/` الحالي
 | مجلد §26.5 المطلوب | الملف/المجلد المقابل في المشروع اليوم | الحالة |

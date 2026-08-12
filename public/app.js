@@ -105,7 +105,7 @@ const S = {
   checkoutName:'', checkoutPhone:'',
   ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
-  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[],
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[],
   ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
 };
@@ -278,6 +278,7 @@ const App = {
     if(scr==='live') await App.loadLive();
     if(scr==='users') await App.loadUsers();
     if(scr==='settlements') await App.loadSettlements();
+    if(scr==='outlets') await App.loadOutlets();
     if(scr==='merchants') await App.loadMerchants();
     if(scr==='wallets') await App.loadWallets();
   },
@@ -293,6 +294,19 @@ const App = {
   async toggleUser(id,active){ try{ await api('PATCH',`/api/admin/users/${id}`,{active:!active},true); await App.loadUsers(); }catch(e){ showErr(e.message); } },
 
   /* ---- merchants (Restaurant/Marketplace Integration) ---- */
+  /* ---- outlets (Phase 4 Multi-Outlet Architecture, §6) ---- */
+  async loadOutlets(){ S.outlets = await api('GET',`/api/admin/outlets?propertyId=${S.PROPERTY_ID}`,null,true); render(); },
+  async addOutlet(){
+    const name_ar=document.getElementById('outAr').value.trim(), name_en=document.getElementById('outEn').value.trim();
+    const type=document.getElementById('outType').value, operator=document.getElementById('outOperator').value;
+    if(!name_ar && !name_en) return;
+    try{ await api('POST','/api/admin/outlets',{propertyId:S.PROPERTY_ID,name_ar:name_ar||name_en,name_en:name_en||name_ar,type,operator},true); showToast(t('toast_saved')); await App.loadOutlets(); }
+    catch(e){ showErr(e.message); }
+  },
+  async toggleOutlet(id,active){
+    try{ await api('PATCH',`/api/admin/outlets/${id}`,{status:active?'Inactive':'Active'},true); await App.loadOutlets(); }
+    catch(e){ showErr(e.message); }
+  },
   async loadMerchants(){ S.merchants = await api('GET','/api/admin/merchants',null,true); render(); },
   async addMerchant(){
     const name_ar=document.getElementById('merAr').value.trim(), name_en=document.getElementById('merEn').value.trim();
@@ -735,10 +749,10 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['audit', t('auditLog')]],
     AlnadlFinance:[['settlements', t('revShareTitle')],['audit', t('auditLog')]],
     PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
-    PartnerAdmin:[['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    PartnerAdmin:[['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
   const nav = navByRole[role] || [];
   let inner = '';
@@ -754,6 +768,7 @@ function renderStaffShell(){
   else if(S.screen==='overview') inner = renderPartnerOverview();
   else if(S.screen==='settlements') inner = renderSettlements();
   else if(S.screen==='billing') inner = renderBilling();
+  else if(S.screen==='outlets') inner = renderOutlets();
   else if(S.screen==='merchants') inner = renderMerchants();
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
@@ -1005,6 +1020,36 @@ function renderLiveManager(){
     </div>
   </div>
   ${l.topZone? `<div class="panel"><h3>${S.lang==='ar'?'أفضل منطقة':'Top zone'}</h3><p style="color:var(--brass-300);font-weight:800">${l.topZone}</p></div>`:''}`;
+}
+
+function renderOutlets(){
+  const rows = S.outlets || [];
+  const typeLabels = { coffee:'☕ Coffee', restaurant:'🍽️ Restaurant', bakery:'🥐 Bakery', service:'🛎️ Service', other:'📦 Other' };
+  const operatorLabels = S.lang==='ar'
+    ? { alnadl:'مُشغَّل من النادل', partner:'مُشغَّل من الشريك', third_party:'طرف ثالث' }
+    : { alnadl:'Alnadl-operated', partner:'Partner-operated', third_party:'Third party' };
+  return `<div class="grid2"><div>
+    <div class="panel"><h3>${S.lang==='ar'?'إضافة منفذ (Outlet)':'Add an outlet'}</h3>
+      <p class="ph">${S.lang==='ar'?'كل منفذ (كوفي/مطعم/مخبز...) كيان مستقل بمحطة تجهيز وهوية خاصة به — ليس تصنيفًا داخل قائمة واحدة':'Each outlet (coffee/restaurant/bakery...) is an independent entity with its own station and identity — not a category inside one shared menu'}</p>
+      <div class="darkfield"><label>${S.lang==='ar'?'اسم المنفذ (AR)':'Outlet name (AR)'}</label><input id="outAr" placeholder="مخبز الفجر"></div>
+      <div class="darkfield"><label>${S.lang==='ar'?'اسم المنفذ (EN)':'Outlet name (EN)'}</label><input id="outEn" placeholder="Dawn Bakery"></div>
+      <div class="formgrid">
+        <div class="darkfield"><label>${S.lang==='ar'?'النوع':'Type'}</label><select id="outType"><option value="coffee">Coffee</option><option value="restaurant">Restaurant</option><option value="bakery">Bakery</option><option value="service">Service</option><option value="other">Other</option></select></div>
+        <div class="darkfield"><label>${S.lang==='ar'?'الجهة المشغّلة':'Operator'}</label><select id="outOperator"><option value="partner">Partner</option><option value="alnadl">Alnadl</option><option value="third_party">Third party</option></select></div>
+      </div>
+      <button class="btn-small brass" onclick="App.addOutlet()">+ ${S.lang==='ar'?'إضافة':'Add'}</button>
+      <p class="ph" style="margin-top:8px">${S.lang==='ar'?'منفذ إضافي (بعد الأول) يتطلب باقة تشمل Multi-Outlet (CONNECT أو PLATFORM)':'An additional outlet (beyond the first) requires a plan that includes Multi-Outlet (CONNECT or PLATFORM)'}</p>
+    </div></div>
+    <div class="panel"><h3>${S.lang==='ar'?'المنافذ الحالية':'Current outlets'}</h3>
+      ${rows.length? rows.map(o=>`
+        <div class="pointrow" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <b style="color:var(--cream-050)">${typeLabels[o.type]||o.type} — ${S.lang==='ar'?o.name_ar:o.name_en}</b>
+            <button class="togglepill ${o.status==='Active'?'active':'inactive'}" onclick="App.toggleOutlet('${o.id}',${o.status==='Active'})">${o.status==='Active'?t('active'):t('inactive')}</button>
+          </div>
+          <span style="font-size:11px;color:var(--ink-300)">${operatorLabels[o.operator]||o.operator}${o.legacy_merchant_id? (S.lang==='ar'?' · مُرحَّل من Merchants':' · migrated from Merchants'):''}</span>
+        </div>`).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا توجد منافذ بعد':'No outlets yet'}</div>`}
+    </div></div>`;
 }
 
 function renderMerchants(){

@@ -670,6 +670,95 @@ on('POST', '/api/admin/settlements/:id/transition', ['AlnadlFinance', 'SuperAdmi
   sendJSON(res, 200, { id: p.id, status: b.to });
 });
 
+/* ------------------------------ PHASE 4 — OUTLET ARCHITECTURE (§6, §7) --------------------------------- */
+function outletPartnerId(outletId) { const o = db.prepare('SELECT property_id FROM outlets WHERE id=?').get(outletId); return o ? propertyPartnerId(o.property_id) : null; }
+
+on('GET', '/api/admin/outlets', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, query, session) => {
+  let rows = db.prepare('SELECT * FROM outlets').all();
+  if (session.role === 'PartnerAdmin') rows = rows.filter(o => propertyPartnerId(o.property_id) === session.scope);
+  else if (query.propertyId) rows = rows.filter(o => o.property_id === query.propertyId);
+  sendJSON(res, 200, rows);
+});
+on('POST', '/api/admin/outlets', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const partnerId = propertyPartnerId(b.propertyId);
+  assertTenantWrite(session, partnerId);
+  // Creating an ADDITIONAL outlet (property already has >= 1 from migration) requires the multiOutlet feature.
+  // The property's original migrated outlet is never blocked by this — only new ones are gated.
+  const existingCount = db.prepare('SELECT COUNT(*) c FROM outlets WHERE property_id = ?').get(b.propertyId).c;
+  if (existingCount >= 1) requireFeature(partnerId, 'multiOutlet');
+  const id = uid('out');
+  db.prepare(`INSERT INTO outlets (id,property_id,name_ar,name_en,type,operator,branding_json,operating_hours_json,station_id,delivery_mode,sla_prep_min,sla_delivery_min,commission_rate,status,created_at)
+              VALUES (?,?,?,?,?,?,'{}','{}',?,?,?,?,?,'Active',?)`)
+    .run(id, b.propertyId, b.name_ar, b.name_en, b.type || 'coffee', b.operator || 'partner', b.stationId || null, b.deliveryMode || 'runner', b.slaPrepMin || 8, b.slaDeliveryMin || 10, b.commissionRate || 0, Date.now());
+  audit(session.username, session.role, 'create', id, null, b, null);
+  sendJSON(res, 201, { id });
+});
+on('PATCH', '/api/admin/outlets/:id', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  assertTenantWrite(session, outletPartnerId(p.id));
+  const before = db.prepare('SELECT status FROM outlets WHERE id=?').get(p.id);
+  if (!before) return sendJSON(res, 404, { error: 'Outlet not found' });
+  const fields = [], values = [];
+  for (const [k, col] of [['status', 'status'], ['name_ar', 'name_ar'], ['name_en', 'name_en'], ['stationId', 'station_id'], ['deliveryMode', 'delivery_mode']]) {
+    if (b[k] !== undefined) { fields.push(`${col}=?`); values.push(b[k]); }
+  }
+  if (fields.length) { values.push(p.id); db.prepare(`UPDATE outlets SET ${fields.join(',')} WHERE id=?`).run(...values); }
+  audit(session.username, session.role, 'update', p.id, before, b, null);
+  sendJSON(res, 200, { ok: true });
+});
+
+/* Service Hub (§7) — the screen the customer sees right after QR scan when a
+   property has more than one active/available outlet. When there is exactly
+   one, this behaves identically to /api/qr/:token so existing single-outlet
+   properties (all of them, until multiOutlet is deliberately used) see zero
+   change in their flow — matching acceptance criterion §20.16 exactly. */
+on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
+  const row = db.prepare('SELECT * FROM qr_tokens WHERE token = ?').get(p.token);
+  if (!row || !row.active) return sendJSON(res, 404, { error: 'QR غير صالح / Invalid QR' });
+  const point = db.prepare('SELECT * FROM points WHERE id = ?').get(row.point_id);
+  if (!point || !point.active) return sendJSON(res, 409, { error: 'Point unavailable' });
+  const zone = db.prepare('SELECT * FROM zones WHERE id = ?').get(point.zone_id);
+  const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(zone.property_id);
+  const partner = db.prepare('SELECT * FROM partners WHERE id = ?').get(property.partner_id);
+  const sub = getSubscription(property.partner_id);
+  const features = sub ? sub.features : {};
+
+  let outlets = db.prepare(`SELECT * FROM outlets WHERE property_id = ? AND status = 'Active'`).all(property.id);
+  // Availability filter (§5): a row in outlet_availability restricts an outlet
+  // to specific zone/point + time window; an outlet with NO rows is available
+  // everywhere/always (this is what keeps every migrated single-outlet
+  // property working with zero configuration).
+  const now = new Date();
+  outlets = outlets.filter(o => {
+    const rules = db.prepare('SELECT * FROM outlet_availability WHERE outlet_id = ?').all(o.id);
+    if (rules.length === 0) return true;
+    return rules.some(r => {
+      if (r.zone_id && r.zone_id !== zone.id) return false;
+      if (r.point_id && r.point_id !== point.id) return false;
+      if (r.day_of_week != null && r.day_of_week !== now.getDay()) return false;
+      if (r.time_from && r.time_to) {
+        const hm = now.toTimeString().slice(0, 5);
+        if (hm < r.time_from || hm > r.time_to) return false;
+      }
+      return true;
+    });
+  });
+
+  const base = { partner, property, zone, point, token: p.token, features };
+  if (outlets.length <= 1) {
+    // Single (or zero, defensively — falls back to base context) outlet: skip the hub entirely.
+    return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] || null });
+  }
+  if (!features.multiOutlet) {
+    // Property has multiple outlet rows but the partner's plan doesn't include
+    // multiOutlet — degrade gracefully to the first one rather than error,
+    // since this is a display capability, not a chargeable action.
+    return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] });
+  }
+  sendJSON(res, 200, { ...base, hub: true, outlets });
+});
+
 /* ------------------------------ CORPORATE WALLET (Phase 3, §8/§14) --------------------------------- */
 on('GET', '/api/wallets/lookup', null, async (req, res, p, query) => {
   // Public lookup by owner_ref — a real deployment would resolve this from an

@@ -28,13 +28,14 @@ CREATE TABLE IF NOT EXISTS points (
   id TEXT PRIMARY KEY, zone_id TEXT, code TEXT, label TEXT, type TEXT, active INTEGER DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS qr_tokens (
-  id TEXT PRIMARY KEY, point_id TEXT, token TEXT UNIQUE, active INTEGER DEFAULT 1, created_at INTEGER
+  id TEXT PRIMARY KEY, point_id TEXT, token TEXT UNIQUE, active INTEGER DEFAULT 1, created_at INTEGER,
+  qr_type TEXT DEFAULT 'table' -- table | office | room | zone | counter_pickup (§5)
 );
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY, property_id TEXT, name_ar TEXT, name_en TEXT, sort_order INTEGER DEFAULT 0, status TEXT DEFAULT 'Active'
 );
 CREATE TABLE IF NOT EXISTS products (
-  id TEXT PRIMARY KEY, category_id TEXT, merchant_id TEXT, sku TEXT, name_ar TEXT, name_en TEXT,
+  id TEXT PRIMARY KEY, category_id TEXT, merchant_id TEXT, outlet_id TEXT, sku TEXT, name_ar TEXT, name_en TEXT,
   description_ar TEXT, description_en TEXT, base_price REAL, tax_code TEXT DEFAULT 'VAT15',
   status TEXT DEFAULT 'Active'
 );
@@ -116,6 +117,39 @@ CREATE TABLE IF NOT EXISTS wallet_accounts (
 );
 CREATE TABLE IF NOT EXISTS wallet_transactions (
   id TEXT PRIMARY KEY, wallet_id TEXT, order_id TEXT, amount REAL, type TEXT, created_at INTEGER
+);
+-- ===== Phase 4 Increment 1: Outlet Architecture (§6, §7 of Phase 4 Change Request) =====
+-- Purely additive — no existing table's columns are removed or repurposed.
+-- "merchants" (Phase 3) is left completely untouched and keeps working exactly
+-- as before; "outlets" is a richer parallel entity that Phase 3 merchants are
+-- migrated INTO (see migratePhase4Outlets() below), never the other way round.
+CREATE TABLE IF NOT EXISTS outlets (
+  id TEXT PRIMARY KEY, property_id TEXT, name_ar TEXT, name_en TEXT,
+  type TEXT DEFAULT 'coffee', -- coffee | restaurant | bakery | service | other
+  operator TEXT DEFAULT 'alnadl', -- alnadl | partner | third_party
+  branding_json TEXT DEFAULT '{}', -- { logo, theme, favicon } — independent of Platform branding (§11)
+  operating_hours_json TEXT DEFAULT '{}', -- {} = always open (24/7 default, matches current system behavior)
+  station_id TEXT, -- KDS/fulfillment station this outlet's orders route to
+  delivery_mode TEXT DEFAULT 'runner', -- runner | pickup | room | office
+  sla_prep_min INTEGER DEFAULT 8,
+  sla_delivery_min INTEGER DEFAULT 10,
+  commission_rate REAL DEFAULT 0, -- carried over from merchants; superseded once revenue_models (Increment 3) exists
+  legacy_merchant_id TEXT, -- traceability: which "merchants" row this outlet was migrated from, if any
+  status TEXT DEFAULT 'Active',
+  created_at INTEGER
+);
+-- Zone/Point <-> Outlet availability, WITH a time dimension (§5 — corrected from
+-- the first Gap Analysis draft, which had wrongly modeled this as a flat field).
+-- No row for an outlet at a zone/point = "always available there" (so a fresh
+-- single-outlet property needs zero rows here, matching today's behavior).
+CREATE TABLE IF NOT EXISTS outlet_availability (
+  id TEXT PRIMARY KEY, outlet_id TEXT, zone_id TEXT, point_id TEXT,
+  day_of_week INTEGER, -- 0(Sun)-6(Sat), NULL = every day
+  time_from TEXT, time_to TEXT -- 'HH:MM' 24h, NULL = all day
+);
+-- QR analytics events (§5) — scans vs resulting orders, per token.
+CREATE TABLE IF NOT EXISTS qr_analytics_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT, event_type TEXT, order_id TEXT, ts INTEGER
 );
 `);
 
@@ -212,15 +246,21 @@ function seedIfEmpty() {
       .run(uid('ad'), pid, ar, en, price);
   }
 
-  // ---- SaaS commercial packages (§12 من وثيقة المفهوم) ----
+  // ---- SaaS commercial packages (§12 من وثيقة المفهوم؛ CONNECT أُضيفت في Phase 4 §4) ----
   const now = Date.now();
   const plans = [
     ['plan_operate', 'OPERATE', 'ALNADL OPERATE', 'ALNADL OPERATE', 0, 0,
-      { qrOrdering:false, digitalPayment:false, partnerDashboard:false, loyalty:false, marketplace:false, analytics:false, corporateWallet:false }],
+      { qrOrdering:false, digitalPayment:false, partnerDashboard:false, loyalty:false, marketplace:false, analytics:false, corporateWallet:false,
+        multiOutlet:false, unifiedCart:false, restaurantIntegration:false, whiteLabel:false, multiProperty:false }],
     ['plan_smart', 'SMART', 'ALNADL SMART', 'ALNADL SMART', 2500, 0.02,
-      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:false, marketplace:false, analytics:true, corporateWallet:false }],
+      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:false, marketplace:false, analytics:true, corporateWallet:false,
+        multiOutlet:false, unifiedCart:false, restaurantIntegration:false, whiteLabel:false, multiProperty:false }],
+    ['plan_connect', 'CONNECT', 'ALNADL CONNECT', 'ALNADL CONNECT', 4000, 0.022,
+      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:false, marketplace:true, analytics:true, corporateWallet:false,
+        multiOutlet:true, unifiedCart:true, restaurantIntegration:true, whiteLabel:false, multiProperty:false }],
     ['plan_platform', 'PLATFORM', 'ALNADL PLATFORM', 'ALNADL PLATFORM', 6000, 0.025,
-      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:true, marketplace:true, analytics:true, corporateWallet:true }],
+      { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:true, marketplace:true, analytics:true, corporateWallet:true,
+        multiOutlet:true, unifiedCart:true, restaurantIntegration:true, whiteLabel:true, multiProperty:true }],
   ];
   for (const [id, code, ar, en, fee, techRate, features] of plans) {
     db.prepare(`INSERT INTO plans (id,code,name_ar,name_en,monthly_fee,tech_fee_rate,features_json) VALUES (?,?,?,?,?,?,?)`)
@@ -306,5 +346,57 @@ function seedOrders(propId, partnerId) {
 }
 
 seedIfEmpty();
+
+// ===========================================================================
+// Phase 4 Increment 1 — Outlet migration (§16, §22 of Phase 4 Change Request)
+// Idempotent: safe to run on every startup, whether the DB is brand new
+// (seedIfEmpty just populated it) or an existing Phase 1-3 production
+// database that has never seen Phase 4 code before. Never DROPs or rewrites
+// anything — only ADDs columns (if missing) and BACKFILLs new rows.
+// ===========================================================================
+function migratePhase4Outlets() {
+  // --- 1) Column safety net for pre-existing DBs created before this code existed ---
+  // CREATE TABLE already defines these for fresh installs; ALTER TABLE here
+  // covers DBs that existed before this migration was written. SQLite has no
+  // "ADD COLUMN IF NOT EXISTS", so each is wrapped and failures (column
+  // already exists) are silently ignored — that's the expected path on a
+  // fresh install where CREATE TABLE already included the column.
+  const tryAlter = (sql) => { try { db.exec(sql); } catch (e) { /* column already exists — fine */ } };
+  tryAlter(`ALTER TABLE qr_tokens ADD COLUMN qr_type TEXT DEFAULT 'table'`);
+  tryAlter(`ALTER TABLE products ADD COLUMN outlet_id TEXT`);
+
+  // --- 2) Backfill: every property with zero outlets gets one created from
+  //        its existing merchants (Phase 3) — or a single default outlet if
+  //        it somehow has none. This is what guarantees §17 Backward
+  //        Compatibility: "كل Property قائم ينشأ له Default Outlet". ---
+  const properties = db.prepare('SELECT * FROM properties').all();
+  for (const prop of properties) {
+    const existingOutlets = db.prepare('SELECT COUNT(*) c FROM outlets WHERE property_id = ?').get(prop.id).c;
+    if (existingOutlets > 0) continue; // already migrated — idempotent, skip
+
+    const merchants = db.prepare('SELECT * FROM merchants WHERE property_id = ?').all(prop.id);
+    const now = Date.now();
+    if (merchants.length > 0) {
+      for (const m of merchants) {
+        const outletId = uid('out');
+        const operator = m.kind === 'alnadl' ? 'alnadl' : (m.kind === 'partner_restaurant' ? 'partner' : 'third_party');
+        const type = m.kind === 'alnadl' ? 'coffee' : 'restaurant';
+        db.prepare(`INSERT INTO outlets (id,property_id,name_ar,name_en,type,operator,branding_json,operating_hours_json,delivery_mode,sla_prep_min,sla_delivery_min,commission_rate,legacy_merchant_id,status,created_at)
+                    VALUES (?,?,?,?,?,?,'{}','{}','runner',8,10,?,?,'Active',?)`)
+          .run(outletId, prop.id, m.name_ar, m.name_en, type, operator, m.commission_rate || 0, m.id, now);
+        // backfill products that belonged to this merchant
+        db.prepare('UPDATE products SET outlet_id = ? WHERE merchant_id = ? AND outlet_id IS NULL').run(outletId, m.id);
+      }
+    } else {
+      // no merchants at all for this property (e.g. Al-Rowad HQ, which never had a menu) —
+      // create one default outlet so the property structurally always has >= 1 (§17)
+      const outletId = uid('out');
+      db.prepare(`INSERT INTO outlets (id,property_id,name_ar,name_en,type,operator,branding_json,operating_hours_json,delivery_mode,sla_prep_min,sla_delivery_min,commission_rate,legacy_merchant_id,status,created_at)
+                  VALUES (?,?,?,?,?,'alnadl','{}','{}','runner',8,10,0,NULL,'Active',?)`)
+        .run(outletId, prop.id, prop.name_ar, prop.name_en, 'coffee', now);
+    }
+  }
+}
+migratePhase4Outlets();
 
 module.exports = { db, uid, hash };
