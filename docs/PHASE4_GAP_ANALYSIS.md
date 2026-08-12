@@ -1,4 +1,4 @@
-> **Version:** v1.9.0 · **Status:** LIVING DOCUMENT — Increments 1-4 + QR Bulk/Analytics + Partner Dashboard implemented & regression-tested; §26 documentation set complete (20/20). Remaining: R01/R02 grouped-delivery policy, formal UAT sign-off from client. · **Last Updated:** 2026-08-12 · **Release Tag:** v1.9.0-partner-dashboard
+> **Version:** v2.0.0 · **Status:** LIVING DOCUMENT — superseded by `docs/GAP_REGISTER.md` for Q01-Q20 closure tracking; kept for the original Phase 4 Increment 1-4 traceability matrix · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
 
 # Alnadl Hospitality OS — Phase 4 Gap Analysis & Technical Design
 ### (المطلوب من المبرمج قبل بدء التنفيذ — §22 من وثيقة Phase 4 Change Request v2)

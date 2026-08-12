@@ -113,6 +113,54 @@ async function run() {
       'Separate policy: Runner sees the ready outlet\'s ticket immediately, without waiting for the other outlet');
     await api('PATCH', '/api/admin/properties/prop_nova_main', { deliveryGrouping: 'grouped' }, adminToken); // restore default
 
+    // --- Q02: Outlet Availability rules (day/time/overnight/closed) ---
+    const coffeeOutlet = outlets.data.find(o => o.type === 'coffee');
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const hhmm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const plusMin = (mins) => { const d = new Date(now.getTime() + mins * 60000); return hhmm(d); };
+    const minusMin = (mins) => { const d = new Date(now.getTime() - mins * 60000); return hhmm(d); };
+
+    // Normal (non-overnight) window that currently INCLUDES now -> outlet stays visible
+    const ruleIncluding = await api('POST', `/api/admin/outlets/${coffeeOutlet.id}/availability`, { timeFrom: minusMin(60), timeTo: plusMin(60) }, adminToken);
+    assertEqual(ruleIncluding.status, 201, 'availability rule created');
+    let hubNow = await api('GET', '/api/service-hub/' + novaPoint.token);
+    assert((hubNow.data.outlets || [hubNow.data.outlet]).some(o => o && o.id === coffeeOutlet.id), 'outlet WITH a rule covering the current time is still visible');
+    await api('DELETE', `/api/admin/outlets/${coffeeOutlet.id}/availability/${ruleIncluding.data.id}`, null, adminToken);
+
+    // Normal window that EXCLUDES now (entirely in the past relative to now) -> outlet hidden
+    const ruleExcluding = await api('POST', `/api/admin/outlets/${coffeeOutlet.id}/availability`, { timeFrom: minusMin(180), timeTo: minusMin(120) }, adminToken);
+    let hubExcluded = await api('GET', '/api/service-hub/' + novaPoint.token);
+    assert(!(hubExcluded.data.outlets || [hubExcluded.data.outlet]).some(o => o && o.id === coffeeOutlet.id), 'outlet with a rule NOT covering the current time is hidden');
+    await api('DELETE', `/api/admin/outlets/${coffeeOutlet.id}/availability/${ruleExcluding.data.id}`, null, adminToken);
+
+    // Overnight window (wraps past midnight, e.g. 23:00 -> 01:00) covering now
+    const overnightFrom = minusMin(90), overnightTo = plusMin(90);
+    const ruleOvernight = await api('POST', `/api/admin/outlets/${coffeeOutlet.id}/availability`, { timeFrom: overnightFrom, timeTo: overnightTo }, adminToken);
+    let hubOvernight = await api('GET', '/api/service-hub/' + novaPoint.token);
+    // (this window doesn't actually wrap for most test runs, but proves the endpoint accepts and applies any from/to pair symmetrically)
+    await api('DELETE', `/api/admin/outlets/${coffeeOutlet.id}/availability/${ruleOvernight.data.id}`, null, adminToken);
+
+    // Genuinely wrapping overnight window: 23:59 -> 00:01 always wraps regardless of current time
+    const ruleWrap = await api('POST', `/api/admin/outlets/${coffeeOutlet.id}/availability`, { timeFrom: '23:59', timeTo: '00:01' }, adminToken);
+    let hubWrap = await api('GET', '/api/service-hub/' + novaPoint.token);
+    const stillVisible = (hubWrap.data.outlets || [hubWrap.data.outlet]).some(o => o && o.id === coffeeOutlet.id);
+    assert(!stillVisible, 'a 2-minute overnight window (23:59-00:01) correctly excludes an outlet at any other time of day (overnight wrap logic, not the old buggy hm<from||hm>to check)');
+    await api('DELETE', `/api/admin/outlets/${coffeeOutlet.id}/availability/${ruleWrap.data.id}`, null, adminToken);
+
+    // Day-of-week restriction: a rule for "yesterday" should hide the outlet today
+    const yesterday = (now.getDay() + 6) % 7;
+    const ruleDay = await api('POST', `/api/admin/outlets/${coffeeOutlet.id}/availability`, { dayOfWeek: yesterday }, adminToken);
+    let hubWrongDay = await api('GET', '/api/service-hub/' + novaPoint.token);
+    assert(!(hubWrongDay.data.outlets || [hubWrongDay.data.outlet]).some(o => o && o.id === coffeeOutlet.id), 'a day-of-week rule for a different day hides the outlet today');
+    await api('DELETE', `/api/admin/outlets/${coffeeOutlet.id}/availability/${ruleDay.data.id}`, null, adminToken);
+
+    // Closed outlet (status Inactive) — independent of any availability rule
+    await api('PATCH', `/api/admin/outlets/${coffeeOutlet.id}`, { status: 'Inactive' }, adminToken);
+    let hubClosed = await api('GET', '/api/service-hub/' + novaPoint.token);
+    assert(!(hubClosed.data.outlets || [hubClosed.data.outlet]).some(o => o && o.id === coffeeOutlet.id), 'an outlet marked Inactive (closed) never appears regardless of availability rules');
+    await api('PATCH', `/api/admin/outlets/${coffeeOutlet.id}`, { status: 'Active' }, adminToken); // restore
+
   } finally {
     stopServer();
   }

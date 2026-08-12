@@ -1,4 +1,4 @@
-> **Version:** v1.9.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.9.0-partner-dashboard
+> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
 
 # Alnadl Hospitality OS — Multi-Outlet Specification (§6, §8, §13, §26.1)
 

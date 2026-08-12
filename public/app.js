@@ -331,6 +331,35 @@ const App = {
     catch(e){ showErr(e.message); }
   },
 
+  /* ---- outlet availability rules (Q02) ---- */
+  async toggleAvailabilityPanel(outletId){
+    S.ui.availabilityFor = S.ui.availabilityFor===outletId ? null : outletId;
+    if(S.ui.availabilityFor){
+      S.ui.availabilityRules = await api('GET',`/api/admin/outlets/${outletId}/availability`,null,true);
+    }
+    render();
+  },
+  async addAvailabilityRule(outletId){
+    const dayOfWeek = document.getElementById('availDay').value;
+    const timeFrom = document.getElementById('availFrom').value;
+    const timeTo = document.getElementById('availTo').value;
+    try{
+      await api('POST',`/api/admin/outlets/${outletId}/availability`,{
+        dayOfWeek: dayOfWeek===''?null:parseInt(dayOfWeek), timeFrom: timeFrom||null, timeTo: timeTo||null,
+      },true);
+      showToast(t('toast_saved'));
+      S.ui.availabilityRules = await api('GET',`/api/admin/outlets/${outletId}/availability`,null,true);
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  async removeAvailabilityRule(outletId, ruleId){
+    try{
+      await api('DELETE',`/api/admin/outlets/${outletId}/availability/${ruleId}`,null,true);
+      S.ui.availabilityRules = await api('GET',`/api/admin/outlets/${outletId}/availability`,null,true);
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+
   /* ---- revenue model engine (Phase 4 §9/§10) ---- */
   async loadOutletsForRevenue(){
     S.outlets = await api('GET',`/api/admin/outlets?propertyId=${S.PROPERTY_ID}`,null,true);
@@ -1246,6 +1275,27 @@ function renderOutlets(){
             <button class="togglepill ${o.status==='Active'?'active':'inactive'}" onclick="App.toggleOutlet('${o.id}',${o.status==='Active'})">${o.status==='Active'?t('active'):t('inactive')}</button>
           </div>
           <span style="font-size:11px;color:var(--ink-300)">${operatorLabels[o.operator]||o.operator}${o.legacy_merchant_id? (S.lang==='ar'?' · مُرحَّل من Merchants':' · migrated from Merchants'):''}</span>
+          <button class="btn-small line" style="align-self:flex-start;font-size:11px" onclick="App.toggleAvailabilityPanel('${o.id}')">🕐 ${S.lang==='ar'?'قواعد التوفر الزمني':'Availability rules'}</button>
+          ${S.ui.availabilityFor===o.id? `
+            <div class="notebox" style="margin-top:4px">
+              ${(S.ui.availabilityRules||[]).length? (S.ui.availabilityRules||[]).map(r=>`
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--ink-700)">
+                  <span style="direction:ltr;unicode-bidi:embed;font-size:11px">
+                    ${r.day_of_week!=null? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][r.day_of_week] : (S.lang==='ar'?'كل يوم':'Every day')}
+                    ${r.time_from&&r.time_to? ` · ${r.time_from}-${r.time_to}` : (S.lang==='ar'?' · طوال اليوم':' · all day')}
+                  </span>
+                  <button class="ghostbtn" style="padding:2px 8px;font-size:10px" onclick="App.removeAvailabilityRule('${o.id}','${r.id}')">✕</button>
+                </div>`).join('') : `<div style="font-size:11px;color:var(--ink-400)">${S.lang==='ar'?'بلا قيود — متاح دائمًا وفي كل مكان (الافتراضي)':'No rules — always available everywhere (default)'}</div>`}
+              <div style="display:flex;gap:6px;margin-top:8px">
+                <select id="availDay" style="flex:1;background:var(--ink-800);border:1px solid var(--ink-700);border-radius:6px;color:var(--cream-050);font-size:11px">
+                  <option value="">${S.lang==='ar'?'كل يوم':'Every day'}</option>
+                  <option value="0">Sun</option><option value="1">Mon</option><option value="2">Tue</option><option value="3">Wed</option><option value="4">Thu</option><option value="5">Fri</option><option value="6">Sat</option>
+                </select>
+                <input id="availFrom" type="time" style="flex:1;background:var(--ink-800);border:1px solid var(--ink-700);border-radius:6px;color:var(--cream-050);font-size:11px">
+                <input id="availTo" type="time" style="flex:1;background:var(--ink-800);border:1px solid var(--ink-700);border-radius:6px;color:var(--cream-050);font-size:11px">
+                <button class="btn-small brass" style="font-size:11px" onclick="App.addAvailabilityRule('${o.id}')">+</button>
+              </div>
+            </div>` : ''}
         </div>`).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا توجد منافذ بعد':'No outlets yet'}</div>`}
     </div></div>`;
 }

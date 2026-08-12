@@ -1,4 +1,4 @@
-> **Version:** v1.9.0 · **Status:** FINAL (Phase 1-4 + §26 documentation set) · **Last Updated:** 2026-08-12 · **Release Tag:** v1.9.0-partner-dashboard
+> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
 
 # Alnadl Hospitality OS — التسليم الفني النهائي (Final Technical Handover)
 

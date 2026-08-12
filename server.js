@@ -1035,6 +1035,33 @@ on('PATCH', '/api/admin/outlets/:id', ['SuperAdmin', 'PartnerAdmin'], async (req
   sendJSON(res, 200, { ok: true });
 });
 
+/* Outlet Availability rules (§5, Q02) — day/time windows that restrict
+   WHERE and WHEN an outlet appears in the Service Hub. An outlet with zero
+   rules is available everywhere/always (the default every migrated
+   Increment-1 outlet has, requiring zero configuration). */
+on('GET', '/api/admin/outlets/:id/availability', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  assertTenantWrite(session, outletPartnerId(p.id));
+  sendJSON(res, 200, db.prepare('SELECT * FROM outlet_availability WHERE outlet_id = ?').all(p.id));
+});
+on('POST', '/api/admin/outlets/:id/availability', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  assertTenantWrite(session, outletPartnerId(p.id));
+  if ((b.timeFrom && !/^\d{2}:\d{2}$/.test(b.timeFrom)) || (b.timeTo && !/^\d{2}:\d{2}$/.test(b.timeTo))) {
+    return sendJSON(res, 400, { error: 'timeFrom/timeTo must be HH:MM (24h)' });
+  }
+  const id = uid('oa');
+  db.prepare(`INSERT INTO outlet_availability (id,outlet_id,zone_id,point_id,day_of_week,time_from,time_to) VALUES (?,?,?,?,?,?,?)`)
+    .run(id, p.id, b.zoneId || null, b.pointId || null, b.dayOfWeek != null ? b.dayOfWeek : null, b.timeFrom || null, b.timeTo || null);
+  audit(session.username, session.role, 'outlet_availability_add', id, null, b, null);
+  sendJSON(res, 201, { id });
+});
+on('DELETE', '/api/admin/outlets/:id/availability/:ruleId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  assertTenantWrite(session, outletPartnerId(p.id));
+  db.prepare('DELETE FROM outlet_availability WHERE id = ? AND outlet_id = ?').run(p.ruleId, p.id);
+  audit(session.username, session.role, 'outlet_availability_remove', p.ruleId, null, null, null);
+  sendJSON(res, 200, { ok: true });
+});
+
 /* Service Hub (§7) — the screen the customer sees right after QR scan when a
    property has more than one active/available outlet. When there is exactly
    one, this behaves identically to /api/qr/:token so existing single-outlet
@@ -1067,7 +1094,9 @@ on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
       if (r.day_of_week != null && r.day_of_week !== now.getDay()) return false;
       if (r.time_from && r.time_to) {
         const hm = now.toTimeString().slice(0, 5);
-        if (hm < r.time_from || hm > r.time_to) return false;
+        const overnight = r.time_from > r.time_to; // e.g. 22:00 -> 06:00 wraps past midnight
+        const inWindow = overnight ? (hm >= r.time_from || hm <= r.time_to) : (hm >= r.time_from && hm <= r.time_to);
+        if (!inWindow) return false;
       }
       return true;
     });

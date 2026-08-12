@@ -1,4 +1,4 @@
-> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+> **Version:** v2.0.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.0-final-quality-closure
 
 # نموذج بند تعاقدي — الضمان والتزام إصلاح الأخطاء (للمراجعة القانونية)
 
