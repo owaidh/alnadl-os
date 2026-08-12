@@ -1,4 +1,4 @@
-> **Version:** v1.8.0 · **Status:** LIVING DOCUMENT — Increments 1-4 + QR Bulk/Analytics implemented & regression-tested; remaining scope: Partner Dashboard extensions, §26 documentation set (19/20 files outstanding) · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
+> **Version:** v1.9.0 · **Status:** LIVING DOCUMENT — Increments 1-4 + QR Bulk/Analytics + Partner Dashboard implemented & regression-tested; §26 documentation set complete (20/20). Remaining: R01/R02 grouped-delivery policy, formal UAT sign-off from client. · **Last Updated:** 2026-08-12 · **Release Tag:** v1.9.0-partner-dashboard
 
 # Alnadl Hospitality OS — Phase 4 Gap Analysis & Technical Design
 ### (المطلوب من المبرمج قبل بدء التنفيذ — §22 من وثيقة Phase 4 Change Request v2)

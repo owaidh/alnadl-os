@@ -1,16 +1,47 @@
-> **Version:** v1.8.0 · **Status:** FINAL (Phase 1-3) + LIVING (Phase 4 in progress) · **Last Updated:** 2026-08-12 · **Release Tag:** v1.8.0-qr-analytics
+> **Version:** v1.9.0 · **Status:** FINAL (Phase 1-4 + §26 documentation set) · **Last Updated:** 2026-08-12 · **Release Tag:** v1.9.0-partner-dashboard
 
 # Alnadl Hospitality OS — التسليم الفني النهائي (Final Technical Handover)
 
-هذا المستند هو نقطة الدخول الرسمية لكل ما سلَّمته شركة (أداة) التنفيذ، ويطابق قائمة المخرجات المطلوبة في §27 من وثيقة `05_Alnadl_Hospitality_OS_Screen_Spec_Wireframes_Developer_Handoff_v1.docx`.
+هذا المستند هو نقطة الدخول الرسمية لكل ما سلَّمته شركة (أداة) التنفيذ. يطابق قائمة المخرجات المطلوبة في §27 من `05_..._Developer_Handoff_v1.docx` (Phase 1-3)، وقائمة الوثائق المطلوبة في §26 من `Alnadl_Hospitality_OS_Phase4_Upgrade_Change_Request_for_Developer_v2.docx` (Phase 4).
 
 ---
 
-## فهرس المخرجات (مطابق للبنود 11–22 من §27)
+## فهرس §26 — حزمة توثيق Phase 4 (20 وثيقة مطلوبة)
+
+| # | الوثيقة المطلوبة | الملف | الحالة |
+|---|---|---|---|
+| 1 | Master Requirements | `docs/MASTER_REQUIREMENTS.md` | ✅ |
+| 2 | PRD | `docs/PRD.md` | ✅ |
+| 3 | Architecture | `docs/ARCHITECTURE.md` | ✅ |
+| 4 | Schema/ERD | `docs/DATABASE_SCHEMA.md` | ✅ |
+| 5 | API Documentation | `docs/API_DOCUMENTATION.md` | ✅ |
+| 6 | UX/UI Spec | `docs/UX_UI_SPEC.md` | ✅ |
+| 7 | User Flows | `docs/USER_FLOWS.md` | ✅ |
+| 8 | Developer Handoff | هذا الملف (`HANDOVER.md`) | ✅ |
+| 9 | QR/Site Mapping Spec | `docs/QR_SITE_MAPPING_SPEC.md` | ✅ |
+| 10 | Packages/Feature Flags Matrix | `docs/PACKAGES_FEATURE_FLAGS_MATRIX.md` | ✅ |
+| 11 | Multi-Outlet Spec | `docs/MULTI_OUTLET_SPEC.md` | ✅ |
+| 12 | Revenue Model Spec | `docs/REVENUE_MODEL_SPEC.md` | ✅ |
+| 13 | White Label Spec | `docs/WHITE_LABEL_SPEC.md` | ✅ |
+| 14 | Roles/Permissions Matrix | `docs/ROLES_PERMISSIONS_MATRIX.md` | ✅ |
+| 15 | Test Plan + UAT + Evidence | `docs/TEST_PLAN.md` (مُحدَّث بقسم Phase 4) | ✅ |
+| 16 | Deployment/Migration Guide | `docs/DEPLOYMENT.md` (مُحدَّث بقسم Migration الفعلي) | ✅ |
+| 17 | Admin Manual | `docs/TRAINING.md` (مُحدَّث بشاشات Phase 4) | ✅ |
+| 18 | Partner User Manual | `docs/TRAINING.md` (قسم PartnerAdmin/PartnerViewer) | ✅ |
+| 19 | Operations Manual | `docs/RUNBOOK.md` (مُحدَّث بحوادث Phase 4) | ✅ |
+| 20 | Release Notes/Change Log | `docs/CHANGELOG.md` | ✅ |
+
+**كل الـ20 وثيقة مكتملة.** الوثيقة رقم 8 (Developer Handoff) هي هذا الملف نفسه — لم يُنشأ ملف منفصل تفاديًا للتكرار، بما أن محتواه (فهرسة كل المخرجات + نقطة الدخول للمشروع) هو تعريف "Developer Handoff" بالضبط.
+
+راجع أيضًا `docs/PHASE4_GAP_ANALYSIS.md` — يحتوي Traceability Matrix (§26.3) بمعرّفات `P4-*` وأدلة اختبار فعلية لكل بند، وخريطة `docs/` الحالية مقابل هيكل §26.5 المقترح (11 مجلدًا).
+
+---
+
+## فهرس المخرجات (Phase 1-3، مطابق للبنود 11–22 من §27)
 
 | # | المخرج المطلوب | الملف/الموقع | الحالة |
 |---|---|---|---|
-| 11 | UX/UI source files + Design System | `public/styles.css` (نظام تصميم فعلي مطبَّق بالكود، بدون ملفات Figma مصدرية) | ⚠️ جزئي |
+| 11 | UX/UI source files + Design System | `public/styles.css` + `docs/UX_UI_SPEC.md` (نظام تصميم فعلي مطبَّق بالكود، بدون ملفات Figma مصدرية) | ⚠️ جزئي |
 | 12 | Customer Web App/PWA | `public/manifest.json` + `public/sw.js` + `public/icons/` | ✅ |
 | 13 | Backend source code + API documentation | `server.js`, `db.js`, `lib/` + `docs/API_DOCUMENTATION.md` | ✅ |
 | 14 | Admin/Partner/Operations portals | `public/app.js` (تطبيق واحد متعدد الأدوار، وليس بوابات منفصلة) | ✅ |

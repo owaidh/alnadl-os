@@ -1,4 +1,4 @@
-> **Version:** v1.3.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.3.0
+> **Version:** v1.9.0 · **Status:** FINAL · **Last Updated:** 2026-08-12 · **Release Tag:** v1.9.0-partner-dashboard
 
 # Alnadl Hospitality OS — Deployment Guide
 
@@ -86,6 +86,15 @@ SQLite ممتازة للتطوير والعرض، لكنها **غير مناسب
 اربط نطاقًا فعليًا (مثال: `os.alnadl.com`) وشهادة SSL (Let's Encrypt عبر Caddy تلقائي، أو عبر مزوّد الاستضافة).
 
 ---
+
+## Phase 4 — تفاصيل Migration الفعلية
+
+كل تعديلات Phase 4 على قاعدة البيانات **تلقائية بالكامل** عند إقلاع `server.js` — لا سكربت منفصل يُشغَّل يدويًا:
+1. `db.js` يُنفِّذ `CREATE TABLE IF NOT EXISTS` للجداول السبعة الجديدة (`outlets`, `outlet_availability`, `qr_analytics_events`, `child_orders`, `revenue_models`, `revenue_ledger`, `partner_branding`) — لا تأثير على أي جدول قائم
+2. `ALTER TABLE ... ADD COLUMN` (محاطة بمعالجة أخطاء صامتة) لإضافة أعمدة على جداول موجودة (`qr_tokens.qr_type`, `products.outlet_id`, `order_items.outlet_id`/`child_order_id`) — آمنة على قاعدة بيانات فيها بيانات فعلية بالفعل
+3. `migratePhase4Outlets()` تُنشئ منفذًا افتراضيًا لكل منشأة لا تملك منفذًا بعد — **Idempotent بالكامل**، تُشغَّل في كل إقلاع دون خطر التكرار (تتحقق أولاً من عدم وجود منفذ مسبقًا لكل منشأة)
+
+**لا حاجة لإيقاف الخدمة** أثناء هذا Migration — يُنفَّذ خلال أجزاء من الثانية عند الإقلاع العادي. **لا Rollback سكربت منفصل مطلوب**: التراجع الفعلي هو استعادة نسخة `data.sqlite` الاحتياطية (أو قاعدة PostgreSQL) من قبل الترقية.
 
 ## 4) خيارات استضافة سريعة (بدون بنية تحتية معقّدة)
 

@@ -18,8 +18,19 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const DOCS = [
   { file: 'README.md', category: 'دليل المشروع · Project Guide' },
   { file: 'HANDOVER.md', category: 'التسليم الفني النهائي · Final Handover' },
+  { file: 'docs/MASTER_REQUIREMENTS.md', category: 'المتطلبات · Requirements' },
+  { file: 'docs/PRD.md', category: 'المتطلبات · Requirements' },
+  { file: 'docs/ARCHITECTURE.md', category: 'مرجع تقني · Technical Reference' },
   { file: 'docs/API_DOCUMENTATION.md', category: 'مرجع تقني · Technical Reference' },
   { file: 'docs/DATABASE_SCHEMA.md', category: 'مرجع تقني · Technical Reference' },
+  { file: 'docs/UX_UI_SPEC.md', category: 'تصميم · Design' },
+  { file: 'docs/USER_FLOWS.md', category: 'تصميم · Design' },
+  { file: 'docs/QR_SITE_MAPPING_SPEC.md', category: 'مواصفة فنية · Technical Spec' },
+  { file: 'docs/PACKAGES_FEATURE_FLAGS_MATRIX.md', category: 'مواصفة فنية · Technical Spec' },
+  { file: 'docs/MULTI_OUTLET_SPEC.md', category: 'مواصفة فنية · Technical Spec' },
+  { file: 'docs/REVENUE_MODEL_SPEC.md', category: 'مواصفة فنية · Technical Spec' },
+  { file: 'docs/WHITE_LABEL_SPEC.md', category: 'مواصفة فنية · Technical Spec' },
+  { file: 'docs/ROLES_PERMISSIONS_MATRIX.md', category: 'أمن المعلومات · Security' },
   { file: 'docs/DEPLOYMENT.md', category: 'دليل تشغيلي · Operations Guide' },
   { file: 'docs/TEST_PLAN.md', category: 'ضمان الجودة · Quality Assurance' },
   { file: 'docs/RUNBOOK.md', category: 'دليل تشغيلي · Operations Guide' },
@@ -27,6 +38,7 @@ const DOCS = [
   { file: 'docs/CREDENTIALS.md', category: 'أمن المعلومات · Security' },
   { file: 'docs/WARRANTY_CLAUSE_TEMPLATE.md', category: 'نموذج تعاقدي · Contract Template' },
   { file: 'docs/PHASE4_GAP_ANALYSIS.md', category: 'تحليل فني · Technical Analysis', landscape: true },
+  { file: 'docs/CHANGELOG.md', category: 'سجل الإصدارات · Release Notes' },
 ];
 
 const CSS = `
