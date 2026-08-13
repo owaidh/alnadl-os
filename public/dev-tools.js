@@ -80,7 +80,7 @@
           items: S.cart.map(c=>({ productId:c.productId, variantId:c.variantId, addonIds:c.addonIds, qty:c.qty, notes:c.notes })),
         };
         const created = await api('POST', '/api/orders', payload);
-        S.currentOrder = { id: created.id, status: created.status };
+        S.currentOrder = { id: created.id, status: created.status, paymentRef: created.paymentRef };
       }
       const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod, simulateFail:true });
       S.currentOrder.status = result.status;

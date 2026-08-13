@@ -285,7 +285,7 @@ const App = {
           items: S.cart.map(c=>({ productId:c.productId, variantId:c.variantId, addonIds:c.addonIds, qty:c.qty, notes:c.notes })),
         };
         const created = await api('POST', '/api/orders', payload);
-        S.currentOrder = { id: created.id, status: created.status };
+        S.currentOrder = { id: created.id, status: created.status, paymentRef: created.paymentRef };
       }
       const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod });
       S.currentOrder.status = result.status;
@@ -321,7 +321,11 @@ const App = {
   async checkEngageEligibility(){
     if(!S.currentOrder || S.engage.eligible!==null) return;
     try{
-      const r = await api('GET', `/api/orders/${S.currentOrder.id}/engage-pass`);
+      // paymentRef is the guest's own proof of ownership (see the
+      // endpoint's authorization note in server.js) -- without it the
+      // server correctly refuses to hand out an Engage capability.
+      if(!S.currentOrder.paymentRef){ S.engage.eligible = false; render(); return; }
+      const r = await api('GET', `/api/orders/${S.currentOrder.id}/engage-pass?paymentRef=${encodeURIComponent(S.currentOrder.paymentRef)}`);
       S.engage.eligible = !!r.eligible;
       S.engage.accessToken = r.accessToken || null;
     }catch(e){ S.engage.eligible = false; } // never surfaced to the guest
@@ -941,7 +945,7 @@ function prodCard(p){
   // fallback to the UX-0 monogram placeholder otherwise — never a broken
   // image icon (onerror swaps back to the monogram markup directly).
   const media = p.image_url
-    ? `<img src="${p.image_url}" alt="${name}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot;>${productMonogram(name)}</div>'">`
+    ? `<img src="${p.image_url}" alt="${name}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot;>${esc(productMonogram(name))}</div>'">`
     : `<div class="media-placeholder sm">${productMonogram(name)}</div>`;
   return `
     <div class="prodcard ${p.available?'':'oos'}">
@@ -959,7 +963,7 @@ function renderProductModal(){
   const unit = def.base_price + (variant?variant.price_delta:0) + addonTotal;
   const modalName = S.lang==='ar'?def.name_ar:def.name_en;
   const heroMedia = def.image_url
-    ? `<img src="${def.image_url}" alt="${modalName}" onerror="this.outerHTML='<div class=&quot;media-placeholder lg&quot;>${productMonogram(modalName)}</div>'">`
+    ? `<img src="${def.image_url}" alt="${modalName}" onerror="this.outerHTML='<div class=&quot;media-placeholder lg&quot;>${esc(productMonogram(modalName))}</div>'">`
     : `<div class="media-placeholder lg">${productMonogram(modalName)}</div>`;
   return `
   <div class="modalwrap"><div class="modalsheet">
@@ -990,7 +994,7 @@ function scrCart(){
     ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : S.cart.map(c=>{
       const cName = S.lang==='ar'?c.ar:c.en;
       const cMedia = c.imageUrl
-        ? `<img src="${c.imageUrl}" alt="${cName}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot; style=&quot;font-size:16px&quot;>${productMonogram(cName)}</div>'">`
+        ? `<img src="${c.imageUrl}" alt="${cName}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot; style=&quot;font-size:16px&quot;>${esc(productMonogram(cName))}</div>'">`
         : `<div class="media-placeholder sm" style="font-size:16px">${productMonogram(cName)}</div>`;
       return `
       <div class="cartrow"><div class="th">${cMedia}</div><div class="mid">
@@ -1117,7 +1121,7 @@ function scrFeedback(){
     <div style="text-align:start">
       ${tags.map(tg=>`<span class="tagchip" style="display:inline-block;border:1px solid ${fb.tags.includes(tg)?'var(--ink-900)':'var(--cream-200)'};background:${fb.tags.includes(tg)?'var(--ink-900)':'var(--white)'};color:${fb.tags.includes(tg)?'var(--cream-050)':'var(--ink-900)'};padding:8px 14px;border-radius:999px;font-size:12px;font-weight:700;margin:0 5px 8px 0;cursor:pointer" onclick="App.toggleTag('${tg}')">${tg}</span>`).join('')}
     </div>
-    <textarea id="fbComment" class="noteinput" rows="3" placeholder="${t('optionalComment')}" style="margin-top:14px" oninput="S.feedback.comment=this.value">${fb.comment||''}</textarea>
+    <textarea id="fbComment" class="noteinput" rows="3" placeholder="${t('optionalComment')}" style="margin-top:14px" oninput="S.feedback.comment=this.value">${esc(fb.comment||'')}</textarea>
     <button class="btn-primary" style="margin-top:16px" onclick="App.submitFeedback()">${t('submitFeedback')}</button>
   </div>`;
 }
@@ -1197,8 +1201,11 @@ function scrEngage(){
   }
 
   const p = e.moment.payload || {};
-  const title = S.lang==='ar' ? (p.title_ar||p.title_en||'') : (p.title_en||p.title_ar||'');
-  const body  = S.lang==='ar' ? (p.body_ar||p.body_en||'')  : (p.body_en||p.body_ar||'');
+  // Encoded at the point of output — see esc(). Engage payloads may be
+  // AI-generated, so they are treated as untrusted markup regardless of
+  // having passed the safety gate.
+  const title = esc(S.lang==='ar' ? (p.title_ar||p.title_en||'') : (p.title_en||p.title_ar||''));
+  const body  = esc(S.lang==='ar' ? (p.body_ar||p.body_en||'')  : (p.body_en||p.body_ar||''));
   const used = e.session?.ceilingUsed || 0;
   const max  = e.session?.ceilingMax || 0;
 
@@ -1744,6 +1751,29 @@ function renderPartnerOverview(){
 // (returning an em-dash) so a genuinely-unavailable figure never renders
 // as a misleading "0.00".
 function money2(n){ return n==null ? '—' : money(n); }
+
+/* UX-5 corrective round: HTML output encoding.
+   render() writes through innerHTML, so ANY dynamic string interpolated
+   into a template becomes live markup. Engage content is the sharpest
+   case -- it can originate from an AI provider or Mechanic Lab, so it is
+   untrusted by definition, and Content/AI Safety gates are about MEANING,
+   not about markup: they are not a substitute for output encoding and
+   must never be treated as one.
+
+   This encodes the five HTML-significant characters at the point of
+   output, which is the correct layer -- not a blocklist of "<script>"
+   style patterns, which would miss event handlers, svg/onload, entity
+   tricks and every other vector. Arabic, English, digits, punctuation
+   and emoji pass through untouched because none of them are in the
+   replacement set. */
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 // UX-3 corrective round: the SLA card must state honestly HOW MANY orders
 // the percentage actually rests on, and how many were deliberately left
 // out because this system cannot yet measure them correctly (multi-outlet

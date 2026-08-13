@@ -460,21 +460,44 @@ on('GET', '/api/engage/pass/:token', null, async (req, res, p) => {
    made the entire Engage experience unreachable for a real customer --
    the missing first link in the chain, not a styling gap.
 
-   Deliberately narrow: it returns ONLY whether an eligible pass exists
-   and its own capability token. It exposes no personality, no mechanic,
-   no AI internals, no session state -- everything else still comes from
-   the existing session endpoints, which enforce their own rules. A
-   missing/ineligible/expired pass returns a plain { eligible: false },
-   never an error the guest UI would have to interpret, and never a hint
-   about WHY (per §11: "not expose policy internals... to the guest").
-   Engage being disabled by any flag simply means no pass was ever
-   created, which arrives here as eligible:false and sends the guest
-   straight back to the normal hospitality flow. */
-on('GET', '/api/orders/:id/engage-pass', null, async (req, res, p) => {
+   AUTHORIZATION (corrective round). The first version keyed this on
+   order_id alone, which was a real flaw: order ids are generated as
+   'ORD-' + (1800 + COUNT(*)) -- strictly sequential and trivially
+   enumerable. That would have let anyone walk ORD-1801, ORD-1802... and
+   harvest Engage CAPABILITY tokens, each of which can start a real
+   session. That is a materially weaker gate than the capability model
+   Phase 5 was built on, so knowing an order id is deliberately NOT
+   sufficient here.
+
+   The caller must also present the order's payment_ref -- a
+   crypto.randomBytes-derived value returned to the guest (and only the
+   guest) in the order-creation response, never derivable from the id.
+   This reuses proof the legitimate guest already holds rather than
+   inventing a guest login, and keeps the capability chain intact:
+   possession of a real secret is what yields a capability, exactly as
+   everywhere else in Engage.
+
+   Every rejection -- unknown order, wrong ref, no pass, expired,
+   ineligible -- returns the SAME { eligible: false }. That satisfies
+   "do not expose policy internals to the guest" (§11) and additionally
+   avoids confirming whether an order id exists at all, so this endpoint
+   cannot be used as an order-enumeration oracle either. */
+on('GET', '/api/orders/:id/engage-pass', null, async (req, res, p, query) => {
+  const SAFE_NO = { eligible: false };
+  const providedRef = query.paymentRef;
+  if (!providedRef) return sendJSON(res, 200, SAFE_NO);
+  const order = db.prepare('SELECT payment_ref FROM orders WHERE id = ?').get(p.id);
+  if (!order || !order.payment_ref) return sendJSON(res, 200, SAFE_NO);
+  // Compare length first, then timing-safe equality -- timingSafeEqual
+  // throws on length mismatch, and a naive === is a poor habit to set on
+  // a secret comparison even when the window is small.
+  const a = Buffer.from(String(order.payment_ref));
+  const b = Buffer.from(String(providedRef));
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return sendJSON(res, 200, SAFE_NO);
+
   const pass = db.prepare('SELECT access_token, status, expires_at FROM engage_pass WHERE order_id = ?').get(p.id);
-  if (!pass) return sendJSON(res, 200, { eligible: false });
-  const expired = Date.now() > pass.expires_at;
-  if (pass.status !== 'active' || expired) return sendJSON(res, 200, { eligible: false });
+  if (!pass) return sendJSON(res, 200, SAFE_NO);
+  if (pass.status !== 'active' || Date.now() > pass.expires_at) return sendJSON(res, 200, SAFE_NO);
   sendJSON(res, 200, { eligible: true, accessToken: pass.access_token, expiresAt: pass.expires_at });
 });
 
