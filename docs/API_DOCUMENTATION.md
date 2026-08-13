@@ -1,4 +1,4 @@
-> **Version:** v2.0.8-p5-inc3 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.8-p5-inc3
+> **Version:** v2.0.9-p5-inc3-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.9-p5-inc3-corrective
 
 # Alnadl Hospitality OS — API Documentation
 

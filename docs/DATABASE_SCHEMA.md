@@ -1,4 +1,4 @@
-> **Version:** v2.0.8-p5-inc3 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.8-p5-inc3
+> **Version:** v2.0.9-p5-inc3-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 (SQL-scoped) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.9-p5-inc3-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### تصحيح: Tenant Scoping عند مستوى SQL (لا فلترة JavaScript لاحقة)
+`lib/engage-ledger.js` — كلٌ من `getPartnerOverview()` و`getFullLedger({partnerId})` يُصفِّيان الآن عبر `WHERE json_extract(context_snapshot_json, '$.partnerId') = ?` (معامل مُربَوط) داخل الاستعلام نفسه — وليس جلب كل الصفوف ثم `.filter()` في Node. مُختبَر بزرع بيانات شريكين وتحقُّق عدد دقيق لكل واحد + فحص مباشر على نص الكود يُثبت غياب أي فلترة لاحقة متبقية.
 
 ### جداول Experience Ledger — Phase 5 P5-Inc-3 (`migrations/008_engage_inc3.js`)
 - **`moment.selection_reason`** — عمود إضافي جديد؛ يُسجِّل صراحة *لماذا* اختير هذا المحتوى (حاليًا: Round-Robin ثابت، بصياغة صادقة تصف الواقع فعليًا وليس منطق ذكاء اصطناعي غير موجود بعد)

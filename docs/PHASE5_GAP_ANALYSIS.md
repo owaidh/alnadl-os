@@ -1,4 +1,4 @@
-> **Version:** v2.0.8-p5-inc3 · **Status:** P5-Inc-3 DELIVERED (Experience Ledger + Events + Admin/Partner Visibility), awaiting review before P5-Inc-4 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.8-p5-inc3`
+> **Version:** v2.0.9-p5-inc3-corrective · **Status:** P5-Inc-3 CORRECTIVE ROUND DELIVERED (SQL-level tenant scoping, replacing post-query JS filtering), awaiting review before P5-Inc-4 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.9-p5-inc3-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -10,7 +10,33 @@
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
 
-## P5-Inc-3 — سجل التسليم الفعلي (Experience Ledger + Visibility)
+## P5-Inc-3 — الجولة التصحيحية (SQL-Level Tenant Scoping)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-4.**
+
+### الملاحظة المُعالَجة
+
+**قبل هذه الجولة**: `getPartnerOverview()` و`getFullLedger({partnerId})` كانتا تجلبان **كل** صفوف `engage_session`/`moment` من قاعدة البيانات إلى Node، ثم تُصفِّيان حسب `partnerId` بـ`.filter(row => JSON.parse(...))` في JavaScript. **لم يكن هذا تسريبًا فعليًا** (النتيجة النهائية المُعادة للعميل كانت صحيحة ومعزولة دائمًا) — لكنه لم يكن Tenant Scoping حقيقيًا عند مستوى الاستعلام نفسه، وهو ما طلبتم تشديده قبل نمو حجم بيانات Engage في Inc-4 وما بعدها.
+
+### الإصلاح
+
+كلا الدالتين الآن تُصفِّيان **داخل جملة SQL نفسها**، عبر `json_extract(ep.context_snapshot_json, '$.partnerId') = ?` بمعامل مُربَوط (Parameterized) — **وليس تضمين نص مباشر**. تحققت من عمل `json_extract` فعليًا في محرك SQLite المُستخدَم هنا قبل الكتابة (اختبار مباشر منفصل قبل أي تعديل).
+
+```sql
+-- getPartnerOverview(partnerId) — لا Payload، لا اسم آلية، لا selection_reason على الإطلاق في SELECT:
+SELECT es.personality, es.status
+FROM engage_session es JOIN engage_pass ep ON ep.id = es.pass_id
+WHERE json_extract(ep.context_snapshot_json, '$.partnerId') = ?
+```
+
+### الدليل — أربعة مستويات، ليس ادّعاءً فقط
+
+1. **عدد دقيق**: زُرعت 3 جلسات لشريك A و2 لشريك B، وتحقَّق الاختبار أن استعلام A يُرجع **+3 بالضبط** وB يُرجع **+2 بالضبط** — لا تسرّب، ولا نقصان
+2. **فحص شامل**: كل صف من `getFullLedger({partnerId:'pt_nova'})` تحقَّق فعليًا أنه يخص `pt_nova` فقط
+3. **دليل على مستوى الكود نفسه**: اختبار يقرأ `lib/engage-ledger.js` الفعلي ويتحقق من وجود `json_extract(...) = ?` **وغياب** أي `.filter(row => JSON.parse` متبقٍ — إثبات أن التغيير كودي حقيقي، وليس نتيجة اختبار متوافقة صدفة
+4. **Regression كامل**: **200/200** (194 السابقة + 6 اختبارات جديدة لهذا التشديد تحديدًا)
+
+
 
 **الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-4.**
 

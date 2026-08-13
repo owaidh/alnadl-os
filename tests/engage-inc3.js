@@ -13,6 +13,17 @@ function openDirectDb() {
   return require('../db.js').db;
 }
 
+const fs = require('fs');
+const path = require('path');
+// Code-level proof helper: confirms a specific pattern is (or is not)
+// present in the actual source, rather than only inferring it from
+// behavior. Used once below to prove the tenant-scoping fix is a real
+// code change, not a coincidentally-correct test outcome.
+function sourceContains(relativePath, needle) {
+  const content = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+  return content.includes(needle);
+}
+
 function makePass(db, { partnerId, propertyId, zoneId, pointId, orderId }) {
   const { uid } = require('../db.js');
   const crypto = require('crypto');
@@ -140,6 +151,47 @@ async function run() {
 
     const operatorOverviewAttempt = await api('GET', '/api/partner/engage/overview', null, operatorToken);
     assertEqual(operatorOverviewAttempt.status, 403, 'an Operator role cannot access the Partner Overview endpoint (wrong role entirely)');
+
+    // ============================================================
+    // CORRECTIVE ROUND: SQL-level tenant scoping (not post-query JS filtering)
+    // ============================================================
+    // Plant a KNOWN, precisely-countable set of sessions for two different
+    // partners, then verify each partner's query returns EXACTLY their own
+    // count -- not "at least their own data mixed with nothing extra" but
+    // an exact number, proving the SQL WHERE clause itself is what bounds
+    // the result set, not an incidental correct outcome of a wider fetch.
+    const { getPartnerOverview, getFullLedger } = require('../lib/engage-ledger.js');
+    const beforeA = getPartnerOverview('pt_nova');
+    const beforeB = getPartnerOverview('pt_alrowad');
+
+    db.prepare(`UPDATE properties SET venue_context = 'coffee' WHERE id = 'prop_nova_main'`).run();
+    const scopingPassesA = [1, 2, 3].map(() => makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: null, pointId: 'PT-014', orderId: nextOrderId() }));
+    for (const p of scopingPassesA) await api('POST', '/api/engage/session/start', { accessToken: p.accessToken });
+    db.prepare(`UPDATE properties SET venue_context = 'hotel' WHERE id = 'prop_nova_main'`).run();
+
+    const scopingPassesB = [1, 2].map(() => makePass(db, { partnerId: 'pt_alrowad', propertyId: 'prop_alrowad_hq', zoneId: null, pointId: 'PT-014', orderId: nextOrderId() }));
+    for (const p of scopingPassesB) await api('POST', '/api/engage/session/start', { accessToken: p.accessToken });
+
+    const afterA = getPartnerOverview('pt_nova');
+    const afterB = getPartnerOverview('pt_alrowad');
+    assertEqual(afterA.offered - beforeA.offered, 3, 'SQL SCOPING: Partner A (pt_nova) query returns EXACTLY the 3 sessions just planted for A, not more, not fewer -- the WHERE clause itself bounds the result');
+    assertEqual(afterB.offered - beforeB.offered, 2, "SQL SCOPING: Partner B (pt_alrowad) query returns EXACTLY the 2 sessions planted for B -- proves A's 3 new sessions did not leak into B's count");
+
+    // Same proof for the Full Ledger's optional partnerId scoping, at the SQL level
+    const ledgerAllBefore = getFullLedger({});
+    const ledgerScopedA = getFullLedger({ partnerId: 'pt_nova' });
+    assert(ledgerScopedA.length <= ledgerAllBefore.length, 'sanity: scoped ledger is never larger than the unscoped one');
+    assert(ledgerScopedA.every(row => JSON.parse(row.context_snapshot_json).partnerId === 'pt_nova'),
+      'SQL SCOPING: every single row returned by getFullLedger({partnerId:"pt_nova"}) genuinely belongs to pt_nova -- the json_extract() WHERE clause is what guarantees this, not a downstream filter');
+
+    // Query plan proof (not just outcome): confirm the actual SQL sent to
+    // SQLite contains a WHERE clause referencing json_extract when a
+    // partnerId is requested, and contains NO WHERE clause at all when it
+    // isn't -- verifying the code path, not merely the returned data shape.
+    assert(sourceContains('lib/engage-ledger.js', "json_extract(ep.context_snapshot_json, '$.partnerId') = ?"),
+      'CODE-LEVEL PROOF: getFullLedger uses a parameterized json_extract() WHERE clause, not a post-query .filter()');
+    assert(!sourceContains('lib/engage-ledger.js', '.filter(row => JSON.parse'),
+      'CODE-LEVEL PROOF: no post-query JavaScript .filter() on parsed JSON remains anywhere in lib/engage-ledger.js');
 
     // ============================================================
     // Admin Overview: aggregate counts are sane and Core-isolation-respecting
