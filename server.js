@@ -25,6 +25,11 @@ const gateway = getGateway();
 
 const PORT = process.env.PORT || 8787;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// UX-2: matches the existing default already used at outlet creation
+// (`b.slaPrepMin || 8`) — a legacy order whose outlet can't be resolved
+// (or a genuinely outlet-less order) falls back to this same number
+// rather than a second, different guess.
+const DEFAULT_SLA_PREP_MIN = 8;
 
 /* ---------------------------- small utilities ---------------------------- */
 function sendJSON(res, status, data) {
@@ -784,8 +789,15 @@ on('GET', '/api/orders/:id/refunds', ['AlnadlFinance', 'SiteManager', 'SuperAdmi
 
 /* ------------------------------ OPERATIONS (KDS) --------------------------------- */
 on('GET', '/api/ops/queue', ['Operator', 'SiteManager', 'SuperAdmin'], async (req, res, p, query, session) => {
+  // UX-2 (spec K02 hierarchy #2 "Zone + Point/Table"; K04 "SLA... amber/
+  // red thresholds"): zone name and a real per-outlet prep-time SLA
+  // (outlets.sla_prep_min, already a real configured column — was never
+  // surfaced to the KDS at all, which hardcoded 5/8-minute guesses
+  // client-side instead of using it) are now both included so the
+  // client never has to invent either.
   const rows = db.prepare(`
-    SELECT o.*, pt.label AS point_label FROM orders o LEFT JOIN points pt ON pt.id = o.point_id
+    SELECT o.*, pt.label AS point_label, z.name_ar AS zone_name_ar, z.name_en AS zone_name_en
+    FROM orders o LEFT JOIN points pt ON pt.id = o.point_id LEFT JOIN zones z ON z.id = pt.zone_id
     WHERE o.status IN ('Paid','Accepted','Preparing','Ready','Out for Delivery') ORDER BY o.created_at ASC`).all();
   const result = [];
   for (const o of rows) {
@@ -793,7 +805,9 @@ on('GET', '/api/ops/queue', ['Operator', 'SiteManager', 'SuperAdmin'], async (re
     if (children.length === 0) {
       // Legacy single-outlet path — identical shape to every version before Phase 4.
       const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(o.id);
-      result.push({ ...o, itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', ') });
+      const legacyOutletId = items.find(i => i.outlet_id)?.outlet_id || null;
+      const legacyOutlet = legacyOutletId ? db.prepare('SELECT sla_prep_min FROM outlets WHERE id = ?').get(legacyOutletId) : null;
+      result.push({ ...o, itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', '), itemCount: items.reduce((s, i) => s + i.qty, 0), slaPrepMin: legacyOutlet ? legacyOutlet.sla_prep_min : DEFAULT_SLA_PREP_MIN });
     } else {
       // Unified Cart (§8, §13): the Parent itself isn't independently
       // actionable once split — each Outlet's portion is its own ticket.
@@ -801,13 +815,15 @@ on('GET', '/api/ops/queue', ['Operator', 'SiteManager', 'SuperAdmin'], async (re
       for (const c of children) {
         if (['Paid', 'Accepted', 'Preparing', 'Ready', 'Out for Delivery'].indexOf(c.status) === -1) continue;
         if (query.stationId && c.station_id !== query.stationId) continue;
-        const outlet = db.prepare('SELECT name_ar, name_en FROM outlets WHERE id = ?').get(c.outlet_id);
+        const outlet = db.prepare('SELECT name_ar, name_en, sla_prep_min FROM outlets WHERE id = ?').get(c.outlet_id);
         const items = db.prepare('SELECT * FROM order_items WHERE child_order_id = ?').all(c.id);
         result.push({
           id: c.id, status: c.status, created_at: c.created_at, point_label: o.point_label,
-          itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', '),
+          zone_name_ar: o.zone_name_ar, zone_name_en: o.zone_name_en,
+          itemsSummary: items.map(i => `${i.qty}× ${i.name_ar}`).join(', '), itemCount: items.reduce((s, i) => s + i.qty, 0),
           isChild: true, parentOrderId: o.id, outletId: c.outlet_id,
           outletName: outlet ? outlet.name_ar : null, outletNameEn: outlet ? outlet.name_en : null,
+          slaPrepMin: outlet ? outlet.sla_prep_min : DEFAULT_SLA_PREP_MIN,
         });
       }
     }
@@ -825,9 +841,14 @@ on('POST', '/api/orders/:id/transition', ['Operator', 'SiteManager', 'Runner', '
     return sendJSON(res, 403, { error: `Role ${session.role} cannot perform this transition` });
   }
   if (to === 'Cancelled' && !body.reason) return sendJSON(res, 400, { error: 'Cancellation requires a reason' });
+  // UX-2 (spec R03: "Delivery exception — reason required; audit-safe"):
+  // same discipline already proven for Cancelled — a Runner marking a
+  // delivery as failed must supply why, recorded auditable and visible
+  // to SiteManager/SuperAdmin later, exactly like a cancellation reason.
+  if (to === 'Delivery Failed' && !body.reason) return sendJSON(res, 400, { error: 'Delivery failure requires a reason' });
 
   db.prepare('UPDATE orders SET status=?, updated_at=?, cancel_reason=? WHERE id=?')
-    .run(to, Date.now(), to === 'Cancelled' ? body.reason : order.cancel_reason, order.id);
+    .run(to, Date.now(), ['Cancelled', 'Delivery Failed'].includes(to) ? body.reason : order.cancel_reason, order.id);
 
   const fulfillmentCol = { Accepted: 'accepted_at', Preparing: 'preparing_at', Ready: 'ready_at', 'Out for Delivery': 'out_at', Delivered: 'delivered_at' }[to];
   if (fulfillmentCol) {
@@ -900,8 +921,9 @@ on('POST', '/api/child-orders/:id/transition', ['Operator', 'SiteManager', 'Runn
     return sendJSON(res, 403, { error: `Role ${session.role} cannot perform this transition` });
   }
   if (to === 'Cancelled' && !body.reason) return sendJSON(res, 400, { error: 'Cancellation requires a reason' });
+  if (to === 'Delivery Failed' && !body.reason) return sendJSON(res, 400, { error: 'Delivery failure requires a reason' });
   db.prepare('UPDATE child_orders SET status=?, updated_at=?, cancel_reason=? WHERE id=?')
-    .run(to, Date.now(), to === 'Cancelled' ? body.reason : child.cancel_reason, child.id);
+    .run(to, Date.now(), ['Cancelled', 'Delivery Failed'].includes(to) ? body.reason : child.cancel_reason, child.id);
   audit(session.username, session.role, 'child_status_change', child.id, { status: child.status }, { status: to }, body.reason || null);
   deriveParentStatus(child.parent_order_id);
   sendJSON(res, 200, { id: child.id, status: to, parentOrderId: child.parent_order_id });
@@ -909,8 +931,14 @@ on('POST', '/api/child-orders/:id/transition', ['Operator', 'SiteManager', 'Runn
 
 /* ------------------------------ RUNNER --------------------------------- */
 on('GET', '/api/runner/queue', ['Runner', 'SuperAdmin'], async (req, res) => {
+  // UX-2 (spec R01 hierarchy: "Destination > pickup outlet > order# >
+  // wait"): zone name (the actual destination) and pickup outlet name are
+  // now both included — neither existed in this response before, which
+  // is why the Runner queue previously had no way to show either without
+  // inventing data.
   const rows = db.prepare(`
-    SELECT o.*, pt.label AS point_label FROM orders o LEFT JOIN points pt ON pt.id = o.point_id
+    SELECT o.*, pt.label AS point_label, z.name_ar AS zone_name_ar, z.name_en AS zone_name_en
+    FROM orders o LEFT JOIN points pt ON pt.id = o.point_id LEFT JOIN zones z ON z.id = pt.zone_id
     WHERE o.status IN ('Ready','Out for Delivery','Partially Ready','Partially Delivered') ORDER BY o.updated_at ASC`).all();
   const result = [];
   for (const o of rows) {
@@ -920,14 +948,27 @@ on('GET', '/api/runner/queue', ['Runner', 'SuperAdmin'], async (req, res) => {
 
     if (children.length === 0) {
       // Legacy single-outlet path — unaffected by grouping policy, exactly as before Q01.
-      if (['Ready', 'Out for Delivery'].includes(o.status)) result.push(o);
+      if (['Ready', 'Out for Delivery'].includes(o.status)) {
+        const legacyOutletId = db.prepare('SELECT outlet_id FROM order_items WHERE order_id = ? AND outlet_id IS NOT NULL LIMIT 1').get(o.id)?.outlet_id;
+        const legacyOutlet = legacyOutletId ? db.prepare('SELECT name_ar, name_en FROM outlets WHERE id = ?').get(legacyOutletId) : null;
+        const itemCount = db.prepare('SELECT COALESCE(SUM(qty),0) c FROM order_items WHERE order_id = ?').get(o.id).c;
+        result.push({ ...o, outletName: legacyOutlet ? legacyOutlet.name_ar : null, outletNameEn: legacyOutlet ? legacyOutlet.name_en : null, itemCount });
+      }
       continue;
     }
 
     if (grouping === 'grouped') {
       // Grouped (§13, Q01 default — matches pre-Q01 behavior exactly): Runner
       // only ever sees the whole order once every child has reached Ready.
-      if (o.status === 'Ready' || o.status === 'Out for Delivery') result.push(o);
+      // A grouped multi-outlet order can genuinely have more than one
+      // pickup outlet — shown honestly as a count rather than picking one
+      // arbitrarily, since naming just the first would misrepresent it.
+      if (o.status === 'Ready' || o.status === 'Out for Delivery') {
+        const distinctOutlets = [...new Set(children.map(c => c.outlet_id))];
+        const singleOutlet = distinctOutlets.length === 1 ? db.prepare('SELECT name_ar, name_en FROM outlets WHERE id = ?').get(distinctOutlets[0]) : null;
+        const itemCount = children.reduce((s, c) => s + (db.prepare('SELECT COALESCE(SUM(qty),0) c FROM order_items WHERE child_order_id = ?').get(c.id).c), 0);
+        result.push({ ...o, outletName: singleOutlet ? singleOutlet.name_ar : null, outletNameEn: singleOutlet ? singleOutlet.name_en : null, multiOutletCount: distinctOutlets.length > 1 ? distinctOutlets.length : null, itemCount });
+      }
     } else {
       // Separate (§13, Q01): each outlet's portion can be claimed and
       // delivered independently the moment IT is ready, without waiting
@@ -935,10 +976,12 @@ on('GET', '/api/runner/queue', ['Runner', 'SuperAdmin'], async (req, res) => {
       for (const c of children) {
         if (!['Ready', 'Out for Delivery'].includes(c.status)) continue;
         const outlet = db.prepare('SELECT name_ar, name_en FROM outlets WHERE id = ?').get(c.outlet_id);
+        const itemCount = db.prepare('SELECT COALESCE(SUM(qty),0) c FROM order_items WHERE child_order_id = ?').get(c.id).c;
         result.push({
           id: c.id, status: c.status, updated_at: c.updated_at, point_label: o.point_label,
+          zone_name_ar: o.zone_name_ar, zone_name_en: o.zone_name_en,
           isChild: true, parentOrderId: o.id, outletId: c.outlet_id,
-          outletName: outlet ? outlet.name_ar : null, outletNameEn: outlet ? outlet.name_en : null,
+          outletName: outlet ? outlet.name_ar : null, outletNameEn: outlet ? outlet.name_en : null, itemCount,
         });
       }
     }

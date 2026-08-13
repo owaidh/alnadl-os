@@ -122,11 +122,11 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
+  ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
 };
 
@@ -537,7 +537,11 @@ const App = {
   },
 
   /* ---- ops / KDS ---- */
-  async loadOpsQueue(){ S.ops.queue = await api('GET','/api/ops/queue',null,true); render(); },
+  async loadOpsQueue(){
+    try{ S.ops.queue = await api('GET','/api/ops/queue',null,true); S.ops.error=null; }
+    catch(e){ S.ops.error = e.message; }
+    render();
+  },
   openOrderDetail(id){ S.ui.openOrder=id; render(); },
   closeOrderDetail(){ S.ui.openOrder=null; render(); },
   // A ticket id starting with 'CHD-' is a child order (Unified Cart, Phase 4
@@ -557,11 +561,34 @@ const App = {
   dismissCancel(){ S.ui.cancelFor=null; render(); },
 
   /* ---- runner ---- */
-  async loadRunnerQueue(){ S.runnerQ = await api('GET','/api/runner/queue',null,true); render(); },
+  async loadRunnerQueue(){
+    // UX-2 (spec R06: "Never imply order disappeared or was delivered"):
+    // a failed poll sets runnerError but deliberately does NOT touch
+    // S.runnerQ — the last successfully-loaded list stays visible (with a
+    // non-blocking connection-issue notice, see renderRunner) rather than
+    // being wiped to a blank/empty state a Runner could misread as
+    // "nothing to deliver."
+    try{ S.runnerQ = await api('GET','/api/runner/queue',null,true); S.runnerError=null; S.runnerLastRefresh=Date.now(); }
+    catch(e){ S.runnerError = e.message; }
+    render();
+  },
   async runnerTransition(id,to){
     try{ await api('POST',App.transitionEndpoint(id),{to},true); await App.loadRunnerQueue(); }
     catch(e){ showErr(e.message); }
   },
+  // UX-2 (spec R03: "Delivery exception — reason required; audit-safe; do
+  // not expose internal technical errors"): same two-step prompt pattern
+  // already proven for order cancellation (opsCancel/confirmCancel) —
+  // Runner taps "Delivery failed", is asked why, THEN the transition
+  // (now server-enforced to require a reason, see server.js) is sent.
+  runnerFailPrompt(id){ S.ui.deliveryFailFor=id; render(); },
+  async confirmDeliveryFail(id){
+    const reason = document.getElementById('deliveryFailReasonInput')?.value?.trim();
+    if(!reason){ showErr(S.lang==='ar'?'يرجى إدخال السبب':'Please enter a reason'); return; }
+    try{ await api('POST',App.transitionEndpoint(id),{to:'Delivery Failed',reason},true); S.ui.deliveryFailFor=null; await App.loadRunnerQueue(); }
+    catch(e){ showErr(e.message); }
+  },
+  dismissDeliveryFail(){ S.ui.deliveryFailFor=null; render(); },
 
   /* ---- admin ---- */
   async loadAdminAll(){
@@ -1066,27 +1093,92 @@ function renderStaffShell(){
     ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
     ${inner}
   </div></div>
-  ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}`;
+  ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}
+  ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}`;
+}
+
+// UX-2 (spec R03 "Delivery exception — Destination + order + reason
+// choices; Reason required; audit-safe; do not expose internal technical
+// errors"): the destination and order are restated here so a Runner
+// confirming a failure can see WHICH delivery they're marking failed,
+// and the reason is required client-side as well as server-side.
+function renderDeliveryFailModal(id){
+  const o=(S.runnerQ||[]).find(x=>x.id===id); if(!o) return '';
+  const zoneLabel = S.lang==='ar'?o.zone_name_ar:o.zone_name_en;
+  const presets = S.lang==='ar'
+    ? ['العميل غير موجود','النقطة مغلقة','تعذّر الوصول للنقطة','رفض العميل الاستلام']
+    : ['Guest not present','Point closed','Could not reach the point','Guest declined'];
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissDeliveryFail()"><div class="ordsheet">
+    <h3>${t('failBtn')}</h3>
+    <div class="pt">${zoneLabel?zoneLabel+' · ':''}${o.point_label||'—'} · ${o.id}</div>
+    <div class="formfield" style="margin-top:14px"><label>${S.lang==='ar'?'سبب تعذّر التسليم (مطلوب)':'Reason for failed delivery (required)'}</label>
+      <input id="deliveryFailReasonInput" placeholder="${S.lang==='ar'?'اختر سببًا أو اكتبه':'Pick a reason or type one'}"></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+      ${presets.map(r=>`<button class="btn-small" onclick="document.getElementById('deliveryFailReasonInput').value='${r}'">${r}</button>`).join('')}
+    </div>
+    <div class="actrow">
+      <button class="btn-danger-line" onclick="App.confirmDeliveryFail('${o.id}')">${S.lang==='ar'?'تأكيد':'Confirm'}</button>
+      <button class="ghostbtn" onclick="App.dismissDeliveryFail()">${t('close')}</button>
+    </div>
+  </div></div>`;
 }
 
 function renderKds(){
+  // UX-2 (spec K05: "Differentiate genuinely empty vs loading/offline/
+  // error. Operator trusts board state") -- S.ops.queue starts null
+  // (not yet loaded) and loadOpsQueue() now sets S.ops.error on a
+  // genuine fetch failure instead of silently swallowing it.
+  if(S.ops.queue===null && !S.ops.error){
+    return `<div class="kdscols">${[1,2,3].map(()=>`<div class="kdscol"><div class="skeleton skeleton-text w40" style="margin:2px 4px 12px"></div>${[1,2].map(()=>'<div class="skeleton skeleton-card" style="height:88px"></div>').join('')}</div>`).join('')}</div>`;
+  }
+  if(S.ops.error){
+    return `<div class="statepanel offline" style="max-width:340px;margin:36px auto">
+      <div class="glyph">⚠</div><h4>${S.lang==='ar'?'تعذّر تحميل الطابور':'Could not load the queue'}</h4>
+      <p>${S.lang==='ar'?'تحقّق من الاتصال ثم أعد المحاولة.':'Check your connection, then try again.'}</p>
+      <button class="btn-primary" style="max-width:150px;margin:14px auto 0" onclick="App.loadOpsQueue()">${S.lang==='ar'?'إعادة المحاولة':'Retry'}</button>
+    </div>`;
+  }
+
   const cols=[['New',['Paid']],['Preparing',['Accepted','Preparing']],['Ready',['Ready','Out for Delivery']]];
   const labelKey={New:'newCol',Preparing:'prepCol',Ready:'readyCol'};
+  // UX-2 (spec K02: "Next valid transition is dominant" — now rendered
+  // directly on the card, not only inside the detail modal).
+  const nextAction={ Paid:{to:'Accepted',label:t('accept')}, Accepted:{to:'Preparing',label:t('start')}, Preparing:{to:'Ready',label:t('markReady')}, Ready:{to:'Out for Delivery',label:t('outForDelivery')} };
+
   return `<div class="kdscols">${cols.map(([name,statuses])=>{
+    // Sort within the column by wait time — oldest (most urgent) first;
+    // this is a real, stable sort (never reshuffles mid-view except when
+    // an order genuinely leaves the column via a real status change),
+    // matching K01's "Do not reorder unpredictably while user acts."
     const list=S.ops.queue.filter(o=>statuses.includes(o.status)).sort((a,b)=>a.created_at-b.created_at);
-    return `<div class="kdscol"><h4>${t(labelKey[name])}<span class="cnt">${list.length}</span></h4>
+    // UX-2 (spec K01: "queue counts; SLA summary" at the column header —
+    // previously only a count existed, no SLA signal at all).
+    const breachedCount = list.filter(o => (Date.now()-o.created_at)/60000 >= (o.slaPrepMin||8)).length;
+    return `<div class="kdscol"><h4>${t(labelKey[name])}<span class="cnt">${list.length}</span>${breachedCount>0?`<span class="cnt breach">${breachedCount} ${S.lang==='ar'?'متأخر':'late'}</span>`:''}</h4>
       ${list.length? list.map(o=>{
-        const mins=Math.floor((Date.now()-o.created_at)/60000);
-        const warn = mins>=8?'late':mins>=5?'warn':'';
-        return `<div class="ticket" onclick="App.openOrderDetail('${o.id}')">
+        // UX-2: real per-outlet SLA (o.slaPrepMin) drives the threshold —
+        // not the old hardcoded 5/8-minute guess. Approaching = 70% of
+        // the configured prep-time budget elapsed; breached = 100%+.
+        const slaMin = o.slaPrepMin||8;
+        const mins=(Date.now()-o.created_at)/60000;
+        const warn = mins>=slaMin?'late':mins>=slaMin*0.7?'warn':'';
+        const zoneLabel = S.lang==='ar'?o.zone_name_ar:o.zone_name_en;
+        const action = nextAction[o.status];
+        return `<div class="ticket ${warn}">
           <div class="trow"><span class="id">${o.id}</span><span class="timer ${warn}">${elapsedStr(o.created_at)}</span></div>
-          <div class="pt">${o.point_label||'—'}${o.isChild? ` <span class="merchant-tag" style="margin-inline-start:4px">${S.lang==='ar'?o.outletName:o.outletNameEn}</span>`:''}</div><div class="items">${o.itemsSummary}</div></div>`;
+          <div class="pt">${zoneLabel?zoneLabel+' · ':''}${o.point_label||'—'}${o.isChild? ` <span class="merchant-tag" style="margin-inline-start:4px">${S.lang==='ar'?o.outletName:o.outletNameEn}</span>`:''}</div>
+          <div class="items">${o.itemsSummary}</div>
+          <div class="actrow">
+            ${action? `<button class="action" onclick="App.opsTransition('${o.id}','${action.to}')">${action.label}</button>`:''}
+            <button class="details" onclick="App.openOrderDetail('${o.id}')">${S.lang==='ar'?'التفاصيل':'Details'}</button>
+          </div>
+        </div>`;
       }).join('') : `<div class="kdsempty">${t('noOrders')}</div>`}
     </div>`;
   }).join('')}</div>`;
 }
 function renderOrderDetail(id){
-  const o=S.ops.queue.find(x=>x.id===id) || S.runnerQ.find(x=>x.id===id); if(!o) return '';
+  const o=(S.ops.queue||[]).find(x=>x.id===id) || (S.runnerQ||[]).find(x=>x.id===id); if(!o) return '';
   const nextByStatus = { Paid:['Accepted'], Accepted:['Preparing'], Preparing:['Ready'], Ready:['Out for Delivery','Delivered'] };
   const next = nextByStatus[o.status] || [];
   const showCancel = S.ui.cancelFor===id;
@@ -1107,15 +1199,57 @@ function renderOrderDetail(id){
 }
 
 function renderRunner(){
-  const list=S.runnerQ;
-  return list.length? list.map(o=>`
-    <div class="panel" style="display:flex;align-items:center;gap:14px;">
-      <div style="flex:1"><div style="color:var(--cream-050);font-family:var(--mono);font-weight:800">${o.id} — ${o.point_label||'—'}</div>${statusBadge(o.status)}</div>
-      <div style="display:flex;flex-direction:column;gap:6px;min-width:150px">
-        ${o.status==='Ready'? `<button class="btn-small brass" onclick="App.runnerTransition('${o.id}','Out for Delivery')">${t('claim')}</button>`:''}
-        ${o.status==='Out for Delivery'? `<button class="btn-small brass" onclick="App.runnerTransition('${o.id}','Delivered')">${t('deliverBtn')}</button>
-          <button class="btn-small" style="color:var(--red-500);border-color:var(--red-500)" onclick="App.runnerTransition('${o.id}','Delivery Failed')">${t('failBtn')}</button>`:''}
-      </div></div>`).join('') : `<div class="panel"><div class="empty-hint" style="color:var(--ink-300)">${t('noOrders')}</div></div>`;
+  // UX-2 (spec R05/R06): loading vs genuinely-empty vs offline/error are
+  // now three genuinely distinct states, matching the same discipline
+  // already applied to the KDS board.
+  if(S.runnerQ===null && !S.runnerError){
+    return `<div class="panel">${[1,2].map(()=>'<div class="skeleton skeleton-card" style="height:120px;margin-bottom:12px"></div>').join('')}</div>`;
+  }
+  if(S.runnerQ===null && S.runnerError){
+    return `<div class="statepanel offline on-dark" style="max-width:320px;margin:36px auto">
+      <div class="glyph">⚠</div><h4>${S.lang==='ar'?'تعذّر تحميل الطلبات':'Could not load orders'}</h4>
+      <p>${S.lang==='ar'?'تحقّق من الاتصال ثم أعد المحاولة.':'Check your connection, then try again.'}</p>
+      <button class="btn-primary" style="max-width:150px;margin:14px auto 0" onclick="App.loadRunnerQueue()">${S.lang==='ar'?'إعادة المحاولة':'Retry'}</button>
+    </div>`;
+  }
+
+  const staleNotice = S.runnerError ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin-bottom:12px">${S.lang==='ar'?'مشكلة اتصال — تُعرض آخر بيانات معروفة':'Connection issue — showing the last known data'}</div>` : '';
+  const refreshedAgo = S.runnerLastRefresh ? Math.max(0, Math.floor((Date.now()-S.runnerLastRefresh)/1000)) : null;
+  const refreshLine = refreshedAgo!=null ? `<p style="font-size:11px;color:var(--ink-300);text-align:center;margin-top:10px">${S.lang==='ar'?`آخر تحديث: قبل ${refreshedAgo} ثانية`:`Last updated ${refreshedAgo}s ago`}</p>` : '';
+
+  if(S.runnerQ.length===0){
+    return `${staleNotice}<div class="statepanel on-dark"><div class="glyph">—</div><h4>${t('noOrders')}</h4><p>${S.lang==='ar'?'سيظهر أي طلب جاهز هنا فور توفره.':'A newly ready order will appear here automatically.'}</p></div>${refreshLine}`;
+  }
+
+  // UX-2 (spec R01 hierarchy — "Destination > pickup outlet > order# >
+  // wait" — the card previously showed order#+point as one equal-weight
+  // line, no timer, no outlet at all). Wait time here is measured from
+  // updated_at (when the order became Ready / this state last changed),
+  // not created_at — what matters to a Runner is how long THIS has been
+  // waiting for pickup/delivery, not the order's total age since placement.
+  return staleNotice + S.runnerQ.map(o=>{
+    const claimed = o.status==='Out for Delivery';
+    const zoneLabel = S.lang==='ar'?o.zone_name_ar:o.zone_name_en;
+    const outletLabel = o.multiOutletCount ? (S.lang==='ar'?`${o.multiOutletCount} منافذ`:`${o.multiOutletCount} outlets`) : (S.lang==='ar'?o.outletName:o.outletNameEn);
+    const mins=(Date.now()-o.updated_at)/60000;
+    const warn = mins>=12?'late':mins>=6?'warn':'';
+    return `<div class="runnercard ${claimed?'claimed':''}">
+      <div class="dest">${zoneLabel?`<span class="zone">${zoneLabel}</span>`:''}${o.point_label||'—'}</div>
+      <div class="meta">
+        ${outletLabel? `<span>${S.lang==='ar'?'من':'From'}: ${outletLabel}</span><span class="sep">·</span>`:''}
+        <span>${o.id}</span>
+      </div>
+      <div class="meta">
+        <span class="timer ${warn}">${elapsedStr(o.updated_at)}</span>
+        ${o.itemCount? `<span class="sep">·</span><span>${o.itemCount} ${S.lang==='ar'?'عنصر':'items'}</span>`:''}
+      </div>
+      <div class="actrow">
+        ${!claimed? `<button class="claim" onclick="App.runnerTransition('${o.id}','Out for Delivery')">${t('claim')}</button>`:''}
+        ${claimed? `<button class="claim" onclick="App.runnerTransition('${o.id}','Delivered')">${t('deliverBtn')}</button>
+          <button class="fail" onclick="App.runnerFailPrompt('${o.id}')">${t('failBtn')}</button>`:''}
+      </div>
+    </div>`;
+  }).join('') + refreshLine;
 }
 
 function renderTenants(){
