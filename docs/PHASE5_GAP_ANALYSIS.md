@@ -1,4 +1,4 @@
-> **Version:** v2.0.13-p5-inc5-corrective · **Status:** P5-Inc-5 CORRECTIVE ROUND DELIVERED (concurrency-safe participant ceiling + rate limiter production limits documented + bounded cleanup), awaiting review before P5-Inc-6 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.13-p5-inc5-corrective`
+> **Version:** v2.0.14-p5-inc5-corrective2 · **Status:** P5-Inc-5 SECOND CORRECTIVE ROUND DELIVERED (max_participants now correctly includes the host), awaiting review before P5-Inc-6 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.14-p5-inc5-corrective2`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,37 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-5 — الجولة التصحيحية الثانية (Host يُحتسَب ضمن الحد الأقصى)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-6.**
+
+### الخلل الدلالي — حقيقي ومُصحَّح بالكامل
+
+**قبل هذه الجولة**: `createInvite()` لم تكن تُدرج المُضيف في `engage_participant` إطلاقًا — `max_participants` كانت تُحصي **المدعوين فقط**، مما يعني أن الحد الافتراضي 8 كان يسمح فعليًا بـ**مُضيف + 8 مدعوين = 9 أشخاص إجمالاً** في الغرفة، وليس 8 كما تُوحي القيمة.
+
+**القاعدة الصحيحة المُعتمَدة الآن**: `max_participants` = **إجمالي عدد المشاركين في الغرفة، شاملاً المُضيف**. الافتراضي 8 يعني الآن **مُضيف + 7 مدعوين كحد أقصى**.
+
+**الإصلاح**: تعديل واحد فقط، دقيق ومحدود النطاق — `createInvite()` تُدرج الآن صف مُضيف حقيقي في `engage_participant` (`role='host'`) **في لحظة الإنشاء نفسها**، فيشغل مقعدًا فوريًا. **لم يتغيّر منطق التحقق الذري في `joinInvite()` إطلاقًا** — نفس جملة `INSERT ... SELECT ... WHERE COUNT(*) < max_participants` من الجولة التصحيحية السابقة تُحصي الآن المُضيف تلقائيًا لأنه صف حقيقي في نفس الجدول، محققةً القاعدة الصحيحة دون أي تعديل على آلية الحماية من التزامن نفسها.
+
+### الدليل — من أبسط حالة ممكنة إلى أعقدها
+
+1. **أبسط حالة**: `maxParticipants=1` → الغرفة **ممتلئة فور الإنشاء** بالمُضيف وحده؛ أي محاولة انضمام لاحقة تُرفَض بـ409 — **صفر مدعوين يمكن أن ينضموا أبدًا**
+2. **الحالة الافتراضية (8)**: مُختبَرة بـ10 محاولات انضمام متزامنة فعليًا على غرفة جديدة — **7 نجاح بالضبط** (وليس 8)، لأن المُضيف يشغل المقعد الثامن مسبقًا
+3. **حالة مخصصة (2)**: المُضيف + مدعو واحد = ممتلئة؛ المدعو الثاني يُرفَض فورًا — لا حاجة لثلاثة أشخاص كما كان الحال قبل الإصلاح
+
+**كل الاختبارات القائمة (35) أُعيد اشتقاق أرقامها بدقة** لتعكس الدلالة الصحيحة — لم يُحذَف أي اختبار، بل صُحِّحت التوقعات الرقمية لتطابق القاعدة الجديدة.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| Host يُحتسَب ضمن `max_participants` | ✅ | `maxParticipants=1` → صفر مدعوين يمكنهم الانضمام |
+| الافتراضي 8 = مُضيف + 7 مدعوين | ✅ | 10 متزامنة → 7 نجاح بالضبط، لا 8 |
+| `participantCount` يُمثِّل الإجمالي دائمًا | ✅ | يشمل المُضيف من لحظة الإنشاء (`participantCount:1` عند الإنشاء مباشرة) |
+| اختبارات تزامن تُثبت عدم تجاوز الإجمالي للحد | ✅ | كلا سيناريويّ التزامن (مقعد واحد، وmax=8) أُعيد التحقق منهما بالأرقام الصحيحة |
+| الحفاظ على Privacy/Expiry/Token/Rate-Limit/Tenant Isolation | ✅ | كل الاختبارات ذات الصلة (26 من أصل 35 الأصلية) لم تتغيّر إطلاقًا |
+| 293/293 Baseline محفوظ | ✅ | **299/299 الآن** (293 - 35 + 41 بعد تصحيح مجموعة Inc-5 بالكامل) |
 
 ## P5-Inc-5 — الجولة التصحيحية (Concurrency-Safe Ceiling + Rate Limiter Limits)
 

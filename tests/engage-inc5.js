@@ -51,10 +51,22 @@ async function run() {
     const join1 = await api('POST', `/api/engage/invite/${invite.data.inviteToken}/join`, { displayName: 'Friend One' });
     assertEqual(join1.status, 200, 'HAPPY PATH: a valid invite token can be joined');
     assertEqual(join1.data.personality, 'PLAY', 'the joining participant sees the room personality (harmless context, not host PII)');
-    assertEqual(join1.data.participantCount, 1, 'participant count is 1 after the first join');
+    assertEqual(join1.data.participantCount, 2, 'HOST COUNTS TOWARD THE CAP: participant count is 2 after the first invitee joins -- 1 for the host (seated at creation) + 1 for this invitee, not 1');
 
     const join2 = await api('POST', `/api/engage/invite/${invite.data.inviteToken}/join`, { displayName: 'Friend Two' });
-    assertEqual(join2.data.participantCount, 2, 'participant count correctly increments to 2 after a second join');
+    assertEqual(join2.data.participantCount, 3, 'participant count correctly increments to 3 (host + 2 invitees) after a second join');
+
+    // ============================================================
+    // CORRECTIVE ROUND: max_participants explicitly means TOTAL room size
+    // (host included), proven with the simplest possible case: max=1 means
+    // the host alone, with NO room for any invitee at all.
+    // ============================================================
+    const passHostOnly = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });
+    const hostOnlyStart = await api('POST', '/api/engage/session/start', { accessToken: passHostOnly.accessToken });
+    const hostOnlyInvite = await api('POST', `/api/engage/session/${hostOnlyStart.data.sessionToken}/invite/create`, { maxParticipants: 1 });
+    assertEqual(hostOnlyInvite.data.participantCount, 1, 'HOST INCLUDED IN CAP: with maxParticipants=1, the room is already at capacity the instant it is created -- the host alone fills it');
+    const hostOnlyJoinAttempt = await api('POST', `/api/engage/invite/${hostOnlyInvite.data.inviteToken}/join`, { displayName: 'ShouldNeverFit' });
+    assertEqual(hostOnlyJoinAttempt.status, 409, 'HOST INCLUDED IN CAP: with maxParticipants=1, ZERO invitees can ever join -- the host occupies the only seat, proving max_participants counts the host, not just invitees');
 
     // ============================================================
     // NEGATIVE: invitee never gets host order/payment data
@@ -82,10 +94,12 @@ async function run() {
     const smallRoomStart = await api('POST', '/api/engage/session/start', { accessToken: passSmallRoom.accessToken });
     const smallInvite = await api('POST', `/api/engage/session/${smallRoomStart.data.sessionToken}/invite/create`, { maxParticipants: 2 });
     assertEqual(smallInvite.data.maxParticipants, 2, 'a caller-supplied lower max (2) is honored');
-    await api('POST', `/api/engage/invite/${smallInvite.data.inviteToken}/join`, { displayName: 'A' });
-    await api('POST', `/api/engage/invite/${smallInvite.data.inviteToken}/join`, { displayName: 'B' });
-    const overflowJoin = await api('POST', `/api/engage/invite/${smallInvite.data.inviteToken}/join`, { displayName: 'C' });
-    assertEqual(overflowJoin.status, 409, 'MAX PARTICIPANTS: the 3rd join against a max=2 room is rejected (409, group full)');
+    assertEqual(smallInvite.data.participantCount, 1, 'HOST COUNTS TOWARD THE CAP: creating a max=2 invite already shows participantCount=1 (the host), before any invitee has joined');
+    const smallJoinA = await api('POST', `/api/engage/invite/${smallInvite.data.inviteToken}/join`, { displayName: 'A' });
+    assertEqual(smallJoinA.status, 200, 'with max=2 (host + 1 invitee), the FIRST invitee join succeeds');
+    assertEqual(smallJoinA.data.participantCount, 2, 'total is now 2 (host + invitee A) -- the room is full');
+    const overflowJoin = await api('POST', `/api/engage/invite/${smallInvite.data.inviteToken}/join`, { displayName: 'B' });
+    assertEqual(overflowJoin.status, 409, 'MAX PARTICIPANTS: with max=2 already fully occupied by host+A, the SECOND invitee (B) is rejected (409, group full) -- not the third as the pre-fix semantics would have allowed');
 
     const passHugeAttempt = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });
     const hugeStart = await api('POST', '/api/engage/session/start', { accessToken: passHugeAttempt.accessToken });
@@ -140,11 +154,14 @@ async function run() {
     // ============================================================
     // Scenario 1: exactly ONE seat remaining, TWO simultaneous join attempts.
     // Before the atomic-SQL fix, a COUNT-then-INSERT race could in principle
-    // let both through; this proves exactly one wins now.
+    // let both through; this proves exactly one wins now. With the host now
+    // occupying a seat at creation, a freshly-created max=2 room ALREADY has
+    // exactly 1 seat remaining -- no separate sequential "filler" join is
+    // needed to set this scenario up anymore.
     const passRace1 = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });
     const race1Start = await api('POST', '/api/engage/session/start', { accessToken: passRace1.accessToken });
     const race1Invite = await api('POST', `/api/engage/session/${race1Start.data.sessionToken}/invite/create`, { maxParticipants: 2 });
-    await api('POST', `/api/engage/invite/${race1Invite.data.inviteToken}/join`, { displayName: 'Filler' }); // fill 1 of 2 seats, exactly 1 remains
+    assertEqual(race1Invite.data.participantCount, 1, 'setup sanity: the host alone already occupies 1 of 2 seats immediately at creation');
 
     const [raceA, raceB] = await Promise.all([
       api('POST', `/api/engage/invite/${race1Invite.data.inviteToken}/join`, { displayName: 'RaceA' }),
@@ -152,13 +169,14 @@ async function run() {
     ]);
     const raceSuccesses = [raceA, raceB].filter(r => r.status === 200);
     const raceFailures = [raceA, raceB].filter(r => r.status === 409);
-    assertEqual(raceSuccesses.length, 1, 'CONCURRENCY: with exactly 1 seat remaining, 2 truly simultaneous join requests result in EXACTLY 1 success (not 0, not 2)');
+    assertEqual(raceSuccesses.length, 1, 'CONCURRENCY: with exactly 1 seat remaining (host already occupies the other), 2 truly simultaneous join requests result in EXACTLY 1 success (not 0, not 2)');
     assertEqual(raceFailures.length, 1, 'CONCURRENCY: the other simultaneous request correctly receives 409 (group full), not a silently-accepted overflow');
     const race1FinalCount = db.prepare('SELECT COUNT(*) c FROM engage_participant WHERE group_room_id = (SELECT id FROM group_room WHERE invite_token = ?)').get(race1Invite.data.inviteToken).c;
-    assertEqual(race1FinalCount, 2, 'CONCURRENCY: the final participant count is exactly max_participants (2), never exceeded by the race');
+    assertEqual(race1FinalCount, 2, 'CONCURRENCY: the final TOTAL participant count (host + invitees) is exactly max_participants (2), never exceeded by the race');
 
     // Scenario 2: the default ceiling (8) under heavier concurrency -- 10
-    // simultaneous join attempts against an empty max=8 room.
+    // simultaneous join attempts against a fresh max=8 room. The host
+    // already occupies 1 of the 8 seats, so exactly 7 invitees should fit.
     const passRace2 = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });
     const race2Start = await api('POST', '/api/engage/session/start', { accessToken: passRace2.accessToken });
     const race2Invite = await api('POST', `/api/engage/session/${race2Start.data.sessionToken}/invite/create`, { maxParticipants: 8 });
@@ -168,15 +186,15 @@ async function run() {
     );
     const race2Successes = race2Results.filter(r => r.status === 200);
     const race2Failures = race2Results.filter(r => r.status === 409);
-    assertEqual(race2Successes.length, 8, 'CONCURRENCY (max=8): out of 10 truly simultaneous join attempts against an empty room, EXACTLY 8 succeed');
-    assertEqual(race2Failures.length, 2, 'CONCURRENCY (max=8): the other 2 correctly receive 409, never silently overflow the ceiling');
+    assertEqual(race2Successes.length, 7, 'CONCURRENCY (max=8 TOTAL, host included): out of 10 truly simultaneous invitee join attempts against a fresh room, EXACTLY 7 succeed -- the host already occupies the 8th seat');
+    assertEqual(race2Failures.length, 3, 'CONCURRENCY (max=8): the other 3 correctly receive 409, never silently overflow the ceiling');
     const race2FinalCount = db.prepare('SELECT COUNT(*) c FROM engage_participant WHERE group_room_id = (SELECT id FROM group_room WHERE invite_token = ?)').get(race2Invite.data.inviteToken).c;
-    assertEqual(race2FinalCount, 8, 'CONCURRENCY (max=8): the final stored participant count is exactly 8, proven by direct database query, not just the HTTP response shapes');
+    assertEqual(race2FinalCount, 8, 'CONCURRENCY (max=8): the final stored TOTAL participant count (host + 7 invitees) is exactly 8, proven by direct database query, not just the HTTP response shapes');
 
     // Preserve idempotency/security/tenant behavior alongside the fix:
     // successful joins from the race still return correct, distinct participant ids
     const successfulParticipantIds = new Set(race2Successes.map(r => r.data.participantId));
-    assertEqual(successfulParticipantIds.size, 8, 'each of the 8 successful concurrent joins produced a genuinely distinct participantId -- no duplicate/collided rows from the race');
+    assertEqual(successfulParticipantIds.size, 7, 'each of the 7 successful concurrent invitee joins produced a genuinely distinct participantId -- no duplicate/collided rows from the race');
 
     // ============================================================
     // CORRECTIVE ROUND: rate limiter bounded memory (no unbounded growth)

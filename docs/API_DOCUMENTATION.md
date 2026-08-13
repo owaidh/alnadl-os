@@ -1,4 +1,4 @@
-> **Version:** v2.0.13-p5-inc5-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.13-p5-inc5-corrective
+> **Version:** v2.0.14-p5-inc5-corrective2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.14-p5-inc5-corrective2
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -392,9 +392,9 @@ Authorization: Bearer <token>
 ```json
 { "maxParticipants": 4 }
 ```
-`maxParticipants` اختياري (افتراضي 8) — **لا يمكن رفعه فوق 8 أبدًا** حتى بطلب صريح بقيمة أكبر (يُقيَّد صامتًا لسقف الأمان، لا يُرفَض — هذا سقف حماية وليس تحقّق مُدخَلات). يتطلب `sessionToken` لجلسة مُضيف قائمة وبحالة `running` (`403` لرمز غير معروف، `409` لجلسة غير قائمة).
+`maxParticipants` اختياري (افتراضي 8، **يشمل المُضيف نفسه** — أي مُضيف + 7 مدعوين كحد أقصى بالقيمة الافتراضية) — **لا يمكن رفعه فوق 8 أبدًا** حتى بطلب صريح بقيمة أكبر (يُقيَّد صامتًا لسقف الأمان، لا يُرفَض — هذا سقف حماية وليس تحقّق مُدخَلات). يتطلب `sessionToken` لجلسة مُضيف قائمة وبحالة `running` (`403` لرمز غير معروف، `409` لجلسة غير قائمة). المُضيف يُدرَج كمشارك فور الإنشاء — الاستجابة تتضمن `participantCount:1` مباشرة.
 ```json
-{ "inviteToken": "d9Ri0XK3...", "expiresAt": 173..., "maxParticipants": 8 }
+{ "inviteToken": "d9Ri0XK3...", "expiresAt": 173..., "maxParticipants": 8, "participantCount": 1 }
 ```
 
 ### `POST /api/engage/invite/:inviteToken/join` — عام، لا يتطلب Pass/Session للمدعو

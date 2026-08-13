@@ -1,4 +1,4 @@
-> **Version:** v2.0.13-p5-inc5-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 (concurrency-safe) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.13-p5-inc5-corrective
+> **Version:** v2.0.14-p5-inc5-corrective2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 (host-inclusive cap) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.14-p5-inc5-corrective2
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### تصحيح دلالي: `max_participants` يشمل المُضيف
+`createInvite()` تُدرج الآن صف `engage_participant` بـ`role='host'` فور إنشاء الغرفة — `max_participants` الافتراضي 8 يعني **إجمالي 8 أشخاص شاملاً المُضيف** (مُضيف + 7 مدعوين كحد أقصى)، وليس مُضيف + 8 مدعوين كما كان الحال قبل هذا التصحيح. لم يتغيّر منطق التحقق الذري في `joinInvite()` — يُحصي المُضيف تلقائيًا بصفته صفًا حقيقيًا في نفس الجدول.
 
 ### تصحيح: سلامة حد المشاركين تحت التزامن الحقيقي
 `joinInvite()` يفحص السعة ويُدرج المشارك عبر **جملة SQL ذرّية واحدة** (`INSERT ... SELECT ... WHERE`) بدل استعلامي `COUNT` ثم `INSERT` منفصلين — مُختبَر فعليًا بـ10 طلبات انضمام متزامنة حقيقية (`Promise.all`) على غرفة سعتها 8: 8 نجاح بالضبط، 2 رفض، صفر تجاوز للسقف.
