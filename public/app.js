@@ -99,6 +99,14 @@ const T = {
 };
 function t(k){ return T[S.lang][k] ?? k; }
 function money(n){ return Number(n||0).toFixed(2); }
+// UX-0: shared KPI-dashboard skeleton — used by every admin/partner screen
+// that leads with a kpirow (Overview, Portfolio, Live Manager) so the
+// loading shape matches the shape that actually renders (spec §12).
+function kpiDashboardSkeleton(n){ return `<div class="kpirow">${Array.from({length:n||4}).map(()=>'<div class="skeleton skeleton-kpi"></div>').join('')}</div>`; }
+// UX-0 (spec §20 audit — cart/card/modal emoji thumbnails "look prototype-
+// like"): a styled first-letter monogram, not a food emoji. Works for any
+// product name in either language; see .media-placeholder in styles.css.
+function productMonogram(name){ return (name||'؟').trim().charAt(0).toUpperCase() || '؟'; }
 function unitCur(){ return S.lang==='ar' ? 'ر.س' : 'SAR'; }
 
 const S = {
@@ -113,6 +121,7 @@ const S = {
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
   ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
+  production:null, // null = not yet determined (see init()); false/true once GET /api/env resolves. Deliberately NOT defaulted to false — a fetch failure must never fall back to showing demo affordances in what could be a real deployment.
 };
 
 function showToast(msg){ S.toast=msg; const d=document.createElement('div'); d.className='toast'; d.textContent=msg; document.body.appendChild(d); setTimeout(()=>d.remove(),1700); }
@@ -173,7 +182,7 @@ const App = {
     const variant = ap.variantIdx>=0 ? def.variants[ap.variantIdx] : null;
     const addonList = def.addons.filter(a=>ap.addons[a.id]);
     const unit = def.base_price + (variant?variant.price_delta:0) + addonList.reduce((s,a)=>s+a.price,0);
-    S.cart.push({ key:'ci'+Math.random().toString(36).slice(2), productId:def.id, ar:def.name_ar, en:def.name_en, icon:'🍽️',
+    S.cart.push({ key:'ci'+Math.random().toString(36).slice(2), productId:def.id, ar:def.name_ar, en:def.name_en,
       variantId: variant?variant.id:null, variantLabel: variant?{ar:variant.name_ar,en:variant.name_en}:null,
       addonIds: addonList.map(a=>a.id), addonLabels: addonList.map(a=>({ar:a.name_ar,en:a.name_en})),
       notes:ap.notes, qty:ap.qty, unit, lineTotal:unit*ap.qty });
@@ -268,6 +277,21 @@ const App = {
       const r = await api('POST', '/api/auth/login', { username, password: username });
       S.session = r; S.mode = App.roleHome(r.user.role);
       S.screen = App.roleDefaultScreen(r.user.role);
+      await App.loadForRole();
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  // UX-0: the real credential-entry path used when S.production is true —
+  // reads the two typed form fields rather than assuming password===username.
+  async login(){
+    const username = document.getElementById('loginUsername')?.value?.trim();
+    const password = document.getElementById('loginPassword')?.value;
+    if(!username || !password){ showErr(S.lang==='ar'?'الرجاء إدخال اسم المستخدم وكلمة المرور':'Please enter both username and password'); return; }
+    try{
+      const r = await api('POST', '/api/auth/login', { username, password });
+      S.session = r; S.mode = App.roleHome(r.user.role);
+      S.screen = App.roleDefaultScreen(r.user.role);
+      S.ui.err = null;
       await App.loadForRole();
       render();
     }catch(e){ showErr(e.message); }
@@ -614,6 +638,21 @@ function render(){
 }
 
 function renderLogin(){
+  // UX-0 (spec §29, §17 Definition of Done #1): production must never
+  // present a one-tap list of real account usernames — that is a demo-only
+  // convenience. A real credential form is the ONLY thing production shows.
+  if(S.production !== false){
+    return `<div class="loginwrap"><div class="loginbox">
+      <h2>${t('login')}</h2>
+      ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
+      <div class="loginform">
+        <div class="formfield"><label>${S.lang==='ar'?'اسم المستخدم':'Username'}</label><input id="loginUsername" type="text" autocomplete="username"></div>
+        <div class="formfield"><label>${S.lang==='ar'?'كلمة المرور':'Password'}</label><input id="loginPassword" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')App.login()"></div>
+        <button class="btn-primary" style="margin-top:4px" onclick="App.login()">${t('login')}</button>
+      </div>
+      <button class="ghostbtn" style="margin-top:10px;width:100%" onclick="S.screen='welcome';render()">← ${t('role_customer')}</button>
+    </div></div>`;
+  }
   const users = [
     ['operator','Operator','KDS · accept/prepare/ready orders'],
     ['runner','Runner','Deliver Ready orders'],
@@ -658,18 +697,35 @@ function renderCustomerShell(){
 }
 
 function renderQrPicker(){
+  // UX-0 (spec §29, §5 G01): production has no legitimate way to reach this
+  // screen without a real scanned-QR token in the URL — a real deployment
+  // never lists points publicly. Showing the demo picker in production
+  // would be exactly the "prototype control mixed into the production
+  // shell" the spec's source audit (§20) flags. S.production is
+  // server-asserted (see init()) and defaults to the safe/production
+  // branch (true or not-yet-determined) rather than the demo one.
+  if(S.production !== false){
+    return `<div class="fohshell"><div class="phone"><div class="statepanel qr-invalid" style="flex:1;display:flex;flex-direction:column;justify-content:center">
+      <div class="glyph">⚠</div>
+      <h4>${S.lang==='ar'?'رمز QR غير صالح أو مفقود':'Invalid or missing QR code'}</h4>
+      <p>${S.lang==='ar'?'يرجى مسح رمز QR الموجود على الطاولة أو النقطة لبدء الطلب.':'Please scan the QR code at your table or point to start an order.'}</p>
+    </div></div></div>`;
+  }
   if(!S._demoPoints){ App._loadDemoPoints(); }
-  const list = S._demoPoints || [];
+  const list = S._demoPoints;
   return `<div class="fohshell"><div class="phone"><div class="welcome">
     <div class="crest">ن</div>
     <h2 style="margin:0">${t('scanQr')}</h2>
     <div class="qrpicklist">
-      ${list.map(p=>`<button class="qrpickitem" onclick="App.pickPoint('${p.token}')">${p.label}<span>${S.lang==='ar'?p.zone_ar:p.zone_en} · ${p.id}</span></button>`).join('') || '<div class="empty-hint">Loading…</div>'}
+      ${list===undefined ? `
+        <div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>
+      ` : (list.length? list.map(p=>`<button class="qrpickitem" onclick="App.pickPoint('${p.token}')">${p.label}<span>${S.lang==='ar'?p.zone_ar:p.zone_en} · ${p.id}</span></button>`).join('')
+        : `<div class="statepanel"><div class="glyph">—</div><p>${S.lang==='ar'?'لا توجد نقاط تجريبية متاحة':'No demo points available'}</p></div>`)}
     </div>
   </div></div></div>`;
 }
 App._loadDemoPoints = async function(){
-  try{ S._demoPoints = await api('GET','/api/demo/points'); render(); }catch(e){}
+  try{ S._demoPoints = await api('GET','/api/demo/points'); render(); }catch(e){ S._demoPoints = []; render(); }
 };
 
 function scrHub(){
@@ -721,7 +777,10 @@ function scrWelcome(){
 }
 
 function scrMenu(){
-  if(!S.catalog) return `<div class="scrbody"><div class="empty-hint">Loading…</div></div>`;
+  if(!S.catalog) return `<div class="scrbody">
+    <div style="display:flex;gap:8px;margin-bottom:12px">${[1,2,3].map(()=>'<div class="skeleton skeleton-row" style="width:84px;height:32px;border-radius:999px"></div>').join('')}</div>
+    <div class="prodgrid">${[1,2,3,4].map(()=>'<div class="skeleton skeleton-card"></div>').join('')}</div>
+  </div>`;
   const cats = S.catalog.categories, prods = S.catalog.products.filter(p=>p.category_id===S.activeCatId);
   const c = S.qrContext;
   const merchants = S.catalog.merchants || [];
@@ -755,10 +814,11 @@ function scrMenu(){
   `;
 }
 function prodCard(p){
+  const name = S.lang==='ar'?p.name_ar:p.name_en;
   return `
     <div class="prodcard ${p.available?'':'oos'}">
-      <div class="thumb">🍽️</div>
-      <p class="nm">${S.lang==='ar'?p.name_ar:p.name_en}</p>
+      <div class="thumb"><div class="media-placeholder sm">${productMonogram(name)}</div></div>
+      <p class="nm">${name}</p>
       <div class="pricerow"><span class="price">${money(p.base_price)} ${unitCur()}</span>
       <button class="addbtn" onclick="App.openProduct('${p.id}')">+</button></div>
     </div>`;
@@ -769,9 +829,10 @@ function renderProductModal(){
   const variant = ap.variantIdx>=0? def.variants[ap.variantIdx]:null;
   const addonTotal = def.addons.filter(a=>ap.addons[a.id]).reduce((s,a)=>s+a.price,0);
   const unit = def.base_price + (variant?variant.price_delta:0) + addonTotal;
+  const modalName = S.lang==='ar'?def.name_ar:def.name_en;
   return `
   <div class="modalwrap"><div class="modalsheet">
-    <div class="hero">🍽️<button class="close" onclick="App.closeProduct()">✕</button></div>
+    <div class="hero"><div class="media-placeholder lg">${productMonogram(modalName)}</div><button class="close" onclick="App.closeProduct()">✕</button></div>
     <div class="modalbody">
       <h3>${S.lang==='ar'?def.name_ar:def.name_en}</h3><p class="desc">${money(def.base_price)} ${unitCur()}</p>
       ${def.variants.length? `<div class="optgroup"><div class="lbl"><span>${S.lang==='ar'?'الحجم':'Size'}</span><span style="color:var(--red-500);font-size:10.5px">${t('required')}</span></div>
@@ -796,7 +857,7 @@ function scrCart(){
   <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('menu')">${S.lang==='ar'?'→':'←'}</button><h3>${t('yourCart')}</h3><div style="width:32px"></div></div></div>
   <div class="scrbody">
     ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : S.cart.map(c=>`
-      <div class="cartrow"><div class="th">🍽️</div><div class="mid">
+      <div class="cartrow"><div class="th"><div class="media-placeholder sm" style="font-size:16px">${productMonogram(S.lang==='ar'?c.ar:c.en)}</div></div><div class="mid">
         <p class="nm">${S.lang==='ar'?c.ar:c.en}</p>
         <p class="opt">${[c.variantLabel?(S.lang==='ar'?c.variantLabel.ar:c.variantLabel.en):null, ...c.addonLabels.map(a=>S.lang==='ar'?a.ar:a.en)].filter(Boolean).join(' · ')||'&nbsp;'}</p>
         <div class="stepper" style="display:flex;align-items:center;gap:8px"><button onclick="App.cartStep('${c.key}',-1)">–</button><span>${c.qty}</span><button onclick="App.cartStep('${c.key}',1)">+</button></div>
@@ -1058,7 +1119,7 @@ function renderTenants(){
 
 function renderBilling(){
   const sub = S.subscription; const plans = S.plans||[];
-  if(!sub) return `<div class="empty-hint">Loading…</div>`;
+  if(!sub) return `<div class="panel"><div class="skeleton skeleton-text w40"></div><div class="skeleton skeleton-row" style="margin-top:14px"></div><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div></div>`;
   const featureLabels = { qrOrdering: S.lang==='ar'?'الطلب عبر QR':'QR Ordering', digitalPayment: S.lang==='ar'?'الدفع الإلكتروني':'Digital Payment',
     partnerDashboard: S.lang==='ar'?'لوحة الشريك':'Partner Dashboard', loyalty:'Loyalty', marketplace:'Marketplace', analytics:'Analytics' };
   return `<div class="panel">
@@ -1121,7 +1182,7 @@ function renderQrAnalyticsModal(){
   return `<div class="ordmodal" onclick="if(event.target===this) App.closeQrAnalytics()"><div class="ordsheet">
     <h3 style="font-family:inherit">${S.lang==='ar'?'تحليلات رمز QR':'QR Analytics'}</h3>
     <div class="pt">${S.ui.qrAnalyticsFor}</div>
-    ${!d? `<div class="empty-hint">Loading…</div>` : `
+    ${!d? `<div class="kpirow" style="margin-bottom:0">${[1,2,3].map(()=>'<div class="skeleton skeleton-kpi"></div>').join('')}</div>` : `
       <div class="kpirow" style="margin-bottom:0">
         <div class="kpi"><div class="lbl">${S.lang==='ar'?'مسح':'Scans'}</div><div class="val">${d.scans}</div></div>
         <div class="kpi"><div class="lbl">${S.lang==='ar'?'طلبات':'Orders'}</div><div class="val">${d.orders}</div></div>
@@ -1163,7 +1224,7 @@ function renderAudit(){
 }
 
 function renderPartnerOverview(){
-  const ov = S.partner.overview; if(!ov) return `<div class="empty-hint">Loading…</div>`;
+  const ov = S.partner.overview; if(!ov) return kpiDashboardSkeleton(4);
   return `<div class="kpirow">
     <div class="kpi"><div class="lbl">${t('grossSales')}</div><div class="val">${money(ov.grossSales)}</div><div class="sub">SAR</div></div>
     <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${ov.orders}</div></div>
@@ -1213,7 +1274,7 @@ function renderSettlements(){
 }
 
 function renderPortfolio(){
-  const pf = S.portfolio; if(!pf) return `<div class="empty-hint">Loading…</div>`;
+  const pf = S.portfolio; if(!pf) return kpiDashboardSkeleton(4);
   return `<div class="kpirow">
     <div class="kpi"><div class="lbl">${S.lang==='ar'?'إجمالي المبيعات (GMV)':'Total GMV'}</div><div class="val">${money(pf.totalGmv)}</div><div class="sub">SAR</div></div>
     <div class="kpi"><div class="lbl">${S.lang==='ar'?'عدد المواقع':'Sites'}</div><div class="val">${pf.sites}</div></div>
@@ -1231,7 +1292,7 @@ function renderPortfolio(){
 }
 
 function renderLiveManager(){
-  const l = S.live; if(!l) return `<div class="empty-hint">Loading…</div>`;
+  const l = S.live; if(!l) return kpiDashboardSkeleton(4);
   return `<div class="kpirow">
     <div class="kpi"><div class="lbl">${S.lang==='ar'?'مبيعات اليوم':'Sales today'}</div><div class="val">${money(l.salesToday)}</div><div class="sub">SAR</div></div>
     <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${l.ordersToday}</div></div>
@@ -1483,6 +1544,12 @@ function renderUsers(){
 /* ---------------- boot ---------------- */
 (async function init(){
   document.documentElement.dir='rtl';
+  // UX-0 (spec §3.3, P0): the client's ONLY source of truth for whether it
+  // is running in production is this server-asserted flag — never a
+  // hardcoded client constant, which could be left wrong by a copy-paste
+  // deploy. Fetched before the first render so renderQrPicker()/renderLogin()
+  // never flash the demo affordances even for one frame in production.
+  try{ const env = await api('GET','/api/env'); S.production = !!env.production; }catch(e){ S.production = true; /* fail CLOSED: if we cannot confirm the environment, behave as production and never risk showing demo affordances on a real deployment */ }
   const params = new URLSearchParams(location.search);
   const tkn = params.get('t');
   if(tkn){ await App.loadQrContext(tkn); } else { render(); }

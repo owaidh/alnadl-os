@@ -1,20 +1,117 @@
+/* ==========================================================================
+   ALNADL Hospitality OS — Design Tokens (UX/UI Master Spec, Wave UX-0)
+   ==========================================================================
+   Brand colors below are sampled directly from ALNADL's own company-profile
+   asset (deep plum/purple gradient + a lime accent line), not invented —
+   see docs/UX0_FOUNDATIONS.md for the exact sampling method and the
+   contrast verification for every pairing actually used in this file.
+
+   Historical note: the --brass-* custom property names are kept unchanged
+   on purpose (not renamed to --purple-*) because public/app.js overrides
+   them inline for partner white-label branding
+   (renderCustomerShell → themeStyle). Renaming would have meant hunting
+   down that one dynamic reference among 40+ static ones for no functional
+   gain — the values below are the real ALNADL purple; only the historical
+   identifier still says "brass".
+   ========================================================================== */
 :root{
-  --ink-950:#14110E; --ink-900:#1B1712; --ink-850:#221C15; --ink-800:#2A2318;
-  --ink-700:#3A311F; --ink-600:#544731; --ink-400:#8A7C63; --ink-300:#B3A688; --ink-200:#D8CFB9;
+  /* ---- Purple ramp (brand primary + dark chrome) — sampled from the
+     ALNADL profile asset, see docs/UX0_FOUNDATIONS.md ---- */
+  --purple-950:#140C1C; --purple-900:#1F122A; --purple-850:#291837; --purple-800:#331F44;
+  --purple-700:#432958; --purple-600:#4B2D64; --purple-500:#5F3D79; --purple-400:#7F5C9B;
+  --purple-300:#AB8EC3; --purple-200:#DBC7EB; --purple-100:#F1E7F9;
+
+  /* ---- ink-* aliases: the dark-chrome scale used throughout admin/KDS
+     surfaces now points at the purple ramp (spec §2: "brand purple can
+     replace brown/black legacy surfaces"). Kept as a separate alias layer
+     (not a 1:1 rename of every --ink-N to --purple-N) so any future
+     surface that genuinely needs a neutral (non-branded) dark tone has
+     somewhere to diverge from brand purple without a bigger refactor. ---- */
+  --ink-950:var(--purple-950); --ink-900:var(--purple-900); --ink-850:var(--purple-850); --ink-800:var(--purple-800);
+  --ink-700:var(--purple-700); --ink-600:var(--purple-600); --ink-400:var(--purple-400); --ink-300:var(--purple-300); --ink-200:var(--purple-200);
+
+  /* ---- brass-* = brand primary/CTA role, guest white-label override
+     target (see note above). Default value is ALNADL's own purple —
+     white-label partners override --brass-500 (and the 3 derived stops)
+     with their own primary_color, scoped to .phone only. ---- */
+  --brass-300:var(--purple-400); --brass-500:var(--purple-500); --brass-600:var(--purple-600); --brass-700:var(--purple-800);
+
+  /* ---- Lime accent — spec §2: "use sparingly; never as body text on
+     white unless contrast passes". Two stops because ONE lime value
+     cannot serve both roles safely:
+       --lime-500 (#98B040, the true sampled brand tone) only passes
+         WCAG non-text contrast (3:1) against DARK surfaces (7.0–7.6:1) —
+         it FAILS against white/cream (2.3:1). Use it for fills/badges/
+         indicator dots on dark or mid-tone backgrounds only.
+       --lime-600 (#7C9030, darkened ~15%) passes 3:1 against BOTH white/
+         cream (3.37:1) and the dark purple chrome (4.8–5.2:1) — this is
+         the one universal token, used for the focus ring so keyboard
+         focus stays visible everywhere in the product, guest and admin
+         alike. This split was found by actually computing contrast
+         ratios while building this file, not assumed — see
+         docs/UX0_FOUNDATIONS.md. ---- */
+  --lime-500:#98B040; --lime-600:#7C9030;
+
+  /* ---- Neutrals: guest canvas / cards / form surfaces ---- */
   --cream-050:#FBF7F0; --cream-100:#F3ECDD; --cream-200:#EAE0CB;
-  --brass-300:#E2C08D; --brass-500:#C08A3E; --brass-600:#A6752F; --brass-700:#8A5F26;
+  --white:#FFFFFF;
+
+  /* ---- Functional status semantics — spec §2: "override brand palette":
+     success/warning/danger unchanged in role from the pre-UX-0 palette
+     (already passed AA, no reason to disturb them); --blue-* is genuinely
+     new — "info" was a spec-required state (§2 table) that had no token
+     before UX-0, only a hardcoded #2E6DA4/#DDEBF6 pair inline on
+     .badge.prep. ---- */
   --sage-500:#3F7D58; --sage-100:#E4EFE7;
   --amber-500:#C97A2B; --amber-100:#F6E7D3;
   --red-500:#B23A34; --red-100:#F5E1DF;
-  --white:#FFFFFF;
+  --blue-500:#2E6DA4; --blue-100:#DDEBF6;
+
+  /* ---- Typography — spec §3.1 scale: Display 24–32, H1 20–24, H2 16–18,
+     body 14–16 guest / 13–14 admin, caption ≥11. Arabic-first: Cairo
+     (display) + Tajawal (body/UI), unchanged from pre-UX-0 (already the
+     right foundation, spec §20 audit marked this "Keep"). ---- */
   --font: 'Tajawal', -apple-system, BlinkMacSystemFont, "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
   --display: 'Cairo', 'Tajawal', -apple-system, "Segoe UI", Arial, sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  --r-sm:6px; --r-md:10px; --r-lg:16px; --r-xl:22px;
-  --shadow-1: 0 1px 2px rgba(20,17,14,.08), 0 1px 1px rgba(20,17,14,.04);
-  --shadow-2: 0 8px 24px rgba(20,17,14,.16), 0 2px 6px rgba(20,17,14,.08);
-  --shadow-3: 0 20px 48px rgba(20,17,14,.28);
+  --fs-display:28px; --fs-h1:22px; --fs-h2:17px;
+  --fs-body-guest:15px; --fs-body-admin:13.5px; --fs-caption:11.5px;
+
+  /* ---- Spacing — spec §3.1: "8px base spacing system; 4px only for
+     micro-spacing". This scale is applied to every NEW/CHANGED rule in
+     this file; the many pre-existing ad-hoc px values elsewhere are
+     intentionally left as-is for this wave (documented as a P2 cleanup
+     item in docs/UX0_FOUNDATIONS.md, not silently dropped) — rewriting
+     every existing padding/margin in the file is screen-level work for
+     later waves (UX-1 through UX-5), not a token-foundation change. ---- */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px; --sp-7:48px; --sp-8:64px;
+
+  /* ---- Radius — spec §3.1: "8/12/16/24; avoid many near-identical
+     radii" (was 6/10/16/22 pre-UX-0). ---- */
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:24px;
+
+  /* ---- Elevation — spec §3.1: "3 levels only: card, floating, modal".
+     Shadow color re-tinted to the new purple-950 (was brown-black
+     rgba(20,17,14,...)) so shadows read as part of the same palette. ---- */
+  --shadow-card: 0 1px 2px rgba(20,12,28,.10), 0 1px 1px rgba(20,12,28,.05);
+  --shadow-floating: 0 8px 24px rgba(20,12,28,.18), 0 2px 6px rgba(20,12,28,.09);
+  --shadow-modal: 0 20px 48px rgba(20,12,28,.32);
+  /* pre-UX-0 names kept as aliases — referenced in ~15 existing rules below */
+  --shadow-1:var(--shadow-card); --shadow-2:var(--shadow-floating); --shadow-3:var(--shadow-modal);
+
+  /* ---- Touch targets — spec §3.1: "44×44px minimum for guest/runner;
+     40×40px minimum desktop admin". ---- */
+  --touch-guest:44px; --touch-admin:40px;
+
+  /* ---- Responsive breakpoints — spec §14 device intent + §31 QA matrix.
+     Plain CSS custom properties cannot be used inside @media conditions
+     (a real CSS engine limitation, not an oversight), so these are a
+     literal-value reference for every @media rule in this file to cite
+     by name in a comment — see each @media block below.
+       guest-sm:320  guest-md:375  guest-lg:390  guest-xl:430
+       tablet:768  laptop:1024  desktop:1440  wide:1920 ---- */
 }
+
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
 body{ font-family:var(--font); background:var(--ink-950); color:var(--ink-900); -webkit-font-smoothing:antialiased; }
@@ -22,7 +119,10 @@ body{ font-family:var(--font); background:var(--ink-950); color:var(--ink-900); 
 button{ font-family:inherit; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease, opacity .12s ease, background-color .15s ease, border-color .15s ease; }
 button:active{ transform:scale(.97); }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .userchip:focus-visible, .qrpickitem:focus-visible{
-  outline:2px solid var(--brass-500); outline-offset:2px;
+  /* lime-600, not lime-500 or brass — verified to pass WCAG 2.1 SC 1.4.11
+     (3:1 non-text contrast) against BOTH light guest surfaces (3.37:1)
+     and dark admin/KDS chrome (4.8–5.2:1). See docs/UX0_FOUNDATIONS.md. */
+  outline:2px solid var(--lime-600); outline-offset:2px;
 }
 @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
 input, select, textarea{ font-family:inherit; }
@@ -55,13 +155,13 @@ input, select, textarea{ font-family:inherit; }
 
 .badge{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; }
 .badge.new{ background:var(--amber-100); color:var(--amber-500); }
-.badge.prep{ background:#DDEBF6; color:#2E6DA4; }
+.badge.prep{ background:var(--blue-100); color:var(--blue-500); }
 .badge.ready{ background:var(--sage-100); color:var(--sage-500); }
 .badge.paid{ background:var(--sage-100); color:var(--sage-500); }
 .badge.pending{ background:var(--amber-100); color:var(--amber-500); }
 .badge.cancel{ background:var(--red-100); color:var(--red-500); }
 .badge.delivered{ background:var(--ink-200); color:var(--ink-700); }
-.badge.out{ background:#E7E1F6; color:#6142C7; }
+.badge.out{ background:var(--purple-100); color:var(--purple-700); }
 
 .btn-primary{ width:100%; background:linear-gradient(180deg,var(--brass-500),var(--brass-600)); color:var(--ink-950); border:none; padding:14px 16px; border-radius:var(--r-md); font-weight:800; font-size:14.5px; box-shadow:var(--shadow-1); }
 .btn-primary:disabled{ opacity:.45; }
@@ -94,7 +194,7 @@ input, select, textarea{ font-family:inherit; }
 .prodgrid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; }
 .prodcard{ background:var(--white); border-radius:var(--r-md); box-shadow:var(--shadow-1); padding:10px; text-align:start; border:1px solid rgba(20,17,14,.05); transition:transform .15s ease, box-shadow .15s ease; }
 .prodcard:hover{ transform:translateY(-2px); box-shadow:var(--shadow-2); }
-.prodcard .thumb{ width:100%; aspect-ratio:1.3; border-radius:8px; background:linear-gradient(140deg,var(--cream-200),var(--brass-300)); margin-bottom:8px; display:flex;align-items:center;justify-content:center; font-size:22px;}
+.prodcard .thumb{ width:100%; aspect-ratio:1.3; border-radius:var(--r-sm); background:linear-gradient(140deg,var(--cream-200),var(--purple-300)); margin-bottom:var(--sp-2); display:flex;align-items:center;justify-content:center; font-size:22px; overflow:hidden;}
 .prodcard .nm{ font-size:12.5px; font-weight:700; margin:0 0 2px; }
 .prodcard .pricerow{ display:flex; align-items:center; justify-content:space-between; }
 .prodcard .price{ font-family:var(--mono); font-size:12.5px; font-weight:700; }
@@ -113,8 +213,20 @@ input, select, textarea{ font-family:inherit; }
 
 .modalwrap{ position:absolute; inset:0; background:rgba(20,17,14,.5); display:flex; align-items:flex-end; z-index:50; }
 .modalsheet{ background:var(--cream-050); width:100%; border-radius:22px 22px 0 0; max-height:86%; overflow-y:auto; padding:0 0 18px; }
-.modalsheet .hero{ width:100%; height:150px; background:linear-gradient(140deg,var(--brass-300),var(--ink-700)); display:flex;align-items:center;justify-content:center; font-size:44px; position:relative;}
-.modalsheet .hero .close{ position:absolute; top:12px; inset-inline-end:12px; width:30px;height:30px;border-radius:50%; background:rgba(255,255,255,.9); border:none; font-weight:900; }
+.modalsheet .hero{ width:100%; height:150px; background:linear-gradient(140deg,var(--purple-400),var(--purple-800)); display:flex;align-items:center;justify-content:center; font-size:44px; position:relative;}
+.modalsheet .hero .close{ position:absolute; top:var(--sp-3); inset-inline-end:var(--sp-3); width:var(--touch-guest);height:var(--touch-guest);border-radius:50%; background:rgba(255,255,255,.92); border:none; font-weight:900; font-size:16px; }
+
+/* ---- Media placeholder — spec §20 audit: "Cart row uses emoji thumbnail
+   '🍽️' ... looks prototype-like" / "Introduce ... image placeholder
+   component ... fallback brand illustration". A styled first-letter
+   monogram (not a food emoji) is the fallback used until real product
+   photography is wired up (deferred to UX-1 per the spec's own wave
+   sequencing — it needs a product.image_url data-model addition this
+   foundations wave deliberately does not make). Works for ANY product
+   name, any language, with no per-product asset required. ---- */
+.media-placeholder{ display:flex; align-items:center; justify-content:center; font-family:var(--display); font-weight:800; color:var(--white); text-shadow:0 1px 3px rgba(20,12,28,.35); }
+.media-placeholder.sm{ font-size:20px; }
+.media-placeholder.lg{ font-size:40px; }
 .modalbody{ padding:16px 18px; }
 .modalbody h3{ margin:0 0 4px; font-size:19px; font-family:var(--display); font-weight:800; }
 .modalbody .desc{ font-size:12.5px; color:var(--ink-400); margin:0 0 14px; line-height:1.6;}
@@ -126,17 +238,17 @@ input, select, textarea{ font-family:inherit; }
 .radiodot.on{ border-color:var(--brass-600); }
 .radiodot.on::after{ content:''; position:absolute; inset:3px; border-radius:50%; background:var(--brass-600); }
 textarea.noteinput{ width:100%; border:1px solid var(--cream-200); border-radius:10px; padding:10px; font-size:13px; resize:none; background:var(--white); }
-.qtystepper{ display:flex; align-items:center; gap:12px; justify-content:center; margin-bottom:14px; }
-.qtystepper button{ width:34px;height:34px;border-radius:9px; border:1px solid var(--ink-800); background:var(--white); font-size:16px; font-weight:800; }
-.qtystepper .n{ font-weight:800; font-size:15px; min-width:20px; text-align:center; }
+.qtystepper{ display:flex; align-items:center; gap:var(--sp-3); justify-content:center; margin-bottom:var(--sp-4); }
+.qtystepper button{ width:var(--touch-guest); height:var(--touch-guest); border-radius:var(--r-sm); border:1px solid var(--ink-800); background:var(--white); font-size:17px; font-weight:800; }
+.qtystepper .n{ font-weight:800; font-size:16px; min-width:24px; text-align:center; }
 
-.cartrow{ display:flex; gap:10px; padding:12px 0; border-bottom:1px solid var(--cream-200); align-items:flex-start; }
-.cartrow .th{ width:52px;height:52px; border-radius:9px; background:linear-gradient(140deg,var(--cream-200),var(--brass-300)); display:flex;align-items:center;justify-content:center; font-size:18px; flex-shrink:0;}
+.cartrow{ display:flex; gap:var(--sp-3); padding:var(--sp-3) 0; border-bottom:1px solid var(--cream-200); align-items:center; }
+.cartrow .th{ width:52px;height:52px; border-radius:var(--r-sm); background:linear-gradient(140deg,var(--cream-200),var(--purple-300)); display:flex;align-items:center;justify-content:center; font-size:18px; flex-shrink:0; color:var(--purple-800); font-weight:800;}
 .cartrow .mid{ flex:1; }
 .cartrow .mid .nm{ font-size:13px; font-weight:700; margin:0 0 2px;}
 .cartrow .mid .opt{ font-size:10.5px; color:var(--ink-400); margin:0 0 6px;}
-.cartrow .mid .stepper{ display:flex; align-items:center; gap:8px; }
-.cartrow .mid .stepper button{ width:22px;height:22px;border-radius:6px; border:1px solid var(--ink-700); background:var(--white); font-size:12px; font-weight:800; }
+.cartrow .mid .stepper{ display:flex; align-items:center; gap:var(--sp-2); }
+.cartrow .mid .stepper button{ width:var(--touch-guest); height:var(--touch-guest); border-radius:var(--r-sm); border:1px solid var(--ink-700); background:var(--white); font-size:15px; font-weight:800; }
 .cartrow .price{ font-family:var(--mono); font-size:12.5px; font-weight:700; }
 .cartrow .rm{ border:none; background:none; color:var(--red-500); font-size:11px; font-weight:700; margin-top:6px; }
 .totalsbox{ margin-top:16px; padding-top:12px; border-top:1px dashed var(--ink-300); }
@@ -241,10 +353,100 @@ table.datatable td{ color:var(--cream-100); padding:9px 10px; border-bottom:1px 
 .userchip b{ color:var(--cream-050); font-size:12.5px; }
 .userchip span{ color:var(--ink-300); font-size:11px; }
 
+/* ---- Real login form — spec §29/§17: production must offer genuine
+   credential entry, not a list of demo accounts. Used by renderLogin()
+   when S.production is true (see app.js App.boot / renderLogin). ---- */
+.loginform .formfield input{ background:var(--ink-850); border-color:var(--ink-700); color:var(--cream-050); }
+.loginform .formfield input::placeholder{ color:var(--ink-400); }
+.loginform .formfield label{ color:var(--ink-300); }
+
+/* ==========================================================================
+   Component states — spec §3.2 required states: Loading/Success/Warning/
+   Error, Empty/No permission/Offline/Partial data. Pre-UX-0 the ONLY
+   pattern that existed for any of these was the literal string "Loading…"
+   (7 call sites, spec §20 audit) and a single generic .empty-hint. The
+   classes below are the reusable foundation; wiring every screen to use
+   them (replacing the 7 "Loading…" strings, adding real offline/no-
+   permission detection per screen) is UX-1 through UX-5 work — this wave
+   ships the components themselves plus the pattern requested, and app.js's
+   boot/login/QR-entry flows below already use the skeleton and
+   empty-state classes directly as a first proof they compose.
+   ========================================================================== */
+
+/* Skeleton — shape matches what will actually render, spec §12: "match
+   final layout to avoid jump". Respects prefers-reduced-motion via the
+   existing global rule at the top of this file (the shimmer keyframe is a
+   transform/opacity animation, already covered by `*{animation:none}`). */
+@keyframes skeleton-shimmer{ 0%{background-position:-200% 0;} 100%{background-position:200% 0;} }
+.skeleton{ background:linear-gradient(90deg, var(--cream-200) 25%, var(--cream-100) 37%, var(--cream-200) 63%); background-size:400% 100%; animation:skeleton-shimmer 1.4s ease infinite; border-radius:var(--r-sm); }
+.skeleton.dark{ background:linear-gradient(90deg, var(--purple-800) 25%, var(--purple-700) 37%, var(--purple-800) 63%); background-size:400% 100%; }
+.skeleton-text{ height:12px; margin-bottom:8px; }
+.skeleton-text.w60{ width:60%; } .skeleton-text.w40{ width:40%; } .skeleton-text.w80{ width:80%; }
+.skeleton-kpi{ height:74px; }
+.skeleton-card{ height:120px; }
+.skeleton-row{ height:44px; margin-bottom:8px; }
+
+/* State panel — one shared shell for Empty / No permission / Offline /
+   Partial data, distinguished by an icon glyph + heading + explanatory
+   line + optional action, never a blank area (spec §12: "explain why
+   empty + next useful action; do not show blank tables"). */
+.statepanel{ text-align:center; padding:var(--sp-6) var(--sp-4); color:var(--ink-400); }
+.statepanel .glyph{ font-size:28px; margin-bottom:var(--sp-2); opacity:.7; }
+.statepanel h4{ margin:0 0 4px; font-size:14px; font-weight:800; color:var(--ink-700); font-family:var(--display); }
+.statepanel p{ margin:0; font-size:12.5px; line-height:1.6; max-width:320px; margin-inline:auto; }
+.statepanel .action{ margin-top:var(--sp-3); }
+.statepanel.on-dark{ color:var(--ink-300); }
+.statepanel.on-dark h4{ color:var(--cream-050); }
+.statepanel.offline .glyph{ color:var(--amber-500); }
+.statepanel.no-permission .glyph{ color:var(--red-500); }
+
+/* ==========================================================================
+   Sidebar navigation — foundation component (spec §4/§9). This wave
+   ships the reusable CSS shell; replacing every admin screen's flat
+   .boh-nav button row with this component across all SuperAdmin/Partner
+   screens is UX-4 scope per the spec's own implementation sequence
+   (§32: "UX-4 | SuperAdmin IA + governance | All platform modules known").
+   Doing that full rollout here — before Partner/SuperAdmin APIs and
+   module lists are finalized in later waves — is exactly the "scattered
+   patches" pattern the spec explicitly warns against, so .boh-nav is left
+   functioning unchanged for now; this class is unused by any screen yet.
+   ========================================================================== */
+.sidebar{ width:232px; flex-shrink:0; background:var(--ink-900); border-inline-end:1px solid var(--ink-700); padding:var(--sp-4) var(--sp-2); display:flex; flex-direction:column; gap:var(--sp-1); }
+.sidebar-group{ margin-bottom:var(--sp-3); }
+.sidebar-group-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-300); font-weight:800; padding:0 var(--sp-3); margin-bottom:6px; }
+.sidebar-link{ display:flex; align-items:center; gap:10px; width:100%; text-align:start; background:none; border:none; color:var(--ink-200); padding:9px var(--sp-3); border-radius:var(--r-sm); font-size:13px; font-weight:600; min-height:var(--touch-admin); }
+.sidebar-link:hover{ background:var(--ink-850); color:var(--cream-050); }
+.sidebar-link.active{ background:var(--purple-600); color:var(--white); font-weight:800; }
+.sidebar-scope{ background:var(--ink-850); border:1px solid var(--ink-700); border-radius:var(--r-sm); padding:9px 11px; margin-bottom:var(--sp-4); font-size:11.5px; color:var(--ink-300); }
+.sidebar-scope b{ display:block; color:var(--cream-050); font-size:12.5px; }
+.admin-layout{ display:flex; min-height:calc(100vh - 52px); }
+.admin-layout .bohshell{ flex:1; min-width:0; }
+
+/* ---- Invalid/missing QR — spec §29: production must show a genuine
+   error, never the demo point-picker, when no ?t= token is present. ---- */
+.qr-invalid .glyph{ font-size:40px; margin-bottom:var(--sp-3); }
+
+/* Breakpoints reference §14/§31 (documented in :root as a comment, since
+   custom properties cannot drive @media conditions):
+   guest-sm:320 guest-md:375 guest-lg:390 guest-xl:430
+   tablet:768 laptop:1024 desktop:1440 wide:1920 */
 @media (max-width:760px){
   .kdscols{ grid-template-columns:1fr; }
   .kpirow{ grid-template-columns:1fr 1fr; }
   .grid2{ grid-template-columns:1fr; }
   .formgrid{ grid-template-columns:1fr; }
   .bohshell{ padding:14px; }
+  .admin-layout{ flex-direction:column; }
+  .sidebar{ width:100%; flex-direction:row; overflow-x:auto; border-inline-end:none; border-bottom:1px solid var(--ink-700); }
+}
+@media (min-width:1024px) and (max-width:1439px){
+  .kdscols{ grid-template-columns:repeat(3,1fr); }
+}
+@media (min-width:1920px){
+  .bohwrap{ max-width:1440px; }
+}
+@media (max-width:430px){
+  .kpirow{ grid-template-columns:1fr 1fr; }
+  .phone{ border-width:0; border-radius:0; min-height:100vh; }
+  .fohshell{ padding:0; }
 }

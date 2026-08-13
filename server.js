@@ -121,12 +121,29 @@ on('POST', '/api/auth/login', null, async (req, res) => {
 // via a scanned QR that already encodes one token. This endpoint exists
 // purely so the prototype's "scan a QR" screen has something to simulate
 // with, since we cannot print & scan physical QR codes in this sandbox.
+//
+// UX-0 (spec §3.3, P0): genuine environment separation, not CSS hiding —
+// this route does not exist at all when NODE_ENV=production, the same
+// "resolves to nothing" pattern already used for unauthorized access
+// elsewhere in this codebase (a 404 here is indistinguishable from the
+// route never having been registered, because it wasn't).
 on('GET', '/api/demo/points', null, async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return sendJSON(res, 404, { error: 'No such route' });
   const rows = db.prepare(`
     SELECT pt.id, pt.label, z.name_ar AS zone_ar, z.name_en AS zone_en, qr.token
     FROM points pt JOIN zones z ON z.id = pt.zone_id JOIN qr_tokens qr ON qr.point_id = pt.id
     WHERE pt.active = 1 AND qr.active = 1`).all();
   sendJSON(res, 200, rows);
+});
+
+// UX-0 (spec §3.3): the ONE signal the client is allowed to use to decide
+// whether it is running in production — asserted by the server (which
+// cannot be spoofed by editing client-side JS, unlike a hardcoded client
+// flag) and backed by the SAME NODE_ENV check the route above already
+// enforces server-side, so client and server can never disagree about
+// which mode they're in.
+on('GET', '/api/env', null, async (req, res) => {
+  sendJSON(res, 200, { production: process.env.NODE_ENV === 'production' });
 });
 
 /* ------------------------------ QR / CONTEXT --------------------------------- */
