@@ -1,4 +1,4 @@
-> **Version:** v2.0.19-p5-inc8 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7/8 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.19-p5-inc8
+> **Version:** v2.0.20-p5-inc8-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7/8 (traffic allocation fixed) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.20-p5-inc8-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -152,6 +152,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### تصحيح: سلامة حد المشاركين تحت التزامن الحقيقي
 `joinInvite()` يفحص السعة ويُدرج المشارك عبر **جملة SQL ذرّية واحدة** (`INSERT ... SELECT ... WHERE`) بدل استعلامي `COUNT` ثم `INSERT` منفصلين — مُختبَر فعليًا بـ10 طلبات انضمام متزامنة حقيقية (`Promise.all`) على غرفة سعتها 8: 8 نجاح بالضبط، 2 رفض، صفر تجاوز للسقف.
+
+### تصحيح حرج: ربط الحوكمة بالتخديم الفعلي — بلا Migration جديدة (منطق فقط)
+**فجوة حقيقية مؤكَّدة**: استعلام التخديم الإنتاجي كان مُثبَّتًا حرفيًا على `category='static_fallback' AND lifecycle_state='promoted'` — آليات `canary` لم تكن تصل لأي عميل حقيقي إطلاقًا (0%، بغض النظر عن `canary_percentage`)، وأي آلية بحوكمة Mechanic Lab لم تكن لتصل لعميل حقيقي حتى بعد اعتمادها بالكامل. **الحوكمة كانت حقيقية، منفصلة تمامًا عمّا يُخدَّم فعليًا**. أُصلح بـ`resolveEligibleMechanicVersion()` — دالة تخصيص حتمية (HMAC على `${profile.id}:${mechanicVersionId}`، 10000 حاوية) تحل محل الاستعلام الثابت، مُتحقَّق منها عبر HTTP حقيقي (2000 جلسة فعلية، هدف 5% → 5.50% فعليًا قبل التوثيق الرسمي، 5.265% على 20000 هوية في مجموعة الاختبار النهائية).
 
 ### جداول Mechanic Lab — Phase 5 P5-Inc-8 (`migrations/014_engage_inc8.js`)
 **ملاحظة مهمة**: قيد `mechanic_version.lifecycle_state` كان **موجودًا فعليًا منذ Inc-2** (`migration 006`) ويشمل الحالات الثماني كاملة (`draft/simulated/canary/emerging/promoted/held/rejected/retired`) — لم تكن هناك حاجة لتوسيعه، فقط لبناء منطق الحوكمة الفعلي فوقه لأول مرة.

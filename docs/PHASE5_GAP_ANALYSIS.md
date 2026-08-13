@@ -1,4 +1,4 @@
-> **Version:** v2.0.19-p5-inc8 · **Status:** P5-Inc-8 DELIVERED (Mechanic Lab + Learning Engine + Lifecycle Governance) — final increment of Phase 5, awaiting your cumulative final review before Phase 5 completion is declared · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.19-p5-inc8`
+> **Version:** v2.0.20-p5-inc8-corrective · **Status:** P5-Inc-8 CORRECTIVE ROUND DELIVERED (real production Canary traffic allocation, connecting lifecycle governance to actual serving) — final increment of Phase 5, awaiting your cumulative final review before Phase 5 completion is declared · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.20-p5-inc8-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,47 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-8 — الجولة التصحيحية (تخصيص حركة إنتاجية حقيقية — الفجوة الأخطر في كل Phase 5)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل إعلان اكتمال Phase 5.**
+
+### الملاحظة — مؤكَّدة بالكامل، وكانت فجوة حقيقية أخطر مما بدت
+
+**التحقق المباشر أولًا، قبل أي إصلاح**: استعلام المسار الإنتاجي في `lib/engage-session.js` كان **مُثبَّتًا حرفيًا** على `category='static_fallback' AND lifecycle_state='promoted'`. هذا يعني:
+- أي آلية في حالة `canary` **لم تكن تصل لأي عميل حقيقي إطلاقًا** — 0% فعليًا، بغض النظر عن `canary_percentage` المُخزَّن
+- **الأخطر**: أي آلية حوكمتها Mechanic Lab (أي فئة غير `static_fallback`) **لم تكن لتصل لعميل حقيقي أبدًا حتى بعد اعتمادها بالكامل (Promoted)** — الحوكمة كانت حقيقية، لكنها **منفصلة تمامًا** عمّا يُخدَّم فعليًا
+
+### الإصلاح — دالة تخصيص حتمية واحدة، تحل محل الاستعلام الثابت
+
+`resolveEligibleMechanicVersion(personality, allocationSeed)` في `lib/engage-mechanic-lab.js`:
+1. تجد الآلية **الأحدث اعتمادًا** (`promoted`) لهذه الشخصية — بأي فئة، وليس `static_fallback` فقط
+2. إن وُجدت آلية `canary` نشطة لنفس الشخصية، تُحسب بذرة تخصيص حتمية (`HMAC` على `${allocationSeed}:${mechanicVersionId}`، 10000 حاوية لدقة 0.01%)
+3. `allocationSeed` = **`profile.id`** — نفس الهوية المستقرة المُثبَتة منذ Inc-4 — فإعادة تحميل الصفحة أو طلب جديد **لا يمكن أن يُعيد التخصيص أبدًا**
+
+### الدليل — على مستوى HTTP حقيقي، لا دالة معزولة فقط
+
+**قبل كتابة أي إصلاح**: تحقَّقت مباشرة عبر HTTP حقيقي (2000 جلسة حقيقية فعليًا، هدف 5%) — **5.50% فعليًا**. بعد الإصلاح الرسمي والاختبارات الشاملة: **5.265%** على 20000 هوية.
+
+### خللان إضافيان حقيقيان اكتُشفا أثناء كتابة الاختبارات نفسها
+
+**الأول**: أول محاولة تحقق يدوي استخدمت منطقة `z_pool` لاختبار آلية شخصية SPARK — لكن `z_pool` تُحلَّل فعليًا لشخصية **PLAY**، وليس SPARK! النتيجة "0/100" الأولى كانت **صحيحة فعليًا** بالنظر لهذا الخطأ في بيئة الاختبار نفسها، وليست دليلاً على خلل حقيقي — اكتُشف بالتحقق من `resolvePersonality()` مباشرة، وأُعيد الاختبار بالسياق الصحيح.
+
+**الثاني**: محاولة اختبار "Kill Switch" باستخدام `canaryPercentage: 100` لضمان التخصيص — لكن **سقف Canary≤5% الصلب الذي بنيناه بأنفسنا في Inc-8 الأصلي رفض الطلب فورًا**! أُصلح باستخدام آلية **مُعتمَدة بالكامل (Promoted)** بدلاً من ذلك لضمان التخصيص — وهذا في الواقع تصميم اختبار أدق، لأن المتطلب نفسه يذكر Canary **و**Promoted معًا لفورية Kill Switch.
+
+### شروط القبول — كل بند من الطلب، بدليله المباشر
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| Canary 5% على مجتمع كبير حتمي | ✅ | 20000 هوية، 5.265% فعليًا |
+| Canary 1% | ✅ | 20000 هوية، 1.035% فعليًا |
+| Canary لا يتجاوز التخصيص المُهيَّأ | ✅ | 5 تجارب مستقلة، أسوأها 5.28% (تقارب إحصائي، موثَّق صراحة أنه ليس ضمانًا حسابيًا مطلقًا لكل عينة صغيرة — نفس ممارسة صناعة الـFeature Flags القياسية) |
+| نفس الهوية/الجلسة لا يمكنها التلاعب بالتخصيص عبر التحديث | ✅ | 500 فحص متكرر بنفس الهوية، ونفس العميل المعروف عبر طلبين حقيقيين منفصلين |
+| Draft/Simulated/Held/Rejected/Retired = صفر حركة | ✅ | مُختبَر لكل حالة من الخمس على حدة، 500 هوية لكل واحدة |
+| Kill Switch يوقف التخصيص فورًا | ✅ | مباشر + من طرف لطرف عبر HTTP حقيقي |
+| عزل الشريك | ✅ | نفس الهاتف لدى شريكين → بذرتا تخصيص منفصلتان بنيويًا |
+| لا Canary مؤهَّل → رجوع آمن لـPromoted/Static | ✅ | مُختبَر مباشرة |
+| Baseline 484/484 محفوظ | ✅ | **504/504 الآن** (484 - 60 + 80 لمجموعة Inc-8 المُحدَّثة) |
 
 ## P5-Inc-8 — سجل التسليم الفعلي (Mechanic Lab + Learning Engine + Lifecycle Governance)
 
