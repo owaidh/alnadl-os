@@ -1,4 +1,4 @@
-> **Version:** v2.0.18-p5-inc7-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7 (honest embedding pipeline) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.18-p5-inc7-corrective
+> **Version:** v2.0.19-p5-inc8 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7/8 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.19-p5-inc8
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -152,6 +152,18 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### تصحيح: سلامة حد المشاركين تحت التزامن الحقيقي
 `joinInvite()` يفحص السعة ويُدرج المشارك عبر **جملة SQL ذرّية واحدة** (`INSERT ... SELECT ... WHERE`) بدل استعلامي `COUNT` ثم `INSERT` منفصلين — مُختبَر فعليًا بـ10 طلبات انضمام متزامنة حقيقية (`Promise.all`) على غرفة سعتها 8: 8 نجاح بالضبط، 2 رفض، صفر تجاوز للسقف.
+
+### جداول Mechanic Lab — Phase 5 P5-Inc-8 (`migrations/014_engage_inc8.js`)
+**ملاحظة مهمة**: قيد `mechanic_version.lifecycle_state` كان **موجودًا فعليًا منذ Inc-2** (`migration 006`) ويشمل الحالات الثماني كاملة (`draft/simulated/canary/emerging/promoted/held/rejected/retired`) — لم تكن هناك حاجة لتوسيعه، فقط لبناء منطق الحوكمة الفعلي فوقه لأول مرة.
+
+- **`mechanic_version.canary_percentage`** — عمود جديد (REAL، Nullable)
+- **`mechanic_lifecycle_event`** — تدقيق كامل لكل انتقال: `reason`، `metrics_snapshot_json` (لقطة **وقت الانتقال نفسه**، لا يُعاد حسابها لاحقًا)، `actor`، `is_system_decision`، `policy_version`
+- **`mechanic_safety_incident`** — حادثة أمان مفتوحة تمنع الترقية حتى تُحلّ صراحة (`SafetyReviewer`/`SuperAdmin`)
+- **`mechanic_simulation_run`** — نتائج الجلسات المحاكاة، **بمعزل تام** عن `engage_session`/`moment` الحقيقية — لا يمكن لمحاكاة الوصول لعميل حقيقي أو تلويث الـLedger بنيويًا
+
+**الآليات الخمس الحاسمة كلها مُختبَرة مباشرة**: Canary≤5% (سقف صلب غير قابل للتهيئة إطلاقًا)، حد أدنى للعينة قابل للتهيئة (افتراضي 100)، منع الترقية مع حادثة أمان مفتوحة، Kill Switch فوري (SuperAdmin فقط، يتجاوز الرسم البياني العادي)، وحماية ذرّية (CAS) ضد تعارض Promote/Hold/Kill.
+
+**خلل حقيقي اكتُشف أثناء كتابة اختبار السباق نفسه**: التصميم الأول للاختبار افترض أن "ترقية" و"إيقاف طارئ" متزامنَين يجب أن يتعارضا (فوز واحد فقط) — لكن `transitionLifecycle()` متزامنة بالكامل بلا أي `await` داخلي، فكل استدعاء يقرأ الحالة الحيّة الفعلية دائمًا، فالعمليتان المختلفتان تتسلسلان بشكل صحيح بدل التعارض. هذا كشف عن ثغرة حقيقية أدق: تحديث CAS ذاتي المرجع (نفس الحالة للحالة نفسها) كان يُبلَّغ خطأً كـ`changes=1` رغم عدم حدوث تغيير فعلي — أُصلح بفحص صريح لمنع الانتقال الذاتي، مما يجعل السباق الحقيقي (عمليتان متطابقتان متزامنتان) يُختبَر بشكل صحيح الآن.
 
 ### تصحيح: تسمية صادقة + بنية Embedding حقيقية — Phase 5 P5-Inc-7 (`migrations/013_engage_inc7_corrective.js`)
 - **`novelty_evaluation.method`** — القيد وُسِّع ليشمل `semantic_concept_similarity` كقيمة صريحة منفصلة عن `semantic_embedding` — الأخيرة **لا تُسجَّل الآن إلا عند تشغيل تشابه Vector حقيقي فعليًا**

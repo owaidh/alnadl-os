@@ -523,6 +523,96 @@ on('GET', '/api/admin/engage/kill-switch', ['SuperAdmin'], async (req, res) => {
   sendJSON(res, 200, { enabled: getGlobalKillSwitchState() });
 });
 
+/* Phase 5 P5-Inc-8: Mechanic Lab + Lifecycle Governance.
+   ProductAdmin (§14 scope: "mechanics/learning/analytics") drives the
+   normal lifecycle (propose/simulate/transition). Kill Switch stays
+   SuperAdmin-only, same lock-down as the engage_enabled/engage_ai_generation
+   kill switches. Safety incident resolution is SafetyReviewer/SuperAdmin
+   (§14 scope: "ledger/reports/safety actions"). */
+on('GET', '/api/admin/mechanics', ['SuperAdmin', 'ProductAdmin', 'SafetyReviewer'], async (req, res) => {
+  const rows = db.prepare(`
+    SELECT mv.id, mv.mechanic_id, mv.version_number, mv.lifecycle_state, mv.canary_percentage, mv.created_at,
+           m.name, m.category, m.created_by
+    FROM mechanic_version mv JOIN mechanic m ON m.id = mv.mechanic_id
+    ORDER BY mv.created_at DESC`).all();
+  sendJSON(res, 200, rows);
+});
+on('GET', '/api/admin/mechanics/:id', ['SuperAdmin', 'ProductAdmin', 'SafetyReviewer'], async (req, res, p) => {
+  const { metricsSnapshot } = require('./lib/engage-mechanic-lab.js');
+  const mv = db.prepare('SELECT * FROM mechanic_version WHERE id = ?').get(p.id);
+  if (!mv) return sendJSON(res, 404, { error: 'Mechanic version not found' });
+  const events = db.prepare('SELECT * FROM mechanic_lifecycle_event WHERE mechanic_version_id = ? ORDER BY created_at DESC').all(p.id);
+  sendJSON(res, 200, { ...mv, metrics: metricsSnapshot(p.id), lifecycleEvents: events });
+});
+on('POST', '/api/admin/mechanics/propose', ['SuperAdmin', 'ProductAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  if (!b.name || !b.category || !b.personality || !Array.isArray(b.pool) || b.pool.length === 0) {
+    return sendJSON(res, 400, { error: 'name, category, personality, and a non-empty pool array are required' });
+  }
+  const { proposeMechanicFromAI } = require('./lib/engage-mechanic-lab.js');
+  const mv = proposeMechanicFromAI(b.name, b.category, b.personality, { pool: b.pool });
+  audit(session.username, session.role, 'mechanic_proposed', mv.id, null, { name: b.name, personality: b.personality }, null);
+  sendJSON(res, 201, mv);
+});
+on('POST', '/api/admin/mechanics/:id/simulate', ['SuperAdmin', 'ProductAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const sampleCount = typeof b.sampleCount === 'number' ? b.sampleCount : 10;
+  if (sampleCount < 1 || sampleCount > 10000 || !Number.isInteger(sampleCount)) {
+    return sendJSON(res, 400, { error: 'sampleCount must be a whole number between 1 and 10000' });
+  }
+  const { runSimulation } = require('./lib/engage-mechanic-lab.js');
+  try {
+    const result = await runSimulation(p.id, sampleCount, session.username);
+    audit(session.username, session.role, 'mechanic_simulation_run', p.id, null, { sampleCount, safetyPassCount: result.safety_pass_count, safetyFailCount: result.safety_fail_count }, null);
+    sendJSON(res, 201, result);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+on('POST', '/api/admin/mechanics/:id/transition', ['SuperAdmin', 'ProductAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  if (!b.toState) return sendJSON(res, 400, { error: 'toState is required' });
+  const { transitionLifecycle } = require('./lib/engage-mechanic-lab.js');
+  try {
+    const mv = transitionLifecycle(p.id, b.toState, session.username, b.reason, { canaryPercentage: b.canaryPercentage });
+    audit(session.username, session.role, 'mechanic_lifecycle_transition', p.id, null, { toState: b.toState, reason: b.reason }, null);
+    sendJSON(res, 200, mv);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message, gate: e.gate }); }
+});
+on('POST', '/api/admin/mechanics/:id/kill-switch', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  if (!['held', 'rejected'].includes(b.toState)) return sendJSON(res, 400, { error: 'toState must be held or rejected for the kill switch' });
+  const { killSwitchMechanic } = require('./lib/engage-mechanic-lab.js');
+  try {
+    const mv = killSwitchMechanic(p.id, b.toState, session.username, b.reason);
+    audit(session.username, session.role, 'mechanic_kill_switch', p.id, null, { toState: b.toState, reason: b.reason }, null);
+    sendJSON(res, 200, mv);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+on('GET', '/api/admin/mechanics/:id/safety-incidents', ['SuperAdmin', 'ProductAdmin', 'SafetyReviewer'], async (req, res, p) => {
+  const rows = db.prepare('SELECT * FROM mechanic_safety_incident WHERE mechanic_version_id = ? ORDER BY created_at DESC').all(p.id);
+  sendJSON(res, 200, rows);
+});
+on('POST', '/api/admin/mechanics/safety-incidents/:incidentId/resolve', ['SuperAdmin', 'SafetyReviewer'], async (req, res, p, q, session) => {
+  const { resolveSafetyIncident } = require('./lib/engage-mechanic-lab.js');
+  try {
+    const incident = resolveSafetyIncident(p.incidentId, session.username);
+    audit(session.username, session.role, 'mechanic_safety_incident_resolved', p.incidentId, null, null, null);
+    sendJSON(res, 200, incident);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+on('POST', '/api/admin/engage/mechanic-min-sample', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const { setMinSampleOverride } = require('./lib/engage-mechanic-lab.js');
+  try {
+    setMinSampleOverride(b.value, session.username);
+    audit(session.username, session.role, 'mechanic_min_sample_set', 'system', null, { value: b.value }, null);
+    sendJSON(res, 200, { ok: true, value: b.value });
+  } catch (e) { sendJSON(res, 400, { error: e.message }); }
+});
+on('GET', '/api/admin/engage/mechanic-min-sample', ['SuperAdmin', 'ProductAdmin'], async (req, res) => {
+  const { resolveMinSample } = require('./lib/engage-mechanic-lab.js');
+  sendJSON(res, 200, { value: resolveMinSample() });
+});
+
 /* Phase 5 P5-Inc-2 (corrective round): Session lifecycle + Moment serving.
    Authorization is capability-token based throughout — see
    migrations/007_engage_session_auth.js and lib/engage-session.js for the

@@ -1,4 +1,4 @@
-> **Version:** v2.0.18-p5-inc7-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.18-p5-inc7-corrective
+> **Version:** v2.0.19-p5-inc8 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7/8 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.19-p5-inc8
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -402,6 +402,41 @@ Authorization: Bearer <token>
 { "scopeType": "property", "scopeId": "prop_nova_main", "enabled": false }
 ```
 `scopeType` يجب أن تكون `property` أو `zone` فقط لهذا الشكل (`partner` يُضبَط عبر الباقة نفسها، و`global` عبر `kill-switch` أعلاه حصريًا).
+
+## Mechanic Lab — Phase 5 P5-Inc-8 (`ProductAdmin`/`SuperAdmin`/`SafetyReviewer`)
+
+### `POST /api/admin/mechanics/propose` — `ProductAdmin`/`SuperAdmin`
+```json
+{ "name": "...", "category": "ai_dynamic", "personality": "SPARK", "pool": [{ "title_en": "...", "body_en": "..." }] }
+```
+يُنشئ `mechanic` بـ`created_by='ai'` + `mechanic_version` في `lifecycle_state='draft'`. **لا مسار كود من هذه الدالة يكتب لأي إعداد Global Safety** — مُتحقَّق بنيويًا، وليس بفحص صلاحيات فقط.
+
+### `POST /api/admin/mechanics/:id/simulate` — `ProductAdmin`/`SuperAdmin`
+```json
+{ "sampleCount": 25 }
+```
+يُشغِّل **نفس** `evaluateSafety()` الحقيقية المُستخدَمة لكل لحظة إنتاجية فعلية — النتائج تُخزَّن في `mechanic_simulation_run` فقط، **معزولة تمامًا** عن `engage_session`/`moment`/الـLedger.
+
+### `POST /api/admin/mechanics/:id/transition` — `ProductAdmin`/`SuperAdmin`
+```json
+{ "toState": "canary", "reason": "...", "canaryPercentage": 5 }
+```
+`409` صريح لكل من: انتقال غير قانوني، `canary_percentage` خارج `(0,5]`، عينة أقل من الحد الأدنى، حادثة أمان مفتوحة، أو تعارض تزامني (`gate` في الاستجابة يُحدِّد السبب بالضبط: `min_sample`/`safety_incident`/`already_in_state`).
+
+### `POST /api/admin/mechanics/:id/kill-switch` — `SuperAdmin` فقط
+```json
+{ "toState": "held", "reason": "..." }
+```
+يتجاوز رسم الانتقالات العادي (يعمل من أي حالة غير نهائية)، **لا يمكن تفويضه لأي دور آخر**.
+
+### `GET /api/admin/mechanics` / `GET /api/admin/mechanics/:id` — `SuperAdmin`/`ProductAdmin`/`SafetyReviewer`
+القائمة الكاملة / تفصيل واحد شامل `metrics` (عينة، حوادث مفتوحة) و`lifecycleEvents` (السجل الكامل).
+
+### `GET/POST /api/admin/mechanics/:id/safety-incidents` و`/safety-incidents/:incidentId/resolve`
+القراءة: `SuperAdmin`/`ProductAdmin`/`SafetyReviewer`. **الحل**: `SuperAdmin`/`SafetyReviewer` فقط.
+
+### `GET/POST /api/admin/engage/mechanic-min-sample`
+القراءة: `SuperAdmin`/`ProductAdmin`. **التعديل: `SuperAdmin` فقط** — رفض `400` صريح لقيمة غير صحيحة، لا تقليم صامت.
 
 ### `POST /api/engage/session/:sessionToken/next-moment` — تحديث Inc-7
 **غير متزامنة الآن** (استدعاء AI محتمل بمهلة 4 ثوانٍ) — نفس التوقيع والاستجابة السابقة، مع حقل إضافي `source` صريح دائمًا (`"ai_generated"` أو `"approved_fallback"`). **العميل لا يرى أبدًا** خطأ مزوّد خام، مهلة منتهية، أو استجابة مُشوَّهة — كل هذه الحالات تُعالَج داخليًا وتنتهي دائمًا بمحتوى صالح مُقدَّم فعليًا (`HTTP 200`)، أو `409` لسبب Ceiling/Session العادي فقط كما كان.

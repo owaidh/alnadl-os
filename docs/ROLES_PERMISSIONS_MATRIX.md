@@ -1,4 +1,4 @@
-> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-6 roles · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
+> **Version:** v2.0.19-p5-inc8 · **Status:** FINAL (Phase 1-4) + P5-Inc-8 roles (Mechanic Lab scope) · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.19-p5-inc8
 
 # Alnadl Hospitality OS — Roles & Permissions Matrix (§19, §26.1)
 
@@ -9,8 +9,8 @@
 **اثنان جديدان (Phase 5 P5-Inc-6)، بنفس آلية `users.role` والحراسات — لا نظام صلاحيات منفصل:**
 | الدور | النطاق | الوصف |
 |---|---|---|
-| `SafetyReviewer` | كل الشركاء (داخلي، لا `partner_scope`) | Ledger الكامل لـEngage فقط (`GET /api/admin/engage/ledger`) — مطابق §14 "ledger/reports/safety actions" |
-| `ProductAdmin` | كل الشركاء (داخلي، لا `partner_scope`) | Overview المُجمَّع لـEngage فقط (`GET /api/admin/engage/overview`) — **لا** الـLedger الكامل، تطبيقًا لـ"بيانات شخصية حسب الحاجة فقط" |
+| `SafetyReviewer` | كل الشركاء (داخلي، لا `partner_scope`) | Ledger الكامل لـEngage (`GET /api/admin/engage/ledger`) — مطابق §14 "ledger/reports/safety actions". **P5-Inc-8**: حل حوادث Mechanic Lab الأمنية فقط (لا يبدأ/يُرقّي دورة حياة الآليات) |
+| `ProductAdmin` | كل الشركاء (داخلي، لا `partner_scope`) | Overview المُجمَّع لـEngage (`GET /api/admin/engage/overview`) — **لا** الـLedger الكامل. **P5-Inc-8**: يقترح/يُحاكي/يُرقّي آليات Mechanic Lab (Draft→...→Promoted) — **لا** يملك Kill Switch ولا حل حوادث السلامة |
 
 **الثمانية الأصلية:**
 | الدور | النطاق | الوصف |
