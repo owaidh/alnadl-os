@@ -95,9 +95,9 @@ async function run() {
 
     // --- Read-only pass endpoint ---
     const unknownPass = await api('GET', '/api/engage/pass/nonexistent-id-xyz');
-    assertEqual(unknownPass.status, 404, 'GET /api/engage/pass/:id returns 404 for an unknown pass, not a server error');
-    const knownPass = await api('GET', `/api/engage/pass/${pass2.id}`);
-    assertEqual(knownPass.status, 200, 'GET /api/engage/pass/:id returns 200 for a real pass');
+    assertEqual(unknownPass.status, 403, 'GET /api/engage/pass/:token returns 403 for an unknown token, not a server error (403, not 404, so wrong-token vs nonexistent cannot be distinguished by an attacker)');
+    const knownPass = await api('GET', `/api/engage/pass/${pass2.access_token}`);
+    assertEqual(knownPass.status, 200, 'GET /api/engage/pass/:token returns 200 for a real token');
     assertEqual(knownPass.data.status, 'active', 'the returned pass status is correct');
 
     // ============================================================

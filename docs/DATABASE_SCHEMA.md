@@ -1,4 +1,4 @@
-> **Version:** v2.0.6-p5-inc2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 tables · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.6-p5-inc2
+> **Version:** v2.0.7-p5-inc2-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 (security-corrected) tables · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.7-p5-inc2-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### تصحيح أمني — Capability Tokens (`migrations/007_engage_session_auth.js`)
+**`engage_pass.access_token`** و**`engage_session.access_token`** (عمودان إضافيان، `UNIQUE`، عشوائيان تشفيريًا 24 بايت) — الآن **السبيل الوحيد** لعنونة أي Pass/Session من واجهة العميل؛ لا يُقبَل `id` الداخلي كمُدخَل بعد الآن في أي نقطة نهاية Engage. يُغلق ثغرة IDOR حقيقية كانت موجودة في الإصدار الأول من Inc-2 (الاعتماد على `id` وحده، القابل للتخمين نظريًا). راجع `docs/PHASE5_GAP_ANALYSIS.md` قسم "الجولة التصحيحية الأمنية" للتفصيل الكامل.
 
 ### جداول ALNADL Engage — Phase 5 P5-Inc-2 (`migrations/006_engage_inc2.js`)
 - **`properties.venue_context`** — عمود إضافي جديد (`corporate`/`coffee`/`hotel`/`entertainment`/`vip_lounge`)، الإشارة الأساسية لمحرك الشخصية عند غياب إشارة منطقة أقوى

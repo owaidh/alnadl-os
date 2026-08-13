@@ -1,4 +1,4 @@
-> **Version:** v2.0.6-p5-inc2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 endpoints · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.6-p5-inc2
+> **Version:** v2.0.7-p5-inc2-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 (capability-token auth) endpoints · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.7-p5-inc2-corrective
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -349,26 +349,40 @@ Authorization: Bearer <token>
 
 **سياسة إعادة المحاولة (v2.0.5):** فشل عابر أثناء المعالجة (وليس `engage_enabled=false`، تلك ليست فشلاً) يُبقي الصف `pending` مع `next_attempt_at` بـBackoff أُسِّي (سقف 30 ثانية) حتى `max_attempts` (افتراضي 5)، ثم ينتقل لحالة `dead_letter` نهائية مع `last_error` وسجل تدقيق كامل.
 
-## 23) ALNADL Engage — Phase 5 P5-Inc-2
+## 23) ALNADL Engage — Phase 5 P5-Inc-2 (مُحدَّث — جولة تصحيحية أمنية)
+
+**⚠️ تصحيح أمني (v2.0.7):** الإصدار الأول من هذا القسم كان يصف المصادقة بـ`passId`/`sessionId` — كان هذا خللاً أمنيًا حقيقيًا (IDOR)، أُصلح بالكامل. **كل التوثيق أدناه يصف السلوك الصحيح الحالي فقط.**
 
 ### `POST /api/engage/session/start`
 ```json
-{ "passId": "ep_..." }
+{ "accessToken": "yvqfLHvafktZe_qoZHX9dOfd2w5bacEu" }
 ```
-عام (لا مصادقة — الـPass نفسه هو التفويض، بنفس فلسفة رمز QR). يُرجع الجلسة القائمة لنفس الـPass إن وُجدت (بغض النظر عن حالتها — هذا مقصود، راجع §Inc-2 في `docs/PHASE5_GAP_ANALYSIS.md` للتفصيل الأمني)، وإلا يُنشئ جلسة جديدة بشخصية وسقف محسوبَين تلقائيًا.
+عام (لا مصادقة موظفين — الـ`accessToken` نفسه **هو** التفويض الكامل، بنفس فلسفة رمز QR). **لا يُقبَل أي معرِّف داخلي (`passId`) كمُدخَل إطلاقًا.** يُرجع الجلسة القائمة لنفس الـPass إن وُجدت (بغض النظر عن حالتها — هذا مقصود، يمنع تجاوز RESET، راجع قسم "الجولة التصحيحية الأمنية" في `docs/PHASE5_GAP_ANALYSIS.md`)، وإلا يُنشئ جلسة جديدة بشخصية وسقف محسوبَين تلقائيًا، **ورمز وصول جديد خاص بالجلسة**:
 ```json
-{ "id": "es_...", "personality": "SPARK", "ceilingMax": 3, "ceilingUsed": 0, "status": "running" }
+{ "id": "es_...", "sessionToken": "AbCd3F...", "personality": "SPARK", "ceilingMax": 3, "ceilingUsed": 0, "status": "running" }
 ```
-`404` إن كان الـPass غير موجود، `409` إن كان غير نشط/منتهي الصلاحية.
+`403` (وليس `404`) إن كان الرمز غير معروف — هذا مقصود: `404` كانت ستُتيح لمهاجم تمييز "رمز خاطئ الصياغة" عن "رمز صحيح الصياغة لكن غير موجود"، بينما `403` مُوحَّدة لا تكشف شيئًا. `409` إن كان الـPass غير نشط/منتهي الصلاحية.
 
-### `POST /api/engage/session/:id/next-moment`
-يُقدِّم اللحظة التالية من المحتوى الثابت المُعتمَد (`source:"approved_fallback"`) لشخصية الجلسة، ويزيد عدّاد `ceiling_moments_used`. **`409` مع `ceilingReached:true`** إن بلغت الجلسة سقفها. الجلسة تنتهي تلقائيًا (`status:'ended'`) فور بلوغ السقف بهذا الاستدعاء نفسه.
+### `POST /api/engage/session/:sessionToken/next-moment`
+**المعامل في المسار هو `sessionToken` (رمز الوصول الخاص بالجلسة الذي أُعيد من `session/start`)، وليس `id` داخليًا.** يُقدِّم اللحظة التالية من المحتوى الثابت المُعتمَد (`source:"approved_fallback"`) لشخصية الجلسة، ويزيد عدّاد `ceiling_moments_used`. **`409` مع `ceilingReached:true`** إن بلغت الجلسة سقفها. الجلسة تنتهي تلقائيًا (`status:'ended'`) فور بلوغ السقف بهذا الاستدعاء نفسه. `403` لأي رمز لا يُطابق جلسة حقيقية — بما في ذلك تمرير رمز Pass بالخطأ في موضع رمز Session (الرمزان من فئتين مختلفتين تمامًا، لا تطابق بينهما أبدًا).
 ```json
 { "momentId": "mo_...", "payload": {...}, "ceilingUsed": 2, "ceilingMax": 3, "sessionEnded": false }
 ```
 
-### `POST /api/engage/session/:id/end`
+### `POST /api/engage/session/:sessionToken/end`
 إنهاء صريح، Idempotent (استدعاؤه على جلسة منتهية بالفعل لا يُنتج خطأً).
+
+### `GET /api/engage/pass/:accessToken`
+مُحدَّث ليُعنوِن بالرمز أيضًا (كان بالمعرِّف الداخلي في الإصدار الأول) — نفس مبدأ الأمان المُوحَّد عبر كل نقاط Engage.
+
+### `POST /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
+`SuperAdmin` أو `PartnerAdmin` فقط. `PartnerAdmin` يُمنَع صراحة من أي Override يخص شريكًا آخر على أي من المستويات الثلاثة (partner/property/zone).
+```json
+{ "scopeType": "zone", "scopeId": "z_pool", "personality": "PLAY", "max": 2 }
+```
+
+### `GET /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
+نفس الحماية؛ `PartnerAdmin` يرى فقط ما يخص شركته.
 
 ## ملاحظة حول Idempotency وWebhooks (Q03، §18)
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل

@@ -1,4 +1,4 @@
-> **Version:** v2.0.6-p5-inc2 · **Status:** P5-Inc-2 DELIVERED (Personality Engine + Ceiling + Policy Precedence), awaiting review before P5-Inc-3 begins · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.6-p5-inc2`
+> **Version:** v2.0.7-p5-inc2-corrective · **Status:** P5-Inc-2 SECURITY CORRECTIVE ROUND DELIVERED (capability-token authorization + RBAC on Policy Overrides), awaiting review before P5-Inc-3 begins · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.7-p5-inc2-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,47 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-2 — الجولة التصحيحية الأمنية (Authorization/Capability Tokens)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-3.**
+
+### الخلل الأمني المُحدَّد — حقيقي ومُصحَّح بالكامل
+
+**قبل هذه الجولة**: `POST /api/engage/session/start`، `next-moment`، و`end` كانت تعتمد حصريًا على معرفة `engage_pass.id`/`engage_session.id` — وهما معرّفان مُولَّدان عبر `uid()` (قصيران، شبه تسلسليان، لم يُصمَّما ليكونا سريّين إطلاقًا). أي طرف يعرف أو يُخمِّن هذين المعرِّفين كان يستطيع بدء/متابعة/إنهاء جلسة Engage تخص طلب أو Tenant آخر بالكامل.
+
+**الحل المُطبَّق**: **Capability Token** — رمز عشوائي تشفيريًا غير قابل للتخمين (24 بايت، `crypto.randomBytes`، ~192 بت من الإنتروبيا) يُصدَر لكل Pass ولكل Session عند إنشائهما. **هذا الرمز هو الآن السبيل الوحيد** للوصول لأي عملية على الـPass/Session من واجهة العميل — لا يُقبَل `id` الداخلي كمُدخَل من العميل في أي نقطة نهاية بعد الآن. **هذا ليس تصميمًا جديدًا اخترعناه لهذا الإصلاح** — هو نفس النمط المُثبَت والمُدقَّق فعليًا في هذا المشروع لرموز QR (`GET /api/qr/:token`) منذ Phase 1.
+
+```
+migrations/007_engage_session_auth.js:
+  engage_pass.access_token   TEXT UNIQUE  -- يُصدَر عند إنشاء الـPass (lib/engage-worker.js)
+  engage_session.access_token TEXT UNIQUE -- يُصدَر عند إنشاء الـSession (lib/engage-session.js)
+```
+
+كل من `GET /api/engage/pass/:token`، `POST /api/engage/session/start` (`{accessToken}`)، `next-moment`، و`end` الآن تُعنوِن بالرمز حصريًا — **لا يوجد أي معامل `id` في هذه المسارات على الإطلاق لأي طرف مهاجم ليستبدله**، مما يُغلق فئة كاملة من هجمات IDOR هيكليًا، وليس بفحص إضافي فقط.
+
+### خلل حقيقي إضافي اكتُشف أثناء اختبار الحماية نفسها
+
+أول تشغيل لاختبار "بدون Authorization → رفض" **كشف عطلاً حقيقيًا**: إرسال طلب بلا `accessToken` إطلاقًا (`undefined`) كان يُسبِّب **خطأ خادم 500** (فشل ربط SQLite لقيمة `undefined`) بدل رفض نظيف 403 — **ثغرة كشف معلومات صغيرة لكنها حقيقية** (تكشف تفاصيل تقنية داخلية في رسالة الخطأ). أُصلح بفحص صريح لنوع المدخل قبل أي استعلام قاعدة بيانات في الدوال الثلاث.
+
+### RBAC لنقاط Policy Overrides — لم تكن موجودة، أُضيفت الآن بحماية كاملة
+
+لم يكن هناك أي نقطة نهاية HTTP لتعديل `venue_policy_override` قبل هذه الجولة (الدالة `setPolicyOverride()` كانت تُستدعى مباشرة في الاختبارات فقط) — أي أن هذا الخطر **لم يكن مُتاحًا فعليًا من قبل**. أُضيفت الآن نقطتان محميتان:
+- `POST /api/admin/engage/policy-overrides` — `SuperAdmin` أو `PartnerAdmin` فقط؛ `PartnerAdmin` يُمنَع صراحة من تعديل أي Override يخص شريكًا آخر (عزل Tenant الكامل، مُطبَّق على مستويات partner/property/zone الثلاثة عبر `assertTenantWrite`)
+- `GET /api/admin/engage/policy-overrides` — نفس الحماية، مع تصفية القائمة لتُظهر لـPartnerAdmin فقط ما يخص شركته
+
+### شروط القبول — كل بند من الطلب، بدليله الفعلي
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| بدون authorization/capability → رفض | ✅ | `403` مُختبَر مباشرة (واكتُشف عطل 500 حقيقي أثناء هذا الاختبار تحديدًا، أُصلح) |
+| capability غير صحيح → رفض | ✅ | رمز مصطنع عشوائي → `403` |
+| capability يخص Pass/Session أخرى → رفض | ✅ | رمز Pass مُستخدَم في موضع رمز Session → `403` (لا تطابق بين نوعي الرموز إطلاقًا) |
+| cross-tenant attempt → رفض | ✅ | Passان من شريكين مختلفين، تحقَّق أن رموزهما لا تتطابقان أبدًا وأن كل رمز يصل فقط لجلسته الخاصة |
+| capability الصحيح → Start/Next/End تعمل طبيعيًا | ✅ | تدفق كامل Happy Path مُختبَر بالرمز الصحيح فقط |
+| RESET no-replay لم ينكسر بعد الحماية | ✅ | نفس اختبار محاولة التجاوز من الجولة السابقة، مُعاد بالكامل عبر طبقة الرموز الجديدة — النتيجة: `409` كما هو متوقع |
+| RBAC على Policy Overrides | ✅ | 4 اختبارات: بلا مصادقة→رفض، Operator (دور غير إداري)→رفض، PartnerAdmin على شريك آخر→رفض، PartnerAdmin على منشأة شريك آخر→رفض، SuperAdmin→نجاح |
+| Full Regression بعد الإصلاح | ✅ | **159/159** (105 من قبل + 54 اختبار Inc-2 المُعاد كتابته بالكامل ليشمل الأمان) |
 
 ## P5-Inc-2 — سجل التسليم الفعلي (بعد التنفيذ)
 

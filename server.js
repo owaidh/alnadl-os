@@ -400,32 +400,84 @@ on('GET', '/api/orders/:id', null, async (req, res, p) => {
 // API in Inc-1 — only the Worker (lib/engage-worker.js) creates a pass, and
 // only in response to a real order.confirmed event. This endpoint exists
 // purely so a future customer-facing screen (Inc-2+) has something to poll.
-on('GET', '/api/engage/pass/:id', null, async (req, res, p) => {
-  const pass = db.prepare('SELECT * FROM engage_pass WHERE id = ?').get(p.id);
-  if (!pass) return sendJSON(res, 404, { error: 'Not found' });
+on('GET', '/api/engage/pass/:token', null, async (req, res, p) => {
+  // Corrective round: keyed by access_token, not the internal id, for the
+  // same reason as the session endpoints below.
+  const pass = db.prepare('SELECT * FROM engage_pass WHERE access_token = ?').get(p.token);
+  if (!pass) return sendJSON(res, 403, { error: 'Invalid or unknown access token' });
   const isExpired = pass.status === 'active' && Date.now() > pass.expires_at;
   sendJSON(res, 200, { id: pass.id, status: isExpired ? 'expired' : pass.status, expiresAt: pass.expires_at, createdAt: pass.created_at });
 });
 
-/* Phase 5 P5-Inc-2: Session lifecycle + Moment serving. All three are
-   public/customer-facing (no auth) — an Engage Pass IS the authorization,
-   the same way a QR token is throughout the rest of this system. */
+/* Phase 5 P5-Inc-2 (corrective round): Venue Policy Override — Ceiling and
+   other precedence-chain settings (partner/property/zone scoped). RBAC-gated:
+   SuperAdmin can set at any scope; PartnerAdmin only within their own
+   tenant, at property/zone scope belonging to that tenant — never at
+   'partner' scope for anyone else's contract, and never a bare customer
+   request (no role at all reaches this route). */
+on('GET', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, query, session) => {
+  let rows = db.prepare('SELECT * FROM venue_policy_override ORDER BY created_at DESC').all();
+  if (session.role === 'PartnerAdmin') {
+    // A PartnerAdmin may only see overrides that plausibly belong to their
+    // own tenant: their own partner-scope row, or any property/zone that
+    // resolves back to their partner_id.
+    rows = rows.filter(r => {
+      if (r.scope_type === 'partner') return r.scope_id === session.scope;
+      if (r.scope_type === 'property') return propertyPartnerId(r.scope_id) === session.scope;
+      if (r.scope_type === 'zone') return zonePartnerId(r.scope_id) === session.scope;
+      return false;
+    });
+  }
+  sendJSON(res, 200, rows);
+});
+on('POST', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const { PERSONALITIES, setPolicyOverride } = require('./lib/engage-personality.js');
+  if (!['partner', 'property', 'zone'].includes(b.scopeType)) return sendJSON(res, 400, { error: 'scopeType must be partner, property, or zone' });
+  if (!PERSONALITIES.includes(b.personality)) return sendJSON(res, 400, { error: `personality must be one of ${PERSONALITIES.join(', ')}` });
+  if (typeof b.max !== 'number' || b.max < 0) return sendJSON(res, 400, { error: 'max must be a non-negative number' });
+
+  // Tenant isolation: a PartnerAdmin can only ever write a policy that
+  // resolves back to their own partner_id, at any scope level.
+  if (session.role === 'PartnerAdmin') {
+    const ownerPartnerId = b.scopeType === 'partner' ? b.scopeId
+      : b.scopeType === 'property' ? propertyPartnerId(b.scopeId)
+      : zonePartnerId(b.scopeId);
+    assertTenantWrite(session, ownerPartnerId);
+  }
+  setPolicyOverride(b.scopeType, b.scopeId, b.personality, b.max, session.username);
+  audit(session.username, session.role, 'engage_policy_override_set', b.scopeId, null, { scopeType: b.scopeType, personality: b.personality, max: b.max }, null);
+  sendJSON(res, 201, { ok: true });
+});
+
+/* Phase 5 P5-Inc-2 (corrective round): Session lifecycle + Moment serving.
+   Authorization is capability-token based throughout — see
+   migrations/007_engage_session_auth.js and lib/engage-session.js for the
+   full rationale. Internal ids (engage_pass.id, engage_session.id) are
+   NEVER accepted as client input on these routes; only the unguessable
+   access_token issued at Pass/Session creation is. This mirrors the
+   already-proven QR token pattern (GET /api/qr/:token) rather than
+   inventing a new authorization architecture. */
 on('POST', '/api/engage/session/start', null, async (req, res) => {
   const b = await readBody(req);
   try {
-    const session = startSession(b.passId);
-    sendJSON(res, 200, { id: session.id, personality: session.personality, ceilingMax: session.ceiling_moments_max, ceilingUsed: session.ceiling_moments_used, status: session.status });
+    const session = startSession(b.accessToken);
+    sendJSON(res, 200, {
+      id: session.id, sessionToken: session.access_token,
+      personality: session.personality, ceilingMax: session.ceiling_moments_max,
+      ceilingUsed: session.ceiling_moments_used, status: session.status,
+    });
   } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
 });
-on('POST', '/api/engage/session/:id/next-moment', null, async (req, res, p) => {
+on('POST', '/api/engage/session/:token/next-moment', null, async (req, res, p) => {
   try {
-    const result = serveNextMoment(p.id);
+    const result = serveNextMoment(p.token);
     sendJSON(res, 200, result);
   } catch (e) { sendJSON(res, e.status || 500, { error: e.message, ceilingReached: e.ceilingReached || false }); }
 });
-on('POST', '/api/engage/session/:id/end', null, async (req, res, p) => {
+on('POST', '/api/engage/session/:token/end', null, async (req, res, p) => {
   try {
-    const session = endSession(p.id);
+    const session = endSession(p.token);
     sendJSON(res, 200, { id: session.id, status: session.status });
   } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
 });
