@@ -136,6 +136,64 @@ async function run() {
     assertEqual(participantRoom.session_id, tenantAStart.data.id, "CROSS-TENANT: the new participant's room is verifiably linked to Tenant A's own session, never Tenant B's, by direct database inspection");
 
     // ============================================================
+    // CORRECTIVE ROUND: concurrency-safe capacity — real simultaneous joins
+    // ============================================================
+    // Scenario 1: exactly ONE seat remaining, TWO simultaneous join attempts.
+    // Before the atomic-SQL fix, a COUNT-then-INSERT race could in principle
+    // let both through; this proves exactly one wins now.
+    const passRace1 = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });
+    const race1Start = await api('POST', '/api/engage/session/start', { accessToken: passRace1.accessToken });
+    const race1Invite = await api('POST', `/api/engage/session/${race1Start.data.sessionToken}/invite/create`, { maxParticipants: 2 });
+    await api('POST', `/api/engage/invite/${race1Invite.data.inviteToken}/join`, { displayName: 'Filler' }); // fill 1 of 2 seats, exactly 1 remains
+
+    const [raceA, raceB] = await Promise.all([
+      api('POST', `/api/engage/invite/${race1Invite.data.inviteToken}/join`, { displayName: 'RaceA' }),
+      api('POST', `/api/engage/invite/${race1Invite.data.inviteToken}/join`, { displayName: 'RaceB' }),
+    ]);
+    const raceSuccesses = [raceA, raceB].filter(r => r.status === 200);
+    const raceFailures = [raceA, raceB].filter(r => r.status === 409);
+    assertEqual(raceSuccesses.length, 1, 'CONCURRENCY: with exactly 1 seat remaining, 2 truly simultaneous join requests result in EXACTLY 1 success (not 0, not 2)');
+    assertEqual(raceFailures.length, 1, 'CONCURRENCY: the other simultaneous request correctly receives 409 (group full), not a silently-accepted overflow');
+    const race1FinalCount = db.prepare('SELECT COUNT(*) c FROM engage_participant WHERE group_room_id = (SELECT id FROM group_room WHERE invite_token = ?)').get(race1Invite.data.inviteToken).c;
+    assertEqual(race1FinalCount, 2, 'CONCURRENCY: the final participant count is exactly max_participants (2), never exceeded by the race');
+
+    // Scenario 2: the default ceiling (8) under heavier concurrency -- 10
+    // simultaneous join attempts against an empty max=8 room.
+    const passRace2 = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });
+    const race2Start = await api('POST', '/api/engage/session/start', { accessToken: passRace2.accessToken });
+    const race2Invite = await api('POST', `/api/engage/session/${race2Start.data.sessionToken}/invite/create`, { maxParticipants: 8 });
+
+    const race2Results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => api('POST', `/api/engage/invite/${race2Invite.data.inviteToken}/join`, { displayName: `Concurrent${i}` }))
+    );
+    const race2Successes = race2Results.filter(r => r.status === 200);
+    const race2Failures = race2Results.filter(r => r.status === 409);
+    assertEqual(race2Successes.length, 8, 'CONCURRENCY (max=8): out of 10 truly simultaneous join attempts against an empty room, EXACTLY 8 succeed');
+    assertEqual(race2Failures.length, 2, 'CONCURRENCY (max=8): the other 2 correctly receive 409, never silently overflow the ceiling');
+    const race2FinalCount = db.prepare('SELECT COUNT(*) c FROM engage_participant WHERE group_room_id = (SELECT id FROM group_room WHERE invite_token = ?)').get(race2Invite.data.inviteToken).c;
+    assertEqual(race2FinalCount, 8, 'CONCURRENCY (max=8): the final stored participant count is exactly 8, proven by direct database query, not just the HTTP response shapes');
+
+    // Preserve idempotency/security/tenant behavior alongside the fix:
+    // successful joins from the race still return correct, distinct participant ids
+    const successfulParticipantIds = new Set(race2Successes.map(r => r.data.participantId));
+    assertEqual(successfulParticipantIds.size, 8, 'each of the 8 successful concurrent joins produced a genuinely distinct participantId -- no duplicate/collided rows from the race');
+
+    // ============================================================
+    // CORRECTIVE ROUND: rate limiter bounded memory (no unbounded growth)
+    // ============================================================
+    const { _cleanupStaleJoinAttempts, _getJoinAttemptsMapSize, _setRawJoinAttemptsForTest } = require('../lib/engage-social.js');
+    const veryOldTimestamp = Date.now() - 10 * 60 * 1000; // well outside the 60s rate-limit window
+    _setRawJoinAttemptsForTest('test-stale-token-a', [veryOldTimestamp]);
+    _setRawJoinAttemptsForTest('test-stale-token-b', [veryOldTimestamp, veryOldTimestamp]);
+    _setRawJoinAttemptsForTest('test-fresh-token', [Date.now()]);
+    const sizeBeforeCleanup = _getJoinAttemptsMapSize();
+    assert(sizeBeforeCleanup >= 3, 'BOUNDED MEMORY setup: at least 3 tracked invite tokens exist before cleanup (2 stale, 1 fresh)');
+
+    _cleanupStaleJoinAttempts();
+    const sizeAfterCleanup = _getJoinAttemptsMapSize();
+    assert(sizeAfterCleanup <= sizeBeforeCleanup - 2, 'BOUNDED MEMORY: cleanup removes entries whose every recorded attempt has aged out of the window -- the 2 stale test entries are gone, memory does not grow without bound across long uptime');
+
+    // ============================================================
     // NEGATIVE: rate limiting on join
     // ============================================================
     const passRateLimit = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: 'z_pool', pointId: 'PT-021', orderId: nextOrderId() });

@@ -1,4 +1,4 @@
-> **Version:** v2.0.12-p5-inc5 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.12-p5-inc5
+> **Version:** v2.0.13-p5-inc5-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 (concurrency-safe) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.13-p5-inc5-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### تصحيح: سلامة حد المشاركين تحت التزامن الحقيقي
+`joinInvite()` يفحص السعة ويُدرج المشارك عبر **جملة SQL ذرّية واحدة** (`INSERT ... SELECT ... WHERE`) بدل استعلامي `COUNT` ثم `INSERT` منفصلين — مُختبَر فعليًا بـ10 طلبات انضمام متزامنة حقيقية (`Promise.all`) على غرفة سعتها 8: 8 نجاح بالضبط، 2 رفض، صفر تجاوز للسقف.
 
 ### جداول الدعوة الجماعية — Phase 5 P5-Inc-5 (`migrations/010_engage_inc5.js`)
 - **`group_room`** — `session_id` يربط الغرفة بجلسة المُضيف الأصلية (الاتجاه الوحيد المسموح: Engage→Core لا يزال محفوظًا، هذا ربط داخل Engage نفسه). `invite_token` عشوائي تشفيريًا (24 بايت)، مُنفصل تمامًا عن `access_token` الخاص بالجلسة — تسريب رمز الدعوة (المُصمَّم للمشاركة أصلًا) لا يكشف أبدًا قدرة المُضيف الخاصة. `expires_at` = وقت الإنشاء + 30 دقيقة، **لكن الانتهاء الفعلي يُفرَض بشرطين معًا عند الانضمام**: الوقت لم ينتهِ **و** جلسة المُضيف لا تزال `running` — أيهما يتحقق أولًا يُبطل الدعوة

@@ -1,4 +1,4 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.0.13-p5-inc5-corrective · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED + P5-Inc-1/2/3/4/5 deployment notes · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.13-p5-inc5-corrective
 
 # Alnadl Hospitality OS — Deployment Guide
 
@@ -94,6 +94,10 @@ volumes:
 اربط نطاقًا فعليًا (مثال: `os.alnadl.com`) وشهادة SSL (Let's Encrypt عبر Caddy تلقائي، أو عبر مزوّد الاستضافة).
 
 ---
+
+## Rate Limiting — قيد Multi-Instance (Production Hardening)
+
+محددا المعدل الحاليان (تسجيل الدخول في `lib/auth.js`، والانضمام لدعوات Engage الجماعية في `lib/engage-social.js`) **حالة داخل العملية (In-Memory)** — صحيحان وكافيان لنشر Instance واحد (النطاق الحالي لهذا المشروع)، لكنهما **غير موزَّعين** عبر عدة Instances خلف موازن حمل، ويُعاد تصفيرهما عند كل إعادة تشغيل. عند نشر أكثر من Instance واحد مستقبلًا، مهاجم يوزّع الطلبات عبر الـInstances يُضاعِف الحد الفعلي بعدد الـInstances. **يُصنَّف هذا صراحةً كمتطلب Production Hardening**: الانتقال لمخزن مشترك (Redis أو مكافئ) لكلا المحددين معًا — لم يُبنَ الآن دون نشر متعدد الـInstances فعلي يُبرره.
 
 ## Production Bootstrap (لا Demo Data في الإنتاج)
 

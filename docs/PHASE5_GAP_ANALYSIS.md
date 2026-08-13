@@ -1,4 +1,4 @@
-> **Version:** v2.0.12-p5-inc5 · **Status:** P5-Inc-5 DELIVERED (Social/Group Invite), awaiting review before P5-Inc-6 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.12-p5-inc5`
+> **Version:** v2.0.13-p5-inc5-corrective · **Status:** P5-Inc-5 CORRECTIVE ROUND DELIVERED (concurrency-safe participant ceiling + rate limiter production limits documented + bounded cleanup), awaiting review before P5-Inc-6 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.13-p5-inc5-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,44 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-5 — الجولة التصحيحية (Concurrency-Safe Ceiling + Rate Limiter Limits)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-6.**
+
+### النقطة 1 — سلامة حد المشاركين تحت التزامن الحقيقي
+
+**قبل هذه الجولة**: `joinInvite()` كانت تُنفِّذ `COUNT(*)` ثم `INSERT` كعمليتين منفصلتين — فجوة TOCTOU نظرية: طلبا انضمام متزامنان بمقعد واحد متبقٍ قد يقرآن نفس العدد قبل أن يُدرج أيّهما.
+
+**تحليل صادق**: بسبب الطبيعة المتزامنة لـ`node:sqlite` والنموذج أحادي الخيط لـNode.js (لا تعليق/Preemption داخل دالة متزامنة)، لم يكن هذا السباق قابلاً للتكرار فعليًا ضمن Process واحد بمنطق تنفيذ متزامن بحت — لكن الاعتماد الضمني على هذه الخاصية البيئية كان هشًّا، وليس ضمانًا هندسيًا صريحًا.
+
+**الإصلاح**: التحقق من السعة والإدراج الآن **جملة SQL واحدة ذرّية**:
+```sql
+INSERT INTO engage_participant (...)
+SELECT ?,?,?,?
+WHERE (SELECT COUNT(*) FROM engage_participant WHERE group_room_id=?) < (SELECT max_participants FROM group_room WHERE id=?)
+```
+`changes` من نتيجة التنفيذ يُحدِّد بدقة هل نجح الإدراج أم مُنِع — نفس مبدأ Transactional Outbox من الجولة التصحيحية لـInc-1.
+
+**دليل تجريبي حقيقي، لا نظري فقط**: 10 طلبات انضمام متزامنة فعليًا (`Promise.all`) على غرفة فارغة سعتها 8 → **8 نجحت بالضبط، 2 رُفضتا بـ409**، عدد المشاركين النهائي في قاعدة البيانات = 8 بالضبط. وسيناريو مقعد واحد متبقٍ مع طلبين متزامنين → نجاح واحد بالضبط.
+
+### النقطة 2 — قيود محدد المعدل في الإنتاج، والذاكرة المحدودة
+
+**التوثيق الصريح**: محدد معدل الانضمام حالة داخل العملية (In-Memory Map) — **غير موزَّع عبر عدة Instances**، ويُعاد تصفيره عند كل إعادة تشغيل. هذا كافٍ وصحيح لنشر Instance واحد (النطاق الحالي للمشروع)؛ **يُصنَّف صراحةً كمتطلب Production Hardening** (مخزن مشترك مثل Redis، لهذا المحدد ومحدد تسجيل الدخول معًا) عند نشر أكثر من Instance — لم يُبنَ الآن دون حاجة فعلية تُبرره.
+
+**تنظيف محدود للذاكرة**: بدون تنظيف دوري، كل رمز دعوة جديد يُنشئ إدخالاً في الخريطة **لا يُحذف أبدًا** حتى بعد انتهاء صلاحيته — نمو غير محدود عبر وقت تشغيل طويل. أُضيف تنظيف دوري (كل 5 دقائق، نفس نمط `setInterval`+`unref()` المُثبَت في Worker الـOutbox) يُزيل أي إدخال تجاوزت كل محاولاته النافذة الزمنية.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| فحص السعة + الإدراج ذرّي | ✅ | جملة SQL واحدة، `changes` يُحدِّد النتيجة |
+| اختبار تزامن حقيقي: مقعد واحد، طلبان متزامنان | ✅ | نجاح واحد بالضبط، رفض واحد بـ409 |
+| اختبار max=8 تحت تزامن | ✅ | 10 متزامنة → 8 نجاح بالضبط، 2 رفض |
+| الحفاظ على Idempotency/الأمان/العزل | ✅ | كل الاختبارات القائمة (26) لا تزال تنجح دون تعديل |
+| توثيق قيد محدد المعدل بصراحة | ✅ | تعليق كود + هذا القسم؛ ليس افتراضًا صامتًا |
+| منع نمو غير محدود للذاكرة | ✅ | تنظيف دوري مُختبَر مباشرة (حقن Timestamps قديمة، تحقّق حذفها) |
+| 284/284 Baseline محفوظ | ✅ | **293/293 الآن** (284 + 9 اختبارات جديدة) |
 
 ## P5-Inc-5 — سجل التسليم الفعلي (Social / Group Invite)
 
