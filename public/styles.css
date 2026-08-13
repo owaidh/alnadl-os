@@ -127,13 +127,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
 input, select, textarea{ font-family:inherit; }
 
-.protobar{ position:sticky; top:0; z-index:100; background:var(--ink-900); border-bottom:1px solid var(--ink-700);
+.appbar{ position:sticky; top:0; z-index:100; background:var(--ink-900); border-bottom:1px solid var(--ink-700);
   padding:10px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; color:var(--cream-100); }
-.protobar .brand{ display:flex; align-items:center; gap:8px; font-weight:800; margin-inline-end:8px; font-family:var(--display); letter-spacing:.01em; }
+.appbar .brand{ display:flex; align-items:center; gap:8px; font-weight:800; margin-inline-end:8px; font-family:var(--display); letter-spacing:.01em; }
 .brand .mark{ width:26px;height:26px;border-radius:7px;background:linear-gradient(155deg,var(--brass-300),var(--brass-600)); display:flex;align-items:center;justify-content:center; color:var(--ink-950); font-weight:900; font-size:13px; }
 .sessionpill{ background:var(--ink-800); color:var(--cream-100); padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; display:flex; gap:6px; align-items:center; }
 .sessionpill .rl{ color:var(--brass-300); }
-.protobar .spacer{ flex:1; }
+.appbar .spacer{ flex:1; }
 .langtoggle{ display:flex; background:var(--ink-800); border-radius:999px; padding:4px; }
 .langtoggle button{ border:none; background:transparent; color:var(--ink-300); padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; }
 .langtoggle button.active{ background:var(--cream-050); color:var(--ink-950); }

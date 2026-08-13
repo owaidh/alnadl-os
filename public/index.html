@@ -14,10 +14,24 @@
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<div class="protobar" id="protobar"></div>
+<!-- UX-0 corrective round: this is genuinely production chrome (brand,
+     language toggle, session/login status), rendered by app.js's
+     renderTopBar(). Nothing demo-specific is rendered into it in any
+     environment; see public/app.js. -->
+<div class="appbar" id="appbar"></div>
 <div id="app"></div>
 <script src="/app.js"></script>
+<!--DEV-ONLY-->
+<script src="/dev-tools.js"></script>
+<!--/DEV-ONLY-->
 <script>
+  // App.boot() runs only after every prior <script> tag above has fully
+  // loaded and executed (script tags block/execute in document order) --
+  // by this point window.AlnadlDevTools is either populated (dev.js was
+  // served) or was never defined at all (production 404'd it, or this
+  // whole block was stripped server-side), so every render() from here
+  // sees the correct, final answer with zero race condition.
+  App.boot();
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{}));
   }

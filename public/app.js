@@ -49,7 +49,7 @@ const T = {
     topZones:'أفضل المناطق', revShareTitle:'تسوية مشاركة الإيراد',
     discounts:'الخصومات', refunds:'المرتجعات', eligibleBase:'القاعدة المستحقة', partnerShare:'حصة الشريك',
     approveSettlement:'اعتماد التسوية', statusDraft:'مسودة',
-    login:'دخول', chooseUser:'اختر مستخدمًا تجريبيًا', logout:'خروج',
+    login:'دخول', logout:'خروج',
     resetHint:'كلمة المرور = اسم المستخدم', role_customer:'العميل واجهة الطلب',
     scope_note:'كل عملية هنا فعلية عبر واجهة برمجية حقيقية — لا توجد بيانات وهمية على الواجهة',
     toast_added:'أُضيف للسلة', toast_saved:'تم الحفظ', toast_zone:'تمت إضافة المنطقة', toast_point:'تم توليد QR للنقطة',
@@ -90,7 +90,7 @@ const T = {
     topZones:'Top zones', revShareTitle:'Revenue-share settlement',
     discounts:'Discounts', refunds:'Refunds', eligibleBase:'Eligible base', partnerShare:'Partner share',
     approveSettlement:'Approve settlement', statusDraft:'Draft',
-    login:'Log in', chooseUser:'Choose a demo user', logout:'Log out',
+    login:'Log in', logout:'Log out',
     resetHint:'Password = username', role_customer:'Customer ordering UI',
     scope_note:'Every action here is real over the HTTP API — nothing on screen is mocked',
     toast_added:'Added to cart', toast_saved:'Saved', toast_zone:'Zone added', toast_point:'QR generated for point',
@@ -121,7 +121,6 @@ const S = {
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
   ui:{ openOrder:null, cancelFor:null, err:null }, toast:null,
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
-  production:null, // null = not yet determined (see init()); false/true once GET /api/env resolves. Deliberately NOT defaulted to false — a fetch failure must never fall back to showing demo affordances in what could be a real deployment.
 };
 
 function showToast(msg){ S.toast=msg; const d=document.createElement('div'); d.className='toast'; d.textContent=msg; document.body.appendChild(d); setTimeout(()=>d.remove(),1700); }
@@ -272,17 +271,10 @@ const App = {
 
   /* ---- auth ---- */
   openLogin(){ S.screen='login'; render(); },
-  async quickLogin(username){
-    try{
-      const r = await api('POST', '/api/auth/login', { username, password: username });
-      S.session = r; S.mode = App.roleHome(r.user.role);
-      S.screen = App.roleDefaultScreen(r.user.role);
-      await App.loadForRole();
-      render();
-    }catch(e){ showErr(e.message); }
-  },
-  // UX-0: the real credential-entry path used when S.production is true —
-  // reads the two typed form fields rather than assuming password===username.
+  // UX-0 corrective: the real credential-entry path, the ONLY login
+  // mechanism physically present in the production-served app.js. The
+  // one-tap password-equals-username shortcut now lives entirely in the
+  // developer-tools file, which never reaches a production client.
   async login(){
     const username = document.getElementById('loginUsername')?.value?.trim();
     const password = document.getElementById('loginPassword')?.value;
@@ -610,11 +602,21 @@ function statusBadge(status){
 }
 function elapsedStr(ts){ const d=Date.now()-ts; const m=Math.floor(d/60000), s=Math.floor((d%60000)/1000); return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'); }
 
-function renderProtobar(){
-  const bar = document.getElementById('protobar');
+// UX-0 corrective round: this is the ONLY top-chrome renderer physically
+// present in the production-served app.js: brand mark, language toggle,
+// and session/login status — every one of these is genuinely needed by
+// real customers and real staff in production. The old top-chrome
+// renderer carried a "· live API" prototype label and was coupled to
+// the demo login path; neither survives in this version. dev-tools.js
+// does not touch this bar's contents at all in this corrective design
+// (unlike the QR-picker/login overrides below) — there is nothing
+// demo-specific left in it to override.
+function renderTopBar(){
+  const bar = document.getElementById('appbar');
+  if(!bar) return;
   const loggedIn = !!S.session;
   bar.innerHTML = `
-    <div class="brand"><span class="mark">ن</span> ALNADL <span style="color:var(--ink-400);font-weight:600;font-size:11px;">Hospitality OS · live API</span></div>
+    <div class="brand"><span class="mark">ن</span> ALNADL</div>
     <div class="spacer"></div>
     ${loggedIn ? `
       <div class="sessionpill">${S.session.user.username} <span class="rl">· ${S.session.user.role}</span></div>
@@ -630,7 +632,7 @@ function renderProtobar(){
 }
 
 function render(){
-  renderProtobar();
+  renderTopBar();
   const app = document.getElementById('app');
   if(S.screen==='login'){ app.innerHTML = renderLogin(); return; }
   if(S.session){ app.innerHTML = renderStaffShell(); return; }
@@ -638,34 +640,24 @@ function render(){
 }
 
 function renderLogin(){
-  // UX-0 (spec §29, §17 Definition of Done #1): production must never
-  // present a one-tap list of real account usernames — that is a demo-only
-  // convenience. A real credential form is the ONLY thing production shows.
-  if(S.production !== false){
-    return `<div class="loginwrap"><div class="loginbox">
-      <h2>${t('login')}</h2>
-      ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
-      <div class="loginform">
-        <div class="formfield"><label>${S.lang==='ar'?'اسم المستخدم':'Username'}</label><input id="loginUsername" type="text" autocomplete="username"></div>
-        <div class="formfield"><label>${S.lang==='ar'?'كلمة المرور':'Password'}</label><input id="loginPassword" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')App.login()"></div>
-        <button class="btn-primary" style="margin-top:4px" onclick="App.login()">${t('login')}</button>
-      </div>
-      <button class="ghostbtn" style="margin-top:10px;width:100%" onclick="S.screen='welcome';render()">← ${t('role_customer')}</button>
-    </div></div>`;
+  // UX-0 corrective round: the demo one-tap account chooser is no longer
+  // physically present in this file at all — it lives entirely in
+  // dev-tools.js, which the server never delivers in production (see
+  // GET /dev-tools.js gating in server.js). window.AlnadlDevTools is
+  // undefined whenever that file was not served, which is the ONLY
+  // signal checked here — not a value this file could compute or fake
+  // on its own.
+  if(window.AlnadlDevTools && window.AlnadlDevTools.renderDemoLogin){
+    return window.AlnadlDevTools.renderDemoLogin();
   }
-  const users = [
-    ['operator','Operator','KDS · accept/prepare/ready orders'],
-    ['runner','Runner','Deliver Ready orders'],
-    ['manager','SiteManager','Site oversight, can also work the KDS'],
-    ['partner','PartnerViewer','Revenue & settlement for their own site only'],
-    ['partneradmin','PartnerAdmin','Self-service: manage own zones/QR/catalog + billing'],
-    ['finance','AlnadlFinance','Settlement approval + audit log'],
-    ['admin','SuperAdmin','Full platform: tenants, plans, zones, catalog, audit'],
-  ];
   return `<div class="loginwrap"><div class="loginbox">
-    <h2>${t('login')}</h2><p>${t('chooseUser')} · ${t('resetHint')}</p>
+    <h2>${t('login')}</h2>
     ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
-    ${users.map(([u,r,desc])=>`<div class="userchip" onclick="App.quickLogin('${u}')"><div><b>${u}</b><br><span>${desc}</span></div><span>${r}</span></div>`).join('')}
+    <div class="loginform">
+      <div class="formfield"><label>${S.lang==='ar'?'اسم المستخدم':'Username'}</label><input id="loginUsername" type="text" autocomplete="username"></div>
+      <div class="formfield"><label>${S.lang==='ar'?'كلمة المرور':'Password'}</label><input id="loginPassword" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')App.login()"></div>
+      <button class="btn-primary" style="margin-top:4px" onclick="App.login()">${t('login')}</button>
+    </div>
     <button class="ghostbtn" style="margin-top:10px;width:100%" onclick="S.screen='welcome';render()">← ${t('role_customer')}</button>
   </div></div>`;
 }
@@ -688,7 +680,7 @@ function renderCustomerShell(){
   }
   // White Label (§11): the primary color override is scoped to the .phone
   // element ONLY via an inline CSS custom property — it never touches the
-  // admin/staff chrome (protobar), and an Outlet's own branding_json
+  // admin/staff top bar (renderTopBar), and an Outlet's own branding_json
   // (Increment 1) is completely independent of this and never overridden.
   const branding = S.qrContext.branding;
   const themeStyle = (branding && branding.mode !== 'alnadl' && branding.primary_color)
@@ -697,36 +689,22 @@ function renderCustomerShell(){
 }
 
 function renderQrPicker(){
-  // UX-0 (spec §29, §5 G01): production has no legitimate way to reach this
-  // screen without a real scanned-QR token in the URL — a real deployment
-  // never lists points publicly. Showing the demo picker in production
-  // would be exactly the "prototype control mixed into the production
-  // shell" the spec's source audit (§20) flags. S.production is
-  // server-asserted (see init()) and defaults to the safe/production
-  // branch (true or not-yet-determined) rather than the demo one.
-  if(S.production !== false){
-    return `<div class="fohshell"><div class="phone"><div class="statepanel qr-invalid" style="flex:1;display:flex;flex-direction:column;justify-content:center">
-      <div class="glyph">⚠</div>
-      <h4>${S.lang==='ar'?'رمز QR غير صالح أو مفقود':'Invalid or missing QR code'}</h4>
-      <p>${S.lang==='ar'?'يرجى مسح رمز QR الموجود على الطاولة أو النقطة لبدء الطلب.':'Please scan the QR code at your table or point to start an order.'}</p>
-    </div></div></div>`;
+  // UX-0 corrective round: the simulated-QR-scan point picker and the
+  // network call that backs it are no longer physically present in this
+  // file at all — that code lives entirely in the developer-tools file.
+  // A production deployment's app.js literally cannot make that network
+  // call, because the code that would make it does not exist in the
+  // file the server sends. This is the same window.AlnadlDevTools
+  // presence check as renderLogin() above.
+  if(window.AlnadlDevTools && window.AlnadlDevTools.renderDemoQrPicker){
+    return window.AlnadlDevTools.renderDemoQrPicker();
   }
-  if(!S._demoPoints){ App._loadDemoPoints(); }
-  const list = S._demoPoints;
-  return `<div class="fohshell"><div class="phone"><div class="welcome">
-    <div class="crest">ن</div>
-    <h2 style="margin:0">${t('scanQr')}</h2>
-    <div class="qrpicklist">
-      ${list===undefined ? `
-        <div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>
-      ` : (list.length? list.map(p=>`<button class="qrpickitem" onclick="App.pickPoint('${p.token}')">${p.label}<span>${S.lang==='ar'?p.zone_ar:p.zone_en} · ${p.id}</span></button>`).join('')
-        : `<div class="statepanel"><div class="glyph">—</div><p>${S.lang==='ar'?'لا توجد نقاط تجريبية متاحة':'No demo points available'}</p></div>`)}
-    </div>
+  return `<div class="fohshell"><div class="phone"><div class="statepanel qr-invalid" style="flex:1;display:flex;flex-direction:column;justify-content:center">
+    <div class="glyph">⚠</div>
+    <h4>${S.lang==='ar'?'رمز QR غير صالح أو مفقود':'Invalid or missing QR code'}</h4>
+    <p>${S.lang==='ar'?'يرجى مسح رمز QR الموجود على الطاولة أو النقطة لبدء الطلب.':'Please scan the QR code at your table or point to start an order.'}</p>
   </div></div></div>`;
 }
-App._loadDemoPoints = async function(){
-  try{ S._demoPoints = await api('GET','/api/demo/points'); render(); }catch(e){ S._demoPoints = []; render(); }
-};
 
 function scrHub(){
   // Service Hub (Phase 4 §7) — shown ONLY when the property genuinely has
@@ -1542,14 +1520,18 @@ function renderUsers(){
 }
 
 /* ---------------- boot ---------------- */
-(async function init(){
+// UX-0 corrective round: this is now App.boot(), an exposed function
+// rather than an auto-running IIFE, so index.html can trigger it AFTER
+// both app.js and dev-tools.js (if the server delivered it) have fully
+// loaded and executed — script tags run in document order, so by the
+// time the inline trigger below calls App.boot(), window.AlnadlDevTools
+// is already correctly populated (dev/staging) or correctly absent
+// (production), and every render() call from this point on sees the
+// right answer with no race, no flash of the wrong state, and no
+// separate network round-trip needed to ask the server "which mode am I
+// in" — the mode IS whether dev-tools.js physically arrived.
+App.boot = async function(){
   document.documentElement.dir='rtl';
-  // UX-0 (spec §3.3, P0): the client's ONLY source of truth for whether it
-  // is running in production is this server-asserted flag — never a
-  // hardcoded client constant, which could be left wrong by a copy-paste
-  // deploy. Fetched before the first render so renderQrPicker()/renderLogin()
-  // never flash the demo affordances even for one frame in production.
-  try{ const env = await api('GET','/api/env'); S.production = !!env.production; }catch(e){ S.production = true; /* fail CLOSED: if we cannot confirm the environment, behave as production and never risk showing demo affordances on a real deployment */ }
   const params = new URLSearchParams(location.search);
   const tkn = params.get('t');
   if(tkn){ await App.loadQrContext(tkn); } else { render(); }
@@ -1558,4 +1540,4 @@ function renderUsers(){
     if(S.session && S.screen==='runnerq') App.loadRunnerQueue();
     if(!S.session && S.screen==='tracking') App.refreshOrder();
   }, 3000);
-})();
+};

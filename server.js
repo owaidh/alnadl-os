@@ -1597,11 +1597,36 @@ on('POST', '/api/admin/products/:id/addons', ['SuperAdmin', 'PartnerAdmin'], asy
 
 /* ------------------------------- static files --------------------------------- */
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
+// UX-0 corrective round: genuine production/demo separation at the
+// static-serving level, not just runtime branching in app.js.
+//
+// GET /dev-tools.js: in production this is a real 404, the exact same
+// "route/resource does not exist" pattern already proven for
+// /api/demo/points -- the demo login chooser and QR-point picker code
+// (public/dev-tools.js) never reaches a production client's browser at
+// all, not merely hidden by a client-side check the file's own code
+// could still contain.
+//
+// index.html: the <!--DEV-ONLY-->...<!--/DEV-ONLY--> block (currently
+// just the <script src="/dev-tools.js"> tag) is stripped out of the
+// response entirely in production, via a plain string search -- so a
+// production deployment's HTML does not even reference a URL that would
+// 404. This is the one piece of server-side "templating" in this
+// no-build-step architecture, deliberately minimal (a single marked
+// block, not a general template engine) because it is the one thing
+// that must differ between the two HTML responses.
+const DEV_ONLY_BLOCK = /<!--DEV-ONLY-->[\s\S]*?<!--\/DEV-ONLY-->\n?/;
 function serveStatic(req, res, pathname) {
+  if (pathname === '/dev-tools.js' && process.env.NODE_ENV === 'production') {
+    res.writeHead(404); return res.end('Not found');
+  }
   let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
+    if (filePath === path.join(PUBLIC_DIR, 'index.html') && process.env.NODE_ENV === 'production') {
+      data = Buffer.from(data.toString('utf8').replace(DEV_ONLY_BLOCK, ''), 'utf8');
+    }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
     res.end(data);
   });

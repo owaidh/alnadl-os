@@ -21,3 +21,22 @@ for the full delivery record these support.
 | 13_prod_real_login_form.png | Production mode — real username/password form, no demo chips |
 | 14_prod_login_success.png | Production mode — real bootstrap credentials authenticated successfully |
 | 15_skeleton_loading_state.png | Skeleton loading component, captured mid-load via deliberate API delay |
+
+## Corrective round: physical demo/production separation
+
+Screenshots 12-14 above prove RUNTIME behavior was correct. The
+screenshots below prove the fix goes further — the demo code is
+physically absent from the production bundle, not just branched around
+at runtime. See `docs/UX_UI_SPEC.md` → "UX-0 Corrective Round" for the
+full record.
+
+| File | What it shows |
+|---|---|
+| 16_corrective_prod_invalid_qr.png | Production, no token: genuine invalid-QR state, demo qrpicklist absent from DOM |
+| 17_corrective_prod_login_form.png | Production: real credential form, 0 demo userchips in DOM |
+| 18_corrective_prod_admin_logged_in.png | Production: real bootstrap credentials authenticated via the real form |
+| 19_corrective_prod_real_qr_welcome.png | Production, REAL `?t=` token (DB-fixture tenant, not demo data): welcome screen |
+| 20_corrective_prod_real_qr_menu.png | Production: a real product ("Americano", 16 SAR) rendered from a real catalog row |
+| 21_corrective_prod_real_qr_modal.png | Production: product modal, monogram, 44px steppers — all correct on a genuine order |
+| 22_corrective_dev_qr_picker.png | Dev mode: demo QR picker still works, unchanged |
+| 23_corrective_dev_login_chips.png | Dev mode: demo login chips still work, unchanged |
