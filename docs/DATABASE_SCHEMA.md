@@ -1,4 +1,4 @@
-> **Version:** v2.0.10-p5-inc4 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.10-p5-inc4
+> **Version:** v2.0.11-p5-inc4-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 (pseudonymized identity + strict validation) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.11-p5-inc4-corrective
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,9 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### تصحيح: تطبيع الهاتف + Pseudonymization عبر HMAC (بلا Migration جديدة — منطق فقط)
+`customer_engage_profile.identity_ref` **لم يعد يُخزِّن رقم الهاتف الخام أبدًا** — `lib/engage-novelty.js` يُطبِّع الصيغ الشائعة أولًا (`normalizePhone`) ثم يُحوِّلها لـ HMAC-SHA256(المفتاح=`SESSION_SECRET`، المُدخَل=`partnerId:normalizedPhone`) عبر `pseudonymizeIdentity`. نفس الرقم بأي صيغة سعودية شائعة يُطبَّع لنفس القيمة، ومعرّف الشريك جزء من HMAC نفسه (عزل مزدوج: بعمود `partner_id` وبالمُدخَل المُشفَّر معًا).
 
 ### جداول الذاكرة ومنع التكرار — Phase 5 P5-Inc-4 (`migrations/009_engage_inc4.js`)
 - **`customer_engage_profile`** — `UNIQUE(partner_id, identity_ref)`؛ هذا القيد نفسه هو ما يضمن عزل الذاكرة بين الشركاء هيكليًا: نفس رقم الهاتف لدى شريكين مختلفين ينتج صفَّين منفصلين تمامًا، لا صفًا واحدًا مشتركًا. `is_anonymous=1` للعملاء المجهولين — كل Pass مجهول (بلا `identity_ref`) يحصل على ملف جديد خاص به فقط (لا تتبّع دائم عبر زيارات مجهولة متعددة، قرار خصوصية متعمَّد)

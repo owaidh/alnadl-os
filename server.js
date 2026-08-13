@@ -458,9 +458,20 @@ on('POST', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'],
   if (b.policyKey !== undefined) {
     // Inc-4: configurable Novelty window/threshold, same override table,
     // same tenant-isolation check above, different (non-personality-scoped) key.
-    const { setNoveltyPolicyOverride } = require('./lib/engage-novelty.js');
+    // Corrective round: out-of-range values are REJECTED with a clear 400,
+    // never silently accepted and clamped later at read-time -- the
+    // read-time clamp in resolveNoveltyPolicy() remains as defense-in-depth
+    // for any value that reaches the table by another path, but the write
+    // path itself must refuse bad input outright.
+    const { setNoveltyPolicyOverride, MIN_WINDOW_DAYS, MAX_WINDOW_DAYS, MIN_THRESHOLD, MAX_THRESHOLD } = require('./lib/engage-novelty.js');
     if (!['novelty_window_days', 'novelty_threshold'].includes(b.policyKey)) return sendJSON(res, 400, { error: 'policyKey must be novelty_window_days or novelty_threshold' });
-    if (typeof b.value !== 'number') return sendJSON(res, 400, { error: 'value must be a number' });
+    if (typeof b.value !== 'number' || Number.isNaN(b.value)) return sendJSON(res, 400, { error: 'value must be a number' });
+    if (b.policyKey === 'novelty_threshold' && (b.value < MIN_THRESHOLD || b.value > MAX_THRESHOLD)) {
+      return sendJSON(res, 400, { error: `novelty_threshold must be between ${MIN_THRESHOLD} and ${MAX_THRESHOLD} inclusive` });
+    }
+    if (b.policyKey === 'novelty_window_days' && (b.value < MIN_WINDOW_DAYS || b.value > MAX_WINDOW_DAYS || !Number.isInteger(b.value))) {
+      return sendJSON(res, 400, { error: `novelty_window_days must be a whole number between ${MIN_WINDOW_DAYS} and ${MAX_WINDOW_DAYS} inclusive` });
+    }
     try {
       setNoveltyPolicyOverride(b.scopeType, b.scopeId, b.policyKey, b.value, session.username);
     } catch (e) { return sendJSON(res, 400, { error: e.message }); }

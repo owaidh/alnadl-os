@@ -1,4 +1,4 @@
-> **Version:** v2.0.10-p5-inc4 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.10-p5-inc4
+> **Version:** v2.0.11-p5-inc4-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.11-p5-inc4-corrective
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -383,7 +383,7 @@ Authorization: Bearer <token>
 // Novelty (Inc-4، جديد) — نفس آلية الأولوية الهرمية بالضبط:
 { "scopeType": "partner", "scopeId": "pt_nova", "policyKey": "novelty_threshold", "value": 0.3 }
 ```
-`policyKey` المسموحة: `novelty_window_days` (نافذة الذاكرة بالأيام)، `novelty_threshold` (عتبة تشابه Jaccard، 0-1).
+`policyKey` المسموحة: `novelty_window_days` (نافذة الذاكرة بالأيام، **عدد صحيح بين 1 و90 شاملة**)، `novelty_threshold` (عتبة تشابه Jaccard، **بين 0 و1 شاملة**). **`HTTP 400` صريح لأي قيمة خارج هذه الحدود** — لا تُقبَل ثم تُقلَّم بصمت لاحقًا.
 
 ### `GET /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
 نفس الحماية؛ `PartnerAdmin` يرى فقط ما يخص شركته.

@@ -1,4 +1,4 @@
-> **Version:** v2.0.10-p5-inc4 · **Status:** P5-Inc-4 DELIVERED (Customer/Anonymous Memory + Exposure Memory + Text Similarity Novelty), awaiting review before P5-Inc-5 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.10-p5-inc4`
+> **Version:** v2.0.11-p5-inc4-corrective · **Status:** P5-Inc-4 CORRECTIVE ROUND DELIVERED (phone normalization + HMAC pseudonymization + strict Novelty policy validation), awaiting review before P5-Inc-5 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.11-p5-inc4-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,42 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-4 — الجولة التصحيحية (Pseudonymization + Policy Validation)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-5.**
+
+### النقطة 1 — تطبيع الهوية وإخفاؤها (Pseudonymization)
+
+**قبل هذه الجولة**: `identity_ref` كان يُخزِّن رقم الهاتف الخام مباشرة — نفس الرقم بصيغتين مختلفتين (`0501234567` و`+966501234567`) كان يُنتج ملفَّي Engage منفصلَين خطأً، **ورقم الهاتف الحقيقي كان مُخزَّنًا كنص صريح** في جدول ذاكرة Engage.
+
+**الإصلاح**:
+1. **تطبيع** (`normalizePhone`) يُحوِّل كل الصيغ السعودية الشائعة (محلي `0501234567`، دولي بعلامة `+966501234567`، دولي بصفرين `00966501234567`، مع مسافات أو شرطات) إلى نفس الصيغة القانونية الواحدة
+2. **إخفاء الهوية عبر HMAC-SHA256** (`pseudonymizeIdentity`) — رقم الهاتف الخام **لا يُخزَّن أبدًا** في `customer_engage_profile.identity_ref` بعد الآن، فقط ناتج HMAC (لا رجعة عنه عمليًا). **معرّف الشريك جزء من مُدخَل HMAC نفسه** — وليس فقط عمود منفصل — فتجاوز عزل الشريك يتطلب كسر HMAC نفسه، وليس مجرد قراءة عمود
+3. المفتاح المُستخدَم: نفس `SESSION_SECRET` المُلزَم فعليًا في الإنتاج (Q06) — لا بنية سرية جديدة
+
+**دليل مباشر**: الصيغتان بالضبط اللتان اختبرهما المراجع (`0501234567` و`+966501234567`) تُطبَّعان لنفس القيمة، ونفس الملف يُنشأ لكلتيهما. فحص شامل على الجدول يُثبت غياب أي رقم هاتف خام في أي `identity_ref` مُخزَّن.
+
+### النقطة 2 — رفض القيم غير الصالحة، لا تقليمها بصمت (Novelty Policy Validation)
+
+**قبل هذه الجولة**: `POST /api/admin/engage/policy-overrides` كان يقبل أي رقم لـ`novelty_threshold`/`novelty_window_days` بلا تحقق من الحدود — القيم غير المنطقية (مثل عتبة `1.5` أو نافذة `-5` يومًا) كانت تُقبَل وتُخزَّن، ولا تُصحَّح إلا لاحقًا عند القراءة (Clamp صامت في `resolveNoveltyPolicy`).
+
+**الإصلاح**: رفض صريح بـ`HTTP 400` عند الكتابة مباشرة — `novelty_threshold` خارج `[0,1]`، أو `novelty_window_days` خارج `[1,90]` أو غير عدد صحيح، تُرفَض جميعها **قبل** أي محاولة تخزين. تحقّق الاختبار المباشر أن القيم المرفوضة **لم تُكتَب فعليًا** في الجدول أصلًا، لا مجرد أن استجابة HTTP كانت 400.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| Normalize الهاتف قبل بناء الهوية | ✅ | الصيغتان المُختبَرتان تحديدًا في المراجعة تُطبَّعان لنفس القيمة |
+| عدم نسخ Raw Phone كهوية دائمة | ✅ | HMAC فقط يُخزَّن؛ فحص جدولي شامل يُثبت غياب أي رقم خام |
+| Stable tenant-scoped pseudonymous identifier | ✅ | HMAC(partnerId + phone) — معرّف الشريك داخل المُدخَل نفسه |
+| نفس الرقم بصيغ مختلفة → نفس الملف | ✅ | مُختبَر مباشرة بصيغتين مختلفتين لنفس رقم حقيقي |
+| Partner A/B لنفس الرقم → ملفان منفصلان | ✅ | مُعاد اختباره بعد التصحيح، لا يزال يعمل |
+| Anonymous behavior كما هو | ✅ | لم يُمَس — لا يزال بلا تتبّع دائم |
+| اختبارات normalization + tenant separation + عدم تسريب raw phone | ✅ | 10 اختبارات مخصصة جديدة |
+| رفض `threshold`/`window_days` خارج الحدود بـHTTP 400 | ✅ | 11 اختبار Boundary (0, 1, 1 يوم، 90 يومًا مقبولة؛ خارج الحدود مرفوضة) |
+| **ENG-NOV-001 يبقى Partial** | ✅ | لم يتغيّر — لا علاقة لهذا الإصلاح بالطريقة الدلالية |
+| 229/229 Baseline محفوظ | ✅ | **258/258 الآن** (229 + 29 اختبارًا جديدًا) |
 
 ## P5-Inc-4 — سجل التسليم الفعلي (Memory + Novelty + Duplicate Prevention)
 

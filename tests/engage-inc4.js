@@ -164,6 +164,74 @@ async function run() {
     assertEqual(semanticRows, 0, "ENG-NOV-001 REMAINS PARTIAL: zero novelty_evaluation rows anywhere in the database use method='semantic_embedding' -- text_similarity is the only method this increment ever produces, verified directly against the data, not just claimed in documentation");
 
     // ============================================================
+    // CORRECTIVE ROUND: Phone normalization + pseudonymization
+    // ============================================================
+    const { normalizePhone, pseudonymizeIdentity } = require('../lib/engage-novelty.js');
+
+    assertEqual(normalizePhone('0501234567'), normalizePhone('+966501234567'),
+      'NORMALIZATION: the exact two formats flagged in review (0501234567 vs +966501234567) normalize to the identical canonical value');
+    assertEqual(normalizePhone('00966501234567'), normalizePhone('966501234567'), 'NORMALIZATION: international-with-00-prefix and bare-966 formats also normalize identically');
+    assertEqual(normalizePhone('+966 50 123 4567'), normalizePhone('0501234567'), 'NORMALIZATION: stray spaces in the international format do not prevent matching the local format');
+    assertEqual(normalizePhone('050-123-4567'), normalizePhone('0501234567'), 'NORMALIZATION: stray dashes are handled the same way');
+
+    const passFmtA = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: null, pointId: 'PT-014', orderId: nextOrderId(), customerPhone: '0566677788' });
+    const passFmtB = makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: null, pointId: 'PT-014', orderId: nextOrderId(), customerPhone: '+966566677788' });
+    const profileFmtA = getOrCreateProfile('pt_nova', '0566677788', passFmtA.passId);
+    const profileFmtB = getOrCreateProfile('pt_nova', '+966566677788', passFmtB.passId);
+    assertEqual(profileFmtA.id, profileFmtB.id, 'IDENTITY RESOLUTION: local format (0566677788) and international format (+966566677788) for the SAME real number resolve to the SAME Engage profile');
+
+    const profileFmtA_partnerB = getOrCreateProfile('pt_alrowad', '0566677788', 'pass-fmt-tenant-b');
+    assert(profileFmtA.id !== profileFmtA_partnerB.id, 'TENANT SEPARATION (post-fix): the identical phone number still resolves to DIFFERENT profiles across two different partners, even with pseudonymization applied');
+
+    assert(!profileFmtA.identity_ref.includes('566677788'), 'NO RAW PHONE LEAKAGE: the persisted customer_engage_profile.identity_ref does not contain the raw phone digits');
+    // Precise check: scan every identity_ref in the table for the LITERAL
+    // digit sequences of every real phone number used anywhere in this test
+    // file. (A generic "7+ consecutive digits" heuristic was tried first and
+    // produced false positives -- a 64-character hex HMAC digest very often
+    // contains an incidental run of 7+ digits by pure chance, since roughly
+    // 10 of its 16 possible characters are digits. That is not a leak; this
+    // check looks for the ACTUAL known raw values instead of a probabilistic
+    // pattern, which is the correct way to prove this property.)
+    const knownRawPhoneDigits = ['501234567', '566677788', '500000099', '511111111', '522222222', '533333333', '544444444', '555555555'];
+    const allProfileRefs = db.prepare('SELECT identity_ref FROM customer_engage_profile').all().map(r => r.identity_ref);
+    for (const digits of knownRawPhoneDigits) {
+      assert(!allProfileRefs.some(ref => ref.includes(digits)), `NO RAW PHONE LEAKAGE (table-wide): the literal digit sequence "${digits}" does not appear in any stored identity_ref`);
+    }
+
+    const pseudoCheck1 = pseudonymizeIdentity('pt_nova', normalizePhone('0501234567'));
+    const pseudoCheck2 = pseudonymizeIdentity('pt_alrowad', normalizePhone('0501234567'));
+    assert(pseudoCheck1 !== pseudoCheck2, 'HMAC PROOF: pseudonymizeIdentity() produces genuinely different output for the same phone under two different partner ids');
+    assert(!pseudoCheck1.includes('501234567'), 'HMAC PROOF: the pseudonymized output contains no trace of the original phone digits');
+
+    // ============================================================
+    // CORRECTIVE ROUND: Novelty Policy Value Validation — strict rejection, no silent clamping
+    // ============================================================
+    const thresholdCases = [
+      { value: -0.1, expectOk: false }, { value: 0, expectOk: true },
+      { value: 0.5, expectOk: true }, { value: 1, expectOk: true }, { value: 1.1, expectOk: false },
+    ];
+    for (const c of thresholdCases) {
+      const r = await api('POST', '/api/admin/engage/policy-overrides', { scopeType: 'partner', scopeId: 'pt_nova', policyKey: 'novelty_threshold', value: c.value }, adminToken);
+      if (c.expectOk) assertEqual(r.status, 201, `THRESHOLD BOUNDARY: ${c.value} is accepted (within [0,1])`);
+      else assertEqual(r.status, 400, `THRESHOLD BOUNDARY: ${c.value} is REJECTED with 400, not silently clamped`);
+    }
+
+    const windowCases = [
+      { value: 0, expectOk: false }, { value: 1, expectOk: true },
+      { value: 45, expectOk: true }, { value: 90, expectOk: true }, { value: 91, expectOk: false },
+      { value: 3.5, expectOk: false },
+    ];
+    for (const c of windowCases) {
+      const r = await api('POST', '/api/admin/engage/policy-overrides', { scopeType: 'partner', scopeId: 'pt_nova', policyKey: 'novelty_window_days', value: c.value }, adminToken);
+      if (c.expectOk) assertEqual(r.status, 201, `WINDOW BOUNDARY: ${c.value} is accepted (within [1,90])`);
+      else assertEqual(r.status, 400, `WINDOW BOUNDARY: ${c.value} is REJECTED with 400, not silently clamped`);
+    }
+
+    const overridesAfterRejections = db.prepare(`SELECT * FROM venue_policy_override WHERE scope_id = 'pt_nova' AND policy_key = 'novelty_threshold'`).all();
+    assert(!overridesAfterRejections.some(o => { const v = JSON.parse(o.policy_value_json).value; return v < 0 || v > 1; }),
+      'NO SILENT PERSISTENCE: no out-of-range novelty_threshold value was ever actually written to venue_policy_override, despite multiple rejected attempts');
+
+    // ============================================================
     // Regression: Core isolation + prior increments still hold
     // ============================================================
     const isoOrder = await api('POST', '/api/orders', { pointId: 'PT-014', items: [{ productId: 'p_latte', qty: 1 }] });
