@@ -1,4 +1,4 @@
-> **Version:** v2.0.9-p5-inc3-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 (SQL-scoped) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.9-p5-inc3-corrective
+> **Version:** v2.0.10-p5-inc4 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.10-p5-inc4
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,13 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### جداول الذاكرة ومنع التكرار — Phase 5 P5-Inc-4 (`migrations/009_engage_inc4.js`)
+- **`customer_engage_profile`** — `UNIQUE(partner_id, identity_ref)`؛ هذا القيد نفسه هو ما يضمن عزل الذاكرة بين الشركاء هيكليًا: نفس رقم الهاتف لدى شريكين مختلفين ينتج صفَّين منفصلين تمامًا، لا صفًا واحدًا مشتركًا. `is_anonymous=1` للعملاء المجهولين — كل Pass مجهول (بلا `identity_ref`) يحصل على ملف جديد خاص به فقط (لا تتبّع دائم عبر زيارات مجهولة متعددة، قرار خصوصية متعمَّد)
+- **`exposure_memory`** — `content_hash` (تطابق حرفي فوري) + `token_set_json` (قائمة الكلمات المُجزَّأة، تُمكِّن حساب Jaccard حقيقي على التكرار شبه الحرفي، وليس تطابقًا حرفيًا فقط)
+- **`novelty_evaluation`** — `method` مُقيَّد بـ`text_similarity`/`semantic_embedding`؛ **الإصدار الحالي لا يُنتج `semantic_embedding` في أي مسار كود إطلاقًا** — يبقى محجوزًا لـInc-7. `ENG-NOV-001` يبقى **Partial** وليس Done.
+
+**إعادة استخدام `venue_policy_override`**: نافذة الذاكرة (`novelty_window_days`) وعتبة التشابه (`novelty_threshold`) قابلتان للتهيئة عبر **نفس** جدول وسلسلة أولوية Ceiling المُثبَتة في Inc-2 (Zone→Property→Contract→Default)، بمفاتيح `policy_key` مختلفة فقط — لا بنية جديدة.
 
 ### تصحيح: Tenant Scoping عند مستوى SQL (لا فلترة JavaScript لاحقة)
 `lib/engage-ledger.js` — كلٌ من `getPartnerOverview()` و`getFullLedger({partnerId})` يُصفِّيان الآن عبر `WHERE json_extract(context_snapshot_json, '$.partnerId') = ?` (معامل مُربَوط) داخل الاستعلام نفسه — وليس جلب كل الصفوف ثم `.filter()` في Node. مُختبَر بزرع بيانات شريكين وتحقُّق عدد دقيق لكل واحد + فحص مباشر على نص الكود يُثبت غياب أي فلترة لاحقة متبقية.

@@ -1,4 +1,4 @@
-> **Version:** v2.0.9-p5-inc3-corrective · **Status:** P5-Inc-3 CORRECTIVE ROUND DELIVERED (SQL-level tenant scoping, replacing post-query JS filtering), awaiting review before P5-Inc-4 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.9-p5-inc3-corrective`
+> **Version:** v2.0.10-p5-inc4 · **Status:** P5-Inc-4 DELIVERED (Customer/Anonymous Memory + Exposure Memory + Text Similarity Novelty), awaiting review before P5-Inc-5 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.10-p5-inc4`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,43 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-4 — سجل التسليم الفعلي (Memory + Novelty + Duplicate Prevention)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-5.**
+
+### القرارات التصميمية الجوهرية
+
+**1) الهوية المجهولة — بلا تتبّع دائم مُختلَق**: Pass بلا `identity_ref` (لا هاتف عميل مُسجَّل) يحصل على ملف Engage جديد ومُنفصل **لكل Pass** — وليس هوية مجهولة "ثابتة" تُتتبَّع عبر زيارات متعددة. هذا قرار خصوصية متعمَّد: لا توجد وسيلة موثوقة لربط زيارتين مجهولتين دون انتهاك خصوصية فعلي، فلم نُحاول ذلك. **مُختبَر مباشرة**: Passان مجهولان مختلفان → ملفان مختلفان تمامًا.
+
+**2) عزل الذاكرة بين الشركاء — هيكلي عبر قيد قاعدة بيانات**: `UNIQUE(partner_id, identity_ref)` على `customer_engage_profile` — نفس رقم الهاتف لدى شريكين مختلفين ينتج صفَّين منفصلين تمامًا. **مُختبَر مباشرة**: نفس الهاتف بالضبط لدى `pt_nova` و`pt_alrowad` → ملفان مختلفان لا يتشاركان أي ذاكرة.
+
+**3) منع التكرار الحرفي/النصي — حقيقي، ليس Placeholder**: `content_hash` (تطابق حرفي فوري) + `token_set_json` يُمكِّن حساب **Jaccard حقيقي** (تقاطع/اتحاد مجموعات الكلمات) على التكرار شبه الحرفي — تحققت من الرياضيات مباشرة قبل الدمج (نص متطابق=1، نص مختلف تمامًا=0، تداخل جزئي=0.5 بالضبط).
+
+**4) نافذة الذاكرة والعتبة قابلتان للتهيئة — بإعادة استخدام بنية مُثبَتة، لا بناء جديد**: نفس جدول وسلسلة أولوية `venue_policy_override` من Inc-2 (Zone→Property→Contract→Default)، بمفاتيح `novelty_window_days`/`novelty_threshold` فقط. **مُختبَر**: خفض العتبة فعليًا عبر الـAPI، ثم التحقق أن القيمة الجديدة تُطبَّق فعليًا عند حساب التكرار (وليس مقبولة ومُتجاهَلة).
+
+**5) استنفاد المجموعة — صادق، لا إخفاء**: عند استنفاد كل محتوى المجموعة الثابتة الصغيرة ضمن النافذة الزمنية، التجربة **لا تُحجَب أبدًا** (يُقدَّم أفضل خيار متاح)، لكن `is_duplicate=1` يُسجَّل بصدق تام — لا يُخفى القيد أبدًا خلف تصنيف كاذب.
+
+### ENG-NOV-001 — يبقى Partial، مُثبَت بالبيانات لا بالتوثيق فقط
+
+استعلام مباشر على قاعدة البيانات الفعلية بعد كل الاختبارات: **صفر صفوف** بـ`method='semantic_embedding'` في أي مكان — `text_similarity` هو الطريقة الوحيدة المُنتَجة فعليًا. هذا يُثبَت من البيانات نفسها، وليس ادّعاءً في وثيقة منفصلة يمكن أن تنحرف عن الواقع.
+
+### شروط القبول — كل بند، بدليله الفعلي
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| `customer_engage_profile` | ✅ | مُنشأة، مُختبَرة (معروف يُعيد نفس الملف، مجهول يُنشئ ملفًا جديدًا كل مرة) |
+| Anonymous/pseudonymous handling | ✅ | لا تتبّع دائم للمجهول — قرار موثَّق ومُختبَر |
+| `exposure_memory` | ✅ | `content_hash` + `token_set_json` لحساب Jaccard حقيقي |
+| `novelty_evaluation` | ✅ | `method` مُقيَّد، صفر `semantic_embedding` مُتحقَّق من البيانات |
+| منع التكرار الحرفي/النصي فعليًا | ✅ | عميل معروف بطلبين منفصلين لا يتلقى نفس المحتوى الحرفي مرتين متتاليتين مع توفر بدائل |
+| Configurable threshold | ✅ | مُختبَر: خفض العتبة عبر API، والتحقق أنها تُطبَّق فعليًا |
+| Memory window واضحة | ✅ | مُختبَر: تعرّض خارج النافذة الزمنية لا يُحتسَب تكرارًا |
+| عدم إنشاء Customer Master تلقائيًا للمجهول | ✅ | مُختبَر مباشرة: `loyalty_accounts` لا يتغيّر عدد صفوفه عند إنشاء ملف Engage مجهول |
+| Tenant/Privacy isolation | ✅ | `UNIQUE(partner_id, identity_ref)` — نفس الهاتف لدى شريكين → ملفان منفصلان تمامًا |
+| Negative/Boundary tests | ✅ | استنفاد المجموعة، Override بلا تفويض، Override عبر شريك آخر، مفتاح Policy غير صالح |
+| **ENG-NOV-001 يبقى Partial** | ✅ | مُثبَت من البيانات: صفر `semantic_embedding` في أي صف |
+| 200/200 Baseline محفوظ | ✅ | **229/229 الآن** (200 + 29 اختبارًا جديدًا لـInc-4) |
 
 ## P5-Inc-3 — الجولة التصحيحية (SQL-Level Tenant Scoping)
 

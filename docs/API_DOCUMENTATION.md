@@ -1,4 +1,4 @@
-> **Version:** v2.0.9-p5-inc3-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.9-p5-inc3-corrective
+> **Version:** v2.0.10-p5-inc4 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.10-p5-inc4
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -375,11 +375,15 @@ Authorization: Bearer <token>
 ### `GET /api/engage/pass/:accessToken`
 مُحدَّث ليُعنوِن بالرمز أيضًا (كان بالمعرِّف الداخلي في الإصدار الأول) — نفس مبدأ الأمان المُوحَّد عبر كل نقاط Engage.
 
-### `POST /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
-`SuperAdmin` أو `PartnerAdmin` فقط. `PartnerAdmin` يُمنَع صراحة من أي Override يخص شريكًا آخر على أي من المستويات الثلاثة (partner/property/zone).
+### `POST /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق (مُوسَّع في Inc-4)
+`SuperAdmin` أو `PartnerAdmin` فقط. `PartnerAdmin` يُمنَع صراحة من أي Override يخص شريكًا آخر على أي من المستويات الثلاثة (partner/property/zone). **شكلان مدعومان بنفس نقطة النهاية**:
 ```json
+// Engagement Ceiling (Inc-2):
 { "scopeType": "zone", "scopeId": "z_pool", "personality": "PLAY", "max": 2 }
+// Novelty (Inc-4، جديد) — نفس آلية الأولوية الهرمية بالضبط:
+{ "scopeType": "partner", "scopeId": "pt_nova", "policyKey": "novelty_threshold", "value": 0.3 }
 ```
+`policyKey` المسموحة: `novelty_window_days` (نافذة الذاكرة بالأيام)، `novelty_threshold` (عتبة تشابه Jaccard، 0-1).
 
 ### `GET /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
 نفس الحماية؛ `PartnerAdmin` يرى فقط ما يخص شركته.

@@ -433,22 +433,42 @@ on('GET', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'], 
 });
 on('POST', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
-  const { PERSONALITIES, setPolicyOverride } = require('./lib/engage-personality.js');
   if (!['partner', 'property', 'zone'].includes(b.scopeType)) return sendJSON(res, 400, { error: 'scopeType must be partner, property, or zone' });
-  if (!PERSONALITIES.includes(b.personality)) return sendJSON(res, 400, { error: `personality must be one of ${PERSONALITIES.join(', ')}` });
-  if (typeof b.max !== 'number' || b.max < 0) return sendJSON(res, 400, { error: 'max must be a non-negative number' });
 
   // Tenant isolation: a PartnerAdmin can only ever write a policy that
-  // resolves back to their own partner_id, at any scope level.
+  // resolves back to their own partner_id, at any scope level. Checked
+  // once, before either branch below, so neither can bypass it.
   if (session.role === 'PartnerAdmin') {
     const ownerPartnerId = b.scopeType === 'partner' ? b.scopeId
       : b.scopeType === 'property' ? propertyPartnerId(b.scopeId)
       : zonePartnerId(b.scopeId);
     assertTenantWrite(session, ownerPartnerId);
   }
-  setPolicyOverride(b.scopeType, b.scopeId, b.personality, b.max, session.username);
-  audit(session.username, session.role, 'engage_policy_override_set', b.scopeId, null, { scopeType: b.scopeType, personality: b.personality, max: b.max }, null);
-  sendJSON(res, 201, { ok: true });
+
+  if (b.personality !== undefined) {
+    // Existing Engagement Ceiling override (Inc-2)
+    const { PERSONALITIES, setPolicyOverride } = require('./lib/engage-personality.js');
+    if (!PERSONALITIES.includes(b.personality)) return sendJSON(res, 400, { error: `personality must be one of ${PERSONALITIES.join(', ')}` });
+    if (typeof b.max !== 'number' || b.max < 0) return sendJSON(res, 400, { error: 'max must be a non-negative number' });
+    setPolicyOverride(b.scopeType, b.scopeId, b.personality, b.max, session.username);
+    audit(session.username, session.role, 'engage_policy_override_set', b.scopeId, null, { scopeType: b.scopeType, personality: b.personality, max: b.max }, null);
+    return sendJSON(res, 201, { ok: true });
+  }
+
+  if (b.policyKey !== undefined) {
+    // Inc-4: configurable Novelty window/threshold, same override table,
+    // same tenant-isolation check above, different (non-personality-scoped) key.
+    const { setNoveltyPolicyOverride } = require('./lib/engage-novelty.js');
+    if (!['novelty_window_days', 'novelty_threshold'].includes(b.policyKey)) return sendJSON(res, 400, { error: 'policyKey must be novelty_window_days or novelty_threshold' });
+    if (typeof b.value !== 'number') return sendJSON(res, 400, { error: 'value must be a number' });
+    try {
+      setNoveltyPolicyOverride(b.scopeType, b.scopeId, b.policyKey, b.value, session.username);
+    } catch (e) { return sendJSON(res, 400, { error: e.message }); }
+    audit(session.username, session.role, 'engage_policy_override_set', b.scopeId, null, { scopeType: b.scopeType, policyKey: b.policyKey, value: b.value }, null);
+    return sendJSON(res, 201, { ok: true });
+  }
+
+  return sendJSON(res, 400, { error: 'request must include either personality+max (Ceiling) or policyKey+value (Novelty)' });
 });
 
 /* Phase 5 P5-Inc-2 (corrective round): Session lifecycle + Moment serving.
