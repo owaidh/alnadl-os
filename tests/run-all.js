@@ -20,6 +20,7 @@ const suites = [
   './engage-inc6.js',
   './engage-inc7.js',
   './engage-inc8.js',
+  './partner-dashboard.js',
 ];
 
 (async () => {

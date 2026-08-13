@@ -1397,6 +1397,7 @@ function renderAudit(){
 function renderPartnerOverview(){
   const ov = S.partner.overview; if(!ov) return kpiDashboardSkeleton(4);
   const today = ov.today || {};
+  const allTime = ov.allTime || {};
   const perf = ov.performance || {};
   const moneyLayer = ov.money || {};
   const attention = ov.attention || [];
@@ -1411,7 +1412,9 @@ function renderPartnerOverview(){
   const attentionLabels = {
     sla_breach:      a => S.lang==='ar'? `${a.count} طلب تجاوز مهلة التجهيز الآن` : `${a.count} order(s) past their prep SLA right now`,
     disabled_points: a => S.lang==='ar'? `${a.count} نقطة معطّلة` : `${a.count} disabled point(s)`,
-    refunds_7d:      a => S.lang==='ar'? `${a.count} استرجاع خلال 7 أيام (${money2(a.amount)} ر.س)` : `${a.count} refund(s) in 7 days (${money2(a.amount)} SAR)`,
+    refunds_elevated: a => S.lang==='ar'
+      ? `نسبة الاسترجاع مرتفعة: ${a.ratePercent}% من مبيعات 7 أيام (الحد ${a.thresholdPercent}%) — ${a.count} عملية بقيمة ${money2(a.amount)} ر.س`
+      : `Elevated refund rate: ${a.ratePercent}% of 7-day sales (threshold ${a.thresholdPercent}%) — ${a.count} refund(s), ${money2(a.amount)} SAR`,
     low_rating:      a => S.lang==='ar'? `متوسط التقييم منخفض: ★ ${a.value}` : `Low average rating: ★ ${a.value}`,
     settlement_disputed: a => S.lang==='ar'? `${a.count} تسوية متنازع عليها` : `${a.count} disputed settlement(s)`,
   };
@@ -1421,8 +1424,8 @@ function renderPartnerOverview(){
   <div class="kpirow">
     <div class="kpi"><div class="lbl">${S.lang==='ar'?'مبيعات اليوم':'Sales today'}</div><div class="val">${money2(today.grossSales)}</div><div class="sub">SAR</div></div>
     <div class="kpi"><div class="lbl">${S.lang==='ar'?'طلبات اليوم':'Orders today'}</div><div class="val">${today.orders!=null?today.orders:'—'}</div></div>
-    <div class="kpi"><div class="lbl">${S.lang==='ar'?'الالتزام بالمهلة':'Service SLA'}</div><div class="val" style="color:${today.slaPercent==null?'inherit':today.slaPercent>=90?'var(--sage-500)':today.slaPercent>=75?'var(--amber-500)':'var(--red-500)'}">${dash(today.slaPercent,'%')}</div><div class="sub">${today.slaPercent==null?(S.lang==='ar'?'لا توجد بيانات تجهيز مسجّلة':'no recorded prep timings'):''}</div></div>
-    <div class="kpi"><div class="lbl">${S.lang==='ar'?'التقييم':'Rating'}</div><div class="val">${today.avgRating!=null?('★ '+today.avgRating):'—'}</div><div class="sub">${today.ratingCount?`${today.ratingCount} ${S.lang==='ar'?'تقييم':'ratings'}`:(S.lang==='ar'?'لا تقييمات بعد':'no ratings yet')}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'الالتزام بالمهلة (اليوم)':'Service SLA (today)'}</div><div class="val" style="color:${today.slaPercent==null?'inherit':today.slaPercent>=90?'var(--sage-500)':today.slaPercent>=75?'var(--amber-500)':'var(--red-500)'}">${dash(today.slaPercent,'%')}</div><div class="sub">${slaSubline(today)}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'التقييم (اليوم)':'Rating (today)'}</div><div class="val">${today.avgRating!=null?('★ '+today.avgRating):'—'}</div><div class="sub">${today.ratingCount?`${today.ratingCount} ${S.lang==='ar'?'تقييم اليوم':'ratings today'}`:(allTime.avgRating!=null?`${S.lang==='ar'?'الإجمالي':'All-time'}: ★ ${allTime.avgRating} (${allTime.ratingCount})`:(S.lang==='ar'?'لا تقييمات بعد':'no ratings yet'))}</div></div>
   </div>
 
   <!-- Layer 2: Attention — what needs action, before any table -->
@@ -1442,6 +1445,8 @@ function renderPartnerOverview(){
     <div class="panel"><h3>${S.lang==='ar'?'الأداء':'Performance'}</h3>
       <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'أفضل منفذ':'Top outlet'}</span><span>${perf.topOutlet?(S.lang==='ar'?perf.topOutlet.name_ar:perf.topOutlet.name_en):'—'}</span></div>
       <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'أضعف منفذ':'Bottom outlet'}</span><span>${perf.bottomOutlet?(S.lang==='ar'?perf.bottomOutlet.name_ar:perf.bottomOutlet.name_en):'—'}</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'أفضل منطقة':'Top zone'}</span><span>${perf.topZone?`${perf.topZone.zone} (${perf.topZone.count})`:'—'}</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'أضعف منطقة':'Bottom zone'}</span><span>${perf.bottomZone?`${perf.bottomZone.zone} (${perf.bottomZone.count})`:'—'}</span></div>
       <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'آخر 7 أيام':'Last 7 days'}</span><span>${money2(perf.last7Gross)} SAR</span></div>
       <div class="totalline" style="border-top:1px dashed var(--ink-600);padding-top:8px;margin-top:6px;color:${perf.trendPercent==null?'var(--ink-400)':perf.trendPercent>=0?'var(--sage-500)':'var(--red-500)'};font-weight:800">
         <span>${S.lang==='ar'?'مقارنة بالـ7 السابقة':'vs prior 7 days'}</span>
@@ -1453,6 +1458,11 @@ function renderPartnerOverview(){
       <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'تسويات معلّقة':'Pending settlements'}</span><span>${moneyLayer.pendingSettlementCount||0}${moneyLayer.pendingSettlementAmount?` · ${money2(moneyLayer.pendingSettlementAmount)} SAR`:''}</span></div>
       <div class="totalline" style="color:var(--ink-200)"><span>${t('discounts')}</span><span>${money2(moneyLayer.discounts)} SAR</span></div>
       <div class="totalline" style="color:var(--ink-200)"><span>${t('refunds')}</span><span>${money2(moneyLayer.refunds)} SAR</span></div>
+      <div class="totalline" style="border-top:1px dashed var(--ink-600);padding-top:8px;margin-top:6px;color:var(--ink-200)">
+        <span>${S.lang==='ar'?'التسوية القادمة':'Next settlement'}</span>
+        <span>${moneyLayer.nextSettlement
+          ? `${moneyLayer.nextSettlement.period} · ${money2(moneyLayer.nextSettlement.amount)} SAR <span class="badge ${moneyLayer.nextSettlement.status==='Disputed'?'cancel':'pending'}" style="margin-inline-start:6px">${moneyLayer.nextSettlement.status}</span>`
+          : `<span style="color:var(--ink-400)">${S.lang==='ar'?'لا توجد تسوية معلّقة':'none outstanding'}</span>`}</span></div>
     </div>
   </div>
 
@@ -1471,6 +1481,22 @@ function renderPartnerOverview(){
 // (returning an em-dash) so a genuinely-unavailable figure never renders
 // as a misleading "0.00".
 function money2(n){ return n==null ? '—' : money(n); }
+// UX-3 corrective round: the SLA card must state honestly HOW MANY orders
+// the percentage actually rests on, and how many were deliberately left
+// out because this system cannot yet measure them correctly (multi-outlet
+// orders have no per-child fulfillment timestamps — see
+// partnerDecisionLayers in server.js). Silence there would leave a
+// partner reading a percentage without knowing its real basis.
+function slaSubline(t){
+  if(t.slaPercent==null){
+    return S.lang==='ar'?'لا توجد بيانات تجهيز مسجّلة اليوم':'no recorded prep timings today';
+  }
+  const base = S.lang==='ar' ? `من ${t.slaMeasured} طلب` : `from ${t.slaMeasured} order(s)`;
+  const excl = t.slaExcludedMultiOutlet
+    ? (S.lang==='ar' ? ` · ${t.slaExcludedMultiOutlet} متعدد المنافذ غير محتسب` : ` · ${t.slaExcludedMultiOutlet} multi-outlet not measurable`)
+    : '';
+  return base + excl;
+}
 
 function renderSettlements(){
   const rows = S.settlements || [];

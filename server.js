@@ -30,6 +30,14 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 // (or a genuinely outlet-less order) falls back to this same number
 // rather than a second, different guess.
 const DEFAULT_SLA_PREP_MIN = 8;
+// UX-3 corrective round: the spec asks for "unusual refunds", not "any
+// refund". A refund is only surfaced as an attention item when the last
+// 7 days' refund value reaches this share of the same period's delivered
+// gross. 5% is a deliberate, documented starting point (not derived from
+// this system's own history, which is too small to calibrate against
+// yet) -- it is a single named constant precisely so it can be tuned or
+// made partner-configurable later without hunting through the logic.
+const REFUND_ATTENTION_RATE = 5;
 
 /* ---------------------------- small utilities ---------------------------- */
 function sendJSON(res, status, data) {
@@ -1282,36 +1290,77 @@ function partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) 
   const todayGross = todayDelivered.reduce((s, o) => s + o.total, 0);
   const todayAov = todayOrders.length ? todayOrders.reduce((s, o) => s + o.total, 0) / todayOrders.length : 0;
 
-  // Service SLA: measured from real fulfillment timestamps against each
-  // order's outlet-configured prep budget. Orders with no recorded
-  // ready_at simply aren't counted -- no assumed timings.
-  let slaMet = 0, slaTotal = 0;
-  for (const o of orders) {
-    const f = db.prepare('SELECT accepted_at, ready_at FROM fulfillment WHERE order_id = ?').get(o.id);
-    if (!f || !f.ready_at) continue;
-    const startedAt = f.accepted_at || o.created_at;
-    const outletRow = db.prepare(`SELECT ou.sla_prep_min FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ? LIMIT 1`).get(o.id);
-    const budgetMin = (outletRow && outletRow.sla_prep_min) || DEFAULT_SLA_PREP_MIN;
-    slaTotal++;
-    if ((f.ready_at - startedAt) / 60000 <= budgetMin) slaMet++;
+  /* ---- Service SLA (corrective round) ----------------------------------
+     Two real problems in the first version, both confirmed against the
+     schema before fixing:
+
+     1) MULTI-OUTLET CORRECTNESS. The old lookup ended in `LIMIT 1`, so an
+        order spanning several outlets was judged against whichever
+        outlet's sla_prep_min happened to come back first -- a 4-minute
+        coffee budget could silently be applied to an order that also
+        contained a 20-minute kitchen item, or vice versa. There is also
+        no per-child timing to fix this with: `fulfillment` is keyed by
+        order_id ONLY, and `child_orders` carries no accepted_at/ready_at
+        columns at all. So a genuinely correct per-outlet SLA for a split
+        order is NOT COMPUTABLE from the data that exists today.
+
+        Rather than keep quietly producing a wrong number, multi-outlet
+        orders are now EXCLUDED from the SLA calculation and counted
+        separately (slaExcludedMultiOutlet), which the UI states openly.
+        For single-outlet orders -- where the measurement is genuinely
+        sound -- the budget now comes from the MAX sla_prep_min across the
+        order's items rather than an arbitrary first row, so even a
+        single-outlet order with mixed item sourcing is judged against the
+        slowest thing in it, never a luckier one.
+
+     2) "TODAY" HONESTY. The value was labelled "today" but computed over
+        the partner's ENTIRE order history. Both SLA and rating are now
+        genuinely windowed to today, and the all-time figures are
+        returned alongside them under explicit names so the UI can label
+        each correctly instead of one masquerading as the other.
+  --------------------------------------------------------------------- */
+  function slaStatsFor(orderList) {
+    let met = 0, total = 0, excludedMultiOutlet = 0;
+    for (const o of orderList) {
+      const f = db.prepare('SELECT accepted_at, ready_at FROM fulfillment WHERE order_id = ?').get(o.id);
+      if (!f || !f.ready_at) continue; // no recorded timing -- never assumed
+      const childCount = db.prepare('SELECT COUNT(*) c FROM child_orders WHERE parent_order_id = ?').get(o.id).c;
+      if (childCount > 0) { excludedMultiOutlet++; continue; } // see note above
+      const startedAt = f.accepted_at || o.created_at;
+      const budgetRow = db.prepare(`SELECT MAX(ou.sla_prep_min) AS budget FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ?`).get(o.id);
+      const budgetMin = (budgetRow && budgetRow.budget) || DEFAULT_SLA_PREP_MIN;
+      total++;
+      if ((f.ready_at - startedAt) / 60000 <= budgetMin) met++;
+    }
+    return { percent: total ? round2((met / total) * 100) : null, measured: total, excludedMultiOutlet };
   }
-  const slaPercent = slaTotal ? round2((slaMet / slaTotal) * 100) : null;
+  const slaToday = slaStatsFor(todayOrders);
+  const slaAllTime = slaStatsFor(orders);
+
+  function ratingStatsFor(orderList) {
+    const ids = orderList.map(o => o.id);
+    if (!ids.length) return { avg: null, count: 0 };
+    const row = db.prepare(`SELECT AVG(stars) avg, COUNT(*) c FROM feedback WHERE order_id IN (${ids.map(() => '?').join(',')})`).get(...ids);
+    return { avg: row.avg ? round2(row.avg) : null, count: row.c };
+  }
+  const ratingToday = ratingStatsFor(todayOrders);
+  const ratingAllTime = ratingStatsFor(orders);
 
   const orderIdsAll = orders.map(o => o.id);
-  const ratingRow = orderIdsAll.length
-    ? db.prepare(`SELECT AVG(stars) avg, COUNT(*) c FROM feedback WHERE order_id IN (${orderIdsAll.map(() => '?').join(',')})`).get(...orderIdsAll)
-    : { avg: null, c: 0 };
-  const avgRating = ratingRow.avg ? round2(ratingRow.avg) : null;
-
   const activeOutlets = db.prepare(`SELECT COUNT(*) c FROM outlets WHERE status='Active' AND property_id IN (SELECT id FROM properties WHERE partner_id = ?)`).get(partnerId).c;
 
   // ---- Attention (spec: "SLA breaches, offline/disabled points, unusual refunds, low rating, settlement issue") ----
   const attention = [];
 
+  // Open SLA breaches use the same MAX-budget rule as above. Multi-outlet
+  // orders are included here deliberately and correctly: "has this order
+  // been sitting past the slowest budget any of its outlets committed to"
+  // is a sound question even without per-child timings, because it reads
+  // the parent's own created_at, not a per-outlet completion time.
   const openBreaches = orders.filter(o => {
     if (!['Paid', 'Accepted', 'Preparing'].includes(o.status)) return false;
-    const outletRow = db.prepare(`SELECT ou.sla_prep_min FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ? LIMIT 1`).get(o.id);
-    const budgetMin = (outletRow && outletRow.sla_prep_min) || DEFAULT_SLA_PREP_MIN;
+    const budgetRow = db.prepare(`SELECT MAX(ou.sla_prep_min) AS budget FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ?`).get(o.id);
+    const budgetMin = (budgetRow && budgetRow.budget) || DEFAULT_SLA_PREP_MIN;
     return (now - o.created_at) / 60000 > budgetMin;
   }).length;
   if (openBreaches > 0) attention.push({ kind: 'sla_breach', severity: 'high', count: openBreaches });
@@ -1319,12 +1368,30 @@ function partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) 
   const disabledPoints = db.prepare(`SELECT COUNT(*) c FROM points WHERE active = 0 AND zone_id IN (SELECT id FROM zones WHERE property_id IN (SELECT id FROM properties WHERE partner_id = ?))`).get(partnerId).c;
   if (disabledPoints > 0) attention.push({ kind: 'disabled_points', severity: 'medium', count: disabledPoints });
 
+  /* Refunds (corrective round): the spec's wording is "unusual refunds",
+     but the first version raised this on ANY refund at all and merely
+     labelled it "refunds in 7 days" -- which is a plain activity report,
+     not an exception worth a partner's attention. There is now a real
+     threshold with a defensible definition: refunds in the last 7 days
+     are flagged only when they exceed REFUND_ATTENTION_RATE of the same
+     period's delivered gross. The rate and the period's gross are both
+     returned so the UI can state WHY it fired rather than just that it
+     did. Below the threshold, nothing is raised -- a routine refund is
+     not an incident. */
   const refundRows = orderIdsAll.length
     ? db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount),0) total FROM refunds WHERE order_id IN (${orderIdsAll.map(() => '?').join(',')}) AND created_at >= ?`).get(...orderIdsAll, now - 7 * DAY)
     : { c: 0, total: 0 };
-  if (refundRows.c > 0) attention.push({ kind: 'refunds_7d', severity: 'medium', count: refundRows.c, amount: round2(refundRows.total) });
+  const gross7d = delivered.filter(o => o.created_at >= now - 7 * DAY).reduce((s, o) => s + o.total, 0);
+  if (refundRows.c > 0 && gross7d > 0) {
+    const refundRate = round2((refundRows.total / gross7d) * 100);
+    if (refundRate >= REFUND_ATTENTION_RATE) {
+      attention.push({ kind: 'refunds_elevated', severity: 'medium', count: refundRows.c, amount: round2(refundRows.total), ratePercent: refundRate, thresholdPercent: REFUND_ATTENTION_RATE });
+    }
+  }
 
-  if (avgRating != null && avgRating < 3.5 && ratingRow.c >= 3) attention.push({ kind: 'low_rating', severity: 'high', value: avgRating });
+  if (ratingAllTime.avg != null && ratingAllTime.avg < 3.5 && ratingAllTime.count >= 3) {
+    attention.push({ kind: 'low_rating', severity: 'high', value: ratingAllTime.avg, ratingCount: ratingAllTime.count });
+  }
 
   const disputed = db.prepare(`SELECT COUNT(*) c FROM settlements WHERE partner_id = ? AND status = 'Disputed'`).get(partnerId).c;
   if (disputed > 0) attention.push({ kind: 'settlement_disputed', severity: 'high', count: disputed });
@@ -1333,6 +1400,19 @@ function partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) 
   const ranked = outletPerformance.filter(o => o.orders > 0);
   const topOutlet = ranked.length ? ranked[0] : null;
   const bottomOutlet = ranked.length > 1 ? ranked[ranked.length - 1] : null;
+
+  // Bottom zone (corrective round): the spec asks for "top/bottom zone"
+  // and topZones was already computed by the caller from real order
+  // counts -- the bottom simply was not being surfaced. Only meaningful
+  // with at least two zones to compare, so it stays null below that.
+  const zoneCounts = {};
+  for (const o of orders) {
+    const zone = db.prepare('SELECT name_ar,name_en FROM zones WHERE id=?').get(o.zone_id);
+    if (zone) { const key = zone.name_en; zoneCounts[key] = (zoneCounts[key] || 0) + 1; }
+  }
+  const zonesRanked = Object.entries(zoneCounts).sort((a, b) => b[1] - a[1]).map(([zone, count]) => ({ zone, count }));
+  const topZone = zonesRanked.length ? zonesRanked[0] : null;
+  const bottomZone = zonesRanked.length > 1 ? zonesRanked[zonesRanked.length - 1] : null;
 
   const last7 = delivered.filter(o => o.created_at >= now - 7 * DAY).reduce((s, o) => s + o.total, 0);
   const prev7 = delivered.filter(o => o.created_at >= now - 14 * DAY && o.created_at < now - 7 * DAY).reduce((s, o) => s + o.total, 0);
@@ -1348,17 +1428,34 @@ function partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) 
     ? db.prepare(`SELECT COALESCE(SUM(amount),0) total FROM refunds WHERE order_id IN (${orderIdsAll.map(() => '?').join(',')})`).get(...orderIdsAll).total
     : 0;
 
+  /* Next settlement (corrective round): the spec asks for it, and the
+     data DOES support a real answer -- the oldest not-yet-Paid settlement
+     is genuinely the next one due, with its real period and workflow
+     status. What this system has NO data for is a scheduled future
+     settlement DATE (there is no billing-cycle/next-run-date column
+     anywhere), so no date is invented; the UI shows the period and where
+     it currently sits in the Draft->Reviewed->Approved->Paid workflow.
+     When nothing is outstanding, this is null and the UI says so. */
+  const nextSettlement = db.prepare(`SELECT id, period, partner_share, status FROM settlements WHERE partner_id = ? AND status != 'Paid' ORDER BY created_at ASC LIMIT 1`).get(partnerId) || null;
+
   return {
     today: {
       grossSales: round2(todayGross), orders: todayOrders.length, aov: round2(todayAov),
-      slaPercent, avgRating, ratingCount: ratingRow.c, activeOutlets, openIncidents: attention.filter(a => a.severity === 'high').length,
+      slaPercent: slaToday.percent, slaMeasured: slaToday.measured, slaExcludedMultiOutlet: slaToday.excludedMultiOutlet,
+      avgRating: ratingToday.avg, ratingCount: ratingToday.count,
+      activeOutlets, openIncidents: attention.filter(a => a.severity === 'high').length,
+    },
+    allTime: {
+      slaPercent: slaAllTime.percent, slaMeasured: slaAllTime.measured, slaExcludedMultiOutlet: slaAllTime.excludedMultiOutlet,
+      avgRating: ratingAllTime.avg, ratingCount: ratingAllTime.count,
     },
     attention,
-    performance: { topOutlet, bottomOutlet, trendPercent, last7Gross: round2(last7), prev7Gross: round2(prev7) },
+    performance: { topOutlet, bottomOutlet, topZone, bottomZone, trendPercent, last7Gross: round2(last7), prev7Gross: round2(prev7) },
     money: {
       partnerShare: round2(partnerShareTotal),
       pendingSettlementCount: pendingSettlements.c, pendingSettlementAmount: round2(pendingSettlements.total),
       discounts: round2(discountsTotal), refunds: round2(refundsAllTime),
+      nextSettlement: nextSettlement ? { period: nextSettlement.period, amount: round2(nextSettlement.partner_share), status: nextSettlement.status } : null,
     },
   };
 }
