@@ -325,7 +325,18 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
   let cardResult = { gatewayRef: null, status: 'Captured', fees: 0 };
   if (cardAmount > 0) {
     const intent = await gateway.createIntent({ orderId: order.id, amount: cardAmount, method });
-    cardResult = await gateway.capture(intent.intentId, !!body.simulateFail);
+    // UX-1 (spec §16 P0 "payment/error ambiguity", §20-style audit finding):
+    // body.simulateFail was a raw, unauthenticated client-supplied flag with
+    // NO environment gating at all -- any real customer's browser could
+    // reach it, and the corresponding "Simulate payment failure (test)"
+    // button was sitting directly in the production checkout screen. Same
+    // severity class as the protobar/demo-picker finding, same fix: in
+    // production this flag is never honored, full stop, regardless of what
+    // the request body contains. Non-production keeps it (dev-tools.js's
+    // demo button, and this codebase's own test suite, both still need a
+    // way to exercise the failure path against the Mock gateway).
+    const honorSimulateFail = process.env.NODE_ENV !== 'production' && !!body.simulateFail;
+    cardResult = await gateway.capture(intent.intentId, honorSimulateFail);
   }
   // --- a real provider would return here with intent/redirectUrl and confirm asynchronously
   //     via POST /api/payments/webhook instead of capturing synchronously; kept synchronous
@@ -1133,17 +1144,25 @@ on('POST', '/api/admin/products', ['SuperAdmin', 'PartnerAdmin'], async (req, re
     const fallbackOutlet = category ? db.prepare(`SELECT id FROM outlets WHERE property_id = ? ORDER BY created_at ASC LIMIT 1`).get(category.property_id) : null;
     outletId = fallbackOutlet ? fallbackOutlet.id : null;
   }
-  db.prepare("INSERT INTO products (id,category_id,outlet_id,sku,name_ar,name_en,base_price,status) VALUES (?,?,?,?,?,?,?,'Active')")
-    .run(id, b.categoryId, outletId, b.sku || id, b.name_ar, b.name_en, b.basePrice);
+  // UX-1: imageUrl is optional and URL-based (a link to an already-hosted
+  // image — a real file-upload/storage pipeline is a separate, much
+  // larger piece of infrastructure this delivery does not build). A
+  // product with no image set still renders correctly via the UX-0
+  // monogram fallback on the guest side.
+  db.prepare("INSERT INTO products (id,category_id,outlet_id,sku,name_ar,name_en,base_price,image_url,status) VALUES (?,?,?,?,?,?,?,?,'Active')")
+    .run(id, b.categoryId, outletId, b.sku || id, b.name_ar, b.name_en, b.basePrice, b.imageUrl || null);
   audit(session.username, session.role, 'create', id, null, b, null);
   sendJSON(res, 201, { id });
 });
 on('PATCH', '/api/admin/products/:id', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
   assertTenantWrite(session, productPartnerId(p.id));
-  const before = db.prepare('SELECT status FROM products WHERE id=?').get(p.id);
-  db.prepare('UPDATE products SET status=? WHERE id=?').run(b.status, p.id);
-  audit(session.username, session.role, 'update_status', p.id, before, { status: b.status }, null);
+  const before = db.prepare('SELECT status, image_url FROM products WHERE id=?').get(p.id);
+  if (!before) return sendJSON(res, 404, { error: 'Product not found' });
+  const nextStatus = b.status !== undefined ? b.status : before.status;
+  const nextImageUrl = b.imageUrl !== undefined ? (b.imageUrl || null) : before.image_url;
+  db.prepare('UPDATE products SET status=?, image_url=? WHERE id=?').run(nextStatus, nextImageUrl, p.id);
+  audit(session.username, session.role, 'update', p.id, before, { status: nextStatus, imageUrl: nextImageUrl }, null);
   sendJSON(res, 200, { ok: true });
 });
 

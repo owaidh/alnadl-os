@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY, category_id TEXT, merchant_id TEXT, outlet_id TEXT, sku TEXT, name_ar TEXT, name_en TEXT,
   description_ar TEXT, description_en TEXT, base_price REAL, tax_code TEXT DEFAULT 'VAT15',
-  status TEXT DEFAULT 'Active'
+  status TEXT DEFAULT 'Active', image_url TEXT
 );
 CREATE TABLE IF NOT EXISTS variants (
   id TEXT PRIMARY KEY, product_id TEXT, name_ar TEXT, name_en TEXT, price_delta REAL DEFAULT 0
@@ -471,6 +471,14 @@ function migratePhase4Outlets() {
   const tryAlter = (sql) => { try { db.exec(sql); } catch (e) { /* column already exists — fine */ } };
   tryAlter(`ALTER TABLE qr_tokens ADD COLUMN qr_type TEXT DEFAULT 'table'`);
   tryAlter(`ALTER TABLE products ADD COLUMN outlet_id TEXT`);
+  // UX-1 (spec §20 audit: "Introduce product media model, image
+  // placeholder component, lazy loading, aspect-ratio crop, fallback
+  // brand illustration" — the placeholder/fallback half of this shipped
+  // in UX-0; this is the "real media" half, deferred there on purpose).
+  // Nullable by design: a product with no image_url set still renders
+  // correctly via the UX-0 monogram fallback — this is additive, not a
+  // hard requirement every product must satisfy immediately.
+  tryAlter(`ALTER TABLE products ADD COLUMN image_url TEXT`);
   tryAlter(`ALTER TABLE order_items ADD COLUMN outlet_id TEXT`);
   tryAlter(`ALTER TABLE order_items ADD COLUMN child_order_id TEXT`);
 

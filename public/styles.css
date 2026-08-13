@@ -195,6 +195,7 @@ input, select, textarea{ font-family:inherit; }
 .prodcard{ background:var(--white); border-radius:var(--r-md); box-shadow:var(--shadow-1); padding:10px; text-align:start; border:1px solid rgba(20,17,14,.05); transition:transform .15s ease, box-shadow .15s ease; }
 .prodcard:hover{ transform:translateY(-2px); box-shadow:var(--shadow-2); }
 .prodcard .thumb{ width:100%; aspect-ratio:1.3; border-radius:var(--r-sm); background:linear-gradient(140deg,var(--cream-200),var(--purple-300)); margin-bottom:var(--sp-2); display:flex;align-items:center;justify-content:center; font-size:22px; overflow:hidden;}
+.prodcard .thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
 .prodcard .nm{ font-size:12.5px; font-weight:700; margin:0 0 2px; }
 .prodcard .pricerow{ display:flex; align-items:center; justify-content:space-between; }
 .prodcard .price{ font-family:var(--mono); font-size:12.5px; font-weight:700; }
@@ -213,7 +214,8 @@ input, select, textarea{ font-family:inherit; }
 
 .modalwrap{ position:absolute; inset:0; background:rgba(20,17,14,.5); display:flex; align-items:flex-end; z-index:50; }
 .modalsheet{ background:var(--cream-050); width:100%; border-radius:22px 22px 0 0; max-height:86%; overflow-y:auto; padding:0 0 18px; }
-.modalsheet .hero{ width:100%; height:150px; background:linear-gradient(140deg,var(--purple-400),var(--purple-800)); display:flex;align-items:center;justify-content:center; font-size:44px; position:relative;}
+.modalsheet .hero{ width:100%; height:150px; background:linear-gradient(140deg,var(--purple-400),var(--purple-800)); display:flex;align-items:center;justify-content:center; font-size:44px; position:relative; overflow:hidden;}
+.modalsheet .hero img{ width:100%; height:100%; object-fit:cover; display:block; }
 .modalsheet .hero .close{ position:absolute; top:var(--sp-3); inset-inline-end:var(--sp-3); width:var(--touch-guest);height:var(--touch-guest);border-radius:50%; background:rgba(255,255,255,.92); border:none; font-weight:900; font-size:16px; }
 
 /* ---- Media placeholder — spec §20 audit: "Cart row uses emoji thumbnail

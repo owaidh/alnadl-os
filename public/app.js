@@ -15,7 +15,7 @@ async function api(method, path, body, auth) {
 
 const T = {
   ar:{
-    scanQr:'اختر نقطة (محاكاة مسح QR)', startOrder:'ابدأ الطلب', youAreAt:'أنت في', serviceOn:'الخدمة متاحة الآن', eta:'الوقت المتوقع',
+    scanQr:'اختر نقطة (محاكاة مسح QR)', startOrder:'ابدأ الطلب', youAreAt:'أنت في', serviceOn:'الخدمة متاحة الآن',
     save:'حفظ',
     search:'بحث عن منتج...', cart:'السلة', items:'منتجات', addToCart:'إضافة للسلة',
     required:'إلزامي', notes:'ملاحظات خاصة', notesPh:'مثال: بدون سكر',
@@ -56,7 +56,7 @@ const T = {
     toast_prod:'أُضيف المنتج للقائمة', toast_transition:'تم تحديث حالة الطلب',
   },
   en:{
-    scanQr:'Choose a point (simulated QR scan)', startOrder:'Start Order', youAreAt:'You are at', serviceOn:'Service available now', eta:'Estimated time',
+    scanQr:'Choose a point (simulated QR scan)', startOrder:'Start Order', youAreAt:'You are at', serviceOn:'Service available now',
     save:'Save',
     search:'Search a product...', cart:'Cart', items:'items', addToCart:'Add to cart',
     required:'Required', notes:'Special notes', notesPh:'e.g. no sugar',
@@ -113,6 +113,13 @@ const S = {
   lang:'ar', mode:'customer', screen:'welcome',
   session:null, // {token, user:{username,role,scope}}
   qrContext:null, catalog:null, activeCatId:null, activeProduct:null,
+  // UX-1 (spec G05: "close/back behavior must preserve state... No
+  // accidental loss of selections"): keyed by product id, holds the
+  // last in-progress variant/addons/qty/notes for a product the customer
+  // opened but did not add to cart. Cleared for a product once it IS
+  // added (see addActiveToCart) so the next open starts fresh rather
+  // than replaying a just-completed selection.
+  productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
   ops:{ queue:[] }, runnerQ:[], admin:{ zones:[], points:[], categories:[], products:[] },
@@ -168,10 +175,23 @@ const App = {
 
   openProduct(pid){
     const def = S.catalog.products.find(p=>p.id===pid);
-    S.activeProduct = { def, variantIdx: def.variants.length?0:-1, addons:{}, qty:1, notes:'' };
+    const draft = S.productDrafts[pid];
+    S.activeProduct = draft
+      ? { def, variantIdx:draft.variantIdx, addons:{...draft.addons}, qty:draft.qty, notes:draft.notes }
+      : { def, variantIdx: def.variants.length?0:-1, addons:{}, qty:1, notes:'' };
     render();
   },
-  closeProduct(){ S.activeProduct=null; render(); },
+  closeProduct(){
+    // Save the in-progress selection as a draft before clearing
+    // activeProduct — this is what makes reopening the SAME product
+    // (without adding it to cart first) restore exactly what the
+    // customer had chosen, instead of starting over.
+    if(S.activeProduct){
+      const ap = S.activeProduct;
+      S.productDrafts[ap.def.id] = { variantIdx:ap.variantIdx, addons:{...ap.addons}, qty:ap.qty, notes:ap.notes };
+    }
+    S.activeProduct=null; render();
+  },
   pickVariant(idx){ S.activeProduct.variantIdx=idx; render(); },
   toggleAddon(id){ S.activeProduct.addons[id]=!S.activeProduct.addons[id]; render(); },
   stepQty(d){ S.activeProduct.qty=Math.max(1,S.activeProduct.qty+d); render(); },
@@ -181,10 +201,11 @@ const App = {
     const variant = ap.variantIdx>=0 ? def.variants[ap.variantIdx] : null;
     const addonList = def.addons.filter(a=>ap.addons[a.id]);
     const unit = def.base_price + (variant?variant.price_delta:0) + addonList.reduce((s,a)=>s+a.price,0);
-    S.cart.push({ key:'ci'+Math.random().toString(36).slice(2), productId:def.id, ar:def.name_ar, en:def.name_en,
+    S.cart.push({ key:'ci'+Math.random().toString(36).slice(2), productId:def.id, ar:def.name_ar, en:def.name_en, imageUrl:def.image_url||null,
       variantId: variant?variant.id:null, variantLabel: variant?{ar:variant.name_ar,en:variant.name_en}:null,
       addonIds: addonList.map(a=>a.id), addonLabels: addonList.map(a=>({ar:a.name_ar,en:a.name_en})),
       notes:ap.notes, qty:ap.qty, unit, lineTotal:unit*ap.qty });
+    delete S.productDrafts[def.id]; // resolved into the cart — next open should start fresh, not replay this
     S.activeProduct=null; showToast(t('toast_added')); render();
   },
   cartStep(key,d){ const r=S.cart.find(c=>c.key===key); if(!r)return; r.qty=Math.max(1,r.qty+d); r.lineTotal=r.unit*r.qty; render(); },
@@ -232,7 +253,18 @@ const App = {
 
   async goCheckout(){ if(S.cart.length===0) return; App.goScreen('checkout'); },
 
-  async submitPayment(simulateFail){
+  // UX-1 corrective finding: this function used to accept a simulateFail
+  // parameter, with the real payment button and a "Simulate payment
+  // failure (test)" button both calling it — the second one sitting
+  // directly in the production checkout screen. Same severity class as
+  // the earlier protobar/demo-picker finding: a raw, client-reachable
+  // flag on the real payment endpoint with no environment gating at all.
+  // server.js now ignores that flag outright in production regardless of
+  // what any client sends, and this function no longer accepts or sends
+  // it at all — the only way to exercise the failure path is
+  // dev-tools.js's own separate function (never delivered to production,
+  // see the extension point in scrCheckout() below).
+  async submitPayment(){
     S.ui.err=null;
     try{
       if(!S.currentOrder){
@@ -248,7 +280,7 @@ const App = {
         const created = await api('POST', '/api/orders', payload);
         S.currentOrder = { id: created.id, status: created.status };
       }
-      const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod, simulateFail: !!simulateFail });
+      const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod });
       S.currentOrder.status = result.status;
       App.goScreen('paymentResult');
     }catch(e){ showErr(e.message); }
@@ -711,9 +743,18 @@ function scrHub(){
   // more than one available outlet right now AND the plan includes
   // multiOutlet. This screen literally cannot appear for any property that
   // existed before Phase 4, since those all have exactly one outlet.
+  //
+  // UX-1: every outlet in this list is ALREADY server-filtered to ones
+  // genuinely open right now (status='Active' + outlet_availability rules
+  // passed, see GET /api/service-hub/:token) -- so the "Available now"
+  // badge below is a real, backend-confirmed fact, not an invented
+  // status. There is no live "busy/quiet" signal in the data model to
+  // show honestly, so this delivery does not fabricate one. Type icons
+  // are the same monogram treatment as product media (UX-0) instead of
+  // food emoji, for visual consistency with the rest of the guest shell.
   const c = S.qrContext;
   const outlets = c.outlets || [];
-  const typeIcons = { coffee:'☕', restaurant:'🍽️', bakery:'🥐', service:'🛎️', other:'📦' };
+  const typeLabel = { coffee:'C', restaurant:'R', bakery:'B', service:'S', other:'O' };
   return `
   <div class="welcome" style="padding:28px 22px">
     <div class="crest">ن</div>
@@ -722,10 +763,13 @@ function scrHub(){
     <div class="qrpicklist" style="max-width:320px">
       ${outlets.map(o=>`
         <button class="qrpickitem" style="display:flex;align-items:center;gap:12px;padding:14px" onclick="App.chooseOutlet('${o.id}')">
-          <span style="font-size:24px">${typeIcons[o.type]||'📦'}</span>
+          <span class="media-placeholder sm" style="width:36px;height:36px;border-radius:var(--r-sm);background:linear-gradient(140deg,var(--purple-300),var(--purple-600));flex-shrink:0;font-size:14px">${typeLabel[o.type]||'O'}</span>
           <span style="flex:1">
             <span style="display:block;font-weight:800;font-size:14px">${S.lang==='ar'?o.name_ar:o.name_en}</span>
-            <span style="display:block;font-size:11px;color:var(--ink-400);font-weight:400">${o.operator==='partner'?(S.lang==='ar'?'شريك':'Partner'):(S.lang==='ar'?'مُشغَّل من النادل':'Alnadl-operated')}</span>
+            <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-400);font-weight:400;margin-top:2px">
+              <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--sage-500);display:inline-block"></span>${S.lang==='ar'?'متاح الآن':'Available now'}
+              <span>· ${o.operator==='partner'?(S.lang==='ar'?'شريك':'Partner'):(S.lang==='ar'?'مُشغَّل من النادل':'Alnadl-operated')}</span>
+            </span>
           </span>
           <span style="color:var(--ink-300)">${S.lang==='ar'?'←':'→'}</span>
         </button>`).join('')}
@@ -747,7 +791,7 @@ function scrWelcome(){
   <div class="welcome">
     <div class="crest">${crestLetter}</div>
     <div class="locpill">${t('youAreAt')}: ${nm} — ${zn} — ${c.point.label}</div>
-    <div class="etarow"><span class="dot"></span>${t('serviceOn')} · ${t('eta')} 8–12 ${S.lang==='ar'?'دقيقة':'min'}</div>
+    <div class="etarow"><span class="dot"></span>${t('serviceOn')}</div>
     <h2>${welcomeTitle}</h2>
     <button class="btn-primary" style="max-width:260px" onclick="App.goScreen('menu')">${t('startOrder')}</button>
     ${isWhiteLabel && showPoweredBy? `<div style="font-size:10px;color:var(--ink-400);margin-top:6px">${S.lang==='ar'?'مقدَّم من':'Powered by'} ALNADL</div>`:''}
@@ -793,9 +837,15 @@ function scrMenu(){
 }
 function prodCard(p){
   const name = S.lang==='ar'?p.name_ar:p.name_en;
+  // UX-1: real media when set (admin-provided image_url), graceful
+  // fallback to the UX-0 monogram placeholder otherwise — never a broken
+  // image icon (onerror swaps back to the monogram markup directly).
+  const media = p.image_url
+    ? `<img src="${p.image_url}" alt="${name}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot;>${productMonogram(name)}</div>'">`
+    : `<div class="media-placeholder sm">${productMonogram(name)}</div>`;
   return `
     <div class="prodcard ${p.available?'':'oos'}">
-      <div class="thumb"><div class="media-placeholder sm">${productMonogram(name)}</div></div>
+      <div class="thumb">${media}</div>
       <p class="nm">${name}</p>
       <div class="pricerow"><span class="price">${money(p.base_price)} ${unitCur()}</span>
       <button class="addbtn" onclick="App.openProduct('${p.id}')">+</button></div>
@@ -808,9 +858,12 @@ function renderProductModal(){
   const addonTotal = def.addons.filter(a=>ap.addons[a.id]).reduce((s,a)=>s+a.price,0);
   const unit = def.base_price + (variant?variant.price_delta:0) + addonTotal;
   const modalName = S.lang==='ar'?def.name_ar:def.name_en;
+  const heroMedia = def.image_url
+    ? `<img src="${def.image_url}" alt="${modalName}" onerror="this.outerHTML='<div class=&quot;media-placeholder lg&quot;>${productMonogram(modalName)}</div>'">`
+    : `<div class="media-placeholder lg">${productMonogram(modalName)}</div>`;
   return `
   <div class="modalwrap"><div class="modalsheet">
-    <div class="hero"><div class="media-placeholder lg">${productMonogram(modalName)}</div><button class="close" onclick="App.closeProduct()">✕</button></div>
+    <div class="hero">${heroMedia}<button class="close" onclick="App.closeProduct()">✕</button></div>
     <div class="modalbody">
       <h3>${S.lang==='ar'?def.name_ar:def.name_en}</h3><p class="desc">${money(def.base_price)} ${unitCur()}</p>
       ${def.variants.length? `<div class="optgroup"><div class="lbl"><span>${S.lang==='ar'?'الحجم':'Size'}</span><span style="color:var(--red-500);font-size:10.5px">${t('required')}</span></div>
@@ -834,12 +887,18 @@ function scrCart(){
   return `
   <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('menu')">${S.lang==='ar'?'→':'←'}</button><h3>${t('yourCart')}</h3><div style="width:32px"></div></div></div>
   <div class="scrbody">
-    ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : S.cart.map(c=>`
-      <div class="cartrow"><div class="th"><div class="media-placeholder sm" style="font-size:16px">${productMonogram(S.lang==='ar'?c.ar:c.en)}</div></div><div class="mid">
-        <p class="nm">${S.lang==='ar'?c.ar:c.en}</p>
+    ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : S.cart.map(c=>{
+      const cName = S.lang==='ar'?c.ar:c.en;
+      const cMedia = c.imageUrl
+        ? `<img src="${c.imageUrl}" alt="${cName}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot; style=&quot;font-size:16px&quot;>${productMonogram(cName)}</div>'">`
+        : `<div class="media-placeholder sm" style="font-size:16px">${productMonogram(cName)}</div>`;
+      return `
+      <div class="cartrow"><div class="th">${cMedia}</div><div class="mid">
+        <p class="nm">${cName}</p>
         <p class="opt">${[c.variantLabel?(S.lang==='ar'?c.variantLabel.ar:c.variantLabel.en):null, ...c.addonLabels.map(a=>S.lang==='ar'?a.ar:a.en)].filter(Boolean).join(' · ')||'&nbsp;'}</p>
         <div class="stepper" style="display:flex;align-items:center;gap:8px"><button onclick="App.cartStep('${c.key}',-1)">–</button><span>${c.qty}</span><button onclick="App.cartStep('${c.key}',1)">+</button></div>
-      </div><div style="text-align:end"><div class="price">${money(c.lineTotal)}</div><button class="rm" onclick="App.cartRemove('${c.key}')">${S.lang==='ar'?'حذف':'Remove'}</button></div></div>`).join('')}
+      </div><div style="text-align:end"><div class="price">${money(c.lineTotal)}</div><button class="rm" onclick="App.cartRemove('${c.key}')">${S.lang==='ar'?'حذف':'Remove'}</button></div></div>`;
+    }).join('')}
     ${S.cart.length? `
       <div class="promorow" style="display:flex;gap:8px;margin:14px 0;">
         <input id="promoInput" placeholder="${t('promo')}" value="${S.promo?S.promo.code:''}" style="flex:1;border:1px solid var(--cream-200);border-radius:9px;padding:9px 12px;font-size:12.5px;background:var(--white);">
@@ -904,8 +963,8 @@ function scrCheckout(){
       <div class="totalline grand"><span>${t('total')}</span><span>${money(t1.total)} ${unitCur()}</span></div></div>
   </div>
   <div style="position:absolute;bottom:0;inset-inline:0;padding:14px 18px;background:var(--cream-050);border-top:1px solid var(--cream-200);display:flex;flex-direction:column;gap:8px;">
-    <button class="btn-primary" onclick="App.submitPayment(false)">${t('payNow')} · ${money(t1.total)} ${unitCur()}</button>
-    <button style="border:none;background:none;color:var(--ink-400);font-size:11px" onclick="App.submitPayment(true)">${S.lang==='ar'?'محاكاة فشل الدفع (اختبار)':'Simulate payment failure (test)'}</button>
+    <button class="btn-primary" onclick="App.submitPayment()">${t('payNow')} · ${money(t1.total)} ${unitCur()}</button>
+    ${window.AlnadlDevTools && window.AlnadlDevTools.renderPaymentTestControl ? window.AlnadlDevTools.renderPaymentTestControl() : ''}
   </div>`;
 }
 

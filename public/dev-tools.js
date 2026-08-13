@@ -59,6 +59,35 @@
     try{ S._demoPoints = await api('GET','/api/demo/points'); render(); }catch(e){ S._demoPoints = []; render(); }
   };
 
+  // Demo-only payment failure test path. The real, production
+  // submitPayment() in app.js no longer accepts or sends a simulateFail
+  // flag at all -- this is a fully separate function, reachable only
+  // through a button this file itself injects into scrCheckout() via the
+  // window.AlnadlDevTools.renderPaymentTestControl() extension point,
+  // which is never present at all in production (this whole file is
+  // server-gated exactly like /api/demo/points).
+  App.submitPaymentSimulatedFail = async function(){
+    S.ui.err=null;
+    try{
+      if(!S.currentOrder){
+        const payload = {
+          pointId: S.qrContext.point.id,
+          customerName: S.checkoutName || null,
+          customerPhone: S.checkoutPhone || null,
+          promoCode: S.promo ? S.promo.code : null,
+          redeemPoints: S.redeemPoints || 0,
+          walletId: (S.payMethod==='wallet' && S.wallet) ? S.wallet.id : null,
+          items: S.cart.map(c=>({ productId:c.productId, variantId:c.variantId, addonIds:c.addonIds, qty:c.qty, notes:c.notes })),
+        };
+        const created = await api('POST', '/api/orders', payload);
+        S.currentOrder = { id: created.id, status: created.status };
+      }
+      const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod, simulateFail:true });
+      S.currentOrder.status = result.status;
+      App.goScreen('paymentResult');
+    }catch(e){ showErr(e.message); }
+  };
+
   window.AlnadlDevTools = {
     renderDemoLogin(){
       const chooseUser = S.lang==='ar' ? 'اختر مستخدمًا تجريبيًا' : 'Choose a demo user';
@@ -85,6 +114,11 @@
             : `<div class="statepanel"><div class="glyph">—</div><p>${noDemoPoints}</p></div>`)}
         </div>
       </div></div></div>`;
+    },
+
+    renderPaymentTestControl(){
+      const label = S.lang==='ar' ? 'محاكاة فشل الدفع (اختبار)' : 'Simulate payment failure (test)';
+      return `<button style="border:none;background:none;color:var(--ink-400);font-size:11px" onclick="App.submitPaymentSimulatedFail()">${label}</button>`;
     },
   };
 
