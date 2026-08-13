@@ -1,4 +1,4 @@
-> **Version:** v2.0.7-p5-inc2-corrective · **Status:** P5-Inc-2 SECURITY CORRECTIVE ROUND DELIVERED (capability-token authorization + RBAC on Policy Overrides), awaiting review before P5-Inc-3 begins · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.7-p5-inc2-corrective`
+> **Version:** v2.0.8-p5-inc3 · **Status:** P5-Inc-3 DELIVERED (Experience Ledger + Events + Admin/Partner Visibility), awaiting review before P5-Inc-4 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.8-p5-inc3`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,41 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-3 — سجل التسليم الفعلي (Experience Ledger + Visibility)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-4.**
+
+### الإجابة الكاملة على السؤال المحوري
+
+كل حقل من "من/أي Session عُرض له ماذا؟ متى؟ بأي Personality/Mechanic/Payload؟ ولماذا؟ وما النتيجة؟" له الآن حقل مُخزَّن حقيقي، لا استنتاج:
+
+| السؤال | الحقل الفعلي |
+|---|---|
+| أي Session | `moment.session_id` → `engage_session` |
+| ماذا (Payload) | `payload_version.rendered_payload_json` — النص الحرفي المعروض |
+| متى | `moment.created_at` |
+| أي Personality | `engage_session.personality` |
+| أي Mechanic | `moment.mechanic_version_id` → `mechanic.name` |
+| **لماذا** | **`moment.selection_reason` — حقل جديد، يُسجَّل صراحة عند كل عرض** (حاليًا: Round-Robin ثابت، بصياغة صادقة — "static_round_robin: mechanic=X pool_index=N/M" — وليس منطقًا مُختلَقًا) |
+| **النتيجة** | **`response_event.response_payload_json` + `moment.status` (`completed`/`skipped`)** |
+
+### عزل الخصوصية بين الشركاء — مُطبَّق هيكليًا وليس بفلترة
+
+**قرار تصميمي متعمَّد**: `getFullLedger()` (تفصيل كامل، SuperAdmin) و`getPartnerOverview()` (مُجمَّع، الشريك) **دالتان منفصلتان تمامًا** في `lib/engage-ledger.js` — وليست دالة واحدة بفلتر يُطبَّق حسب الدور. دالة الشريك **لا تستعلم** أعمدة `rendered_payload_json`/`mechanic.name`/`selection_reason` إطلاقًا في SQL نفسه — هذا يجعل أي تعديل مستقبلي عرضي **مستحيلًا هيكليًا** أن يُسرِّب هذه البيانات لشاشة شريك، لا مجرد "منسي إخفاؤه". **مُختبَر بفحص بنيوي فعلي**: تحقَّق الاختبار من نص استجابة JSON الفعلي لـPartner Overview وأثبت غياب هذه الحقول تمامًا.
+
+### شروط القبول — كل بند، بدليله الفعلي
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| السجل يجيب من/ماذا/متى/شخصية/آلية/لماذا/نتيجة | ✅ | كل حقل مُختبَر فرديًا من `GET /api/admin/engage/ledger` |
+| Tenant Isolation، لا كشف بيانات شريك لآخر | ✅ | `getPartnerOverview` مُختبَرة بنيويًا، `?partnerId=` تصفية مُختبَرة فعليًا |
+| عدم إدخال Core→Engage dependency | ✅ | صفر تعديل على أي جدول Core في `migrations/008_engage_inc3.js` |
+| Duplicate/Idempotent events | ✅ | نفس `idempotencyKey` مرتين → صف واحد بالضبط في `response_event` |
+| Cross-tenant access → رفض | ✅ | PartnerAdmin يُمنَع من Ledger الكامل بالكامل (403)، لا فلترة جزئية |
+| Session/Pass ownership | ✅ | جلسة B (رمز صحيح) لا تستطيع الرد على لحظة تخص جلسة A → 403 |
+| Partner لا يصل لـAI/internal intelligence | ✅ | فحص بنيوي مباشر على استجابة JSON الفعلية — لا `mechanic_name`/`rendered_payload`/`selection_reason` |
+| 159/159 Baseline محفوظ | ✅ | **194/194 الآن** (159 + 35 اختبارًا جديدًا لـInc-3) |
 
 ## P5-Inc-2 — الجولة التصحيحية الأمنية (Authorization/Capability Tokens)
 

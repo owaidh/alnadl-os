@@ -14,6 +14,7 @@ const suites = [
   './auth-unit.js',
   './engage-inc1.js',
   './engage-inc2.js',
+  './engage-inc3.js',
 ];
 
 (async () => {

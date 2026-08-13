@@ -1,4 +1,4 @@
-> **Version:** v2.0.7-p5-inc2-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 (security-corrected) tables · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.7-p5-inc2-corrective
+> **Version:** v2.0.8-p5-inc3 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.8-p5-inc3
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,13 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### جداول Experience Ledger — Phase 5 P5-Inc-3 (`migrations/008_engage_inc3.js`)
+- **`moment.selection_reason`** — عمود إضافي جديد؛ يُسجِّل صراحة *لماذا* اختير هذا المحتوى (حاليًا: Round-Robin ثابت، بصياغة صادقة تصف الواقع فعليًا وليس منطق ذكاء اصطناعي غير موجود بعد)
+- **`experience_event`** — سجل دورة حياة الجلسة الكامل (`session_start`/`moment_served`/`moment_completed`/`moment_skipped`/`session_end`)، كل صف بختم زمني حقيقي
+- **`response_event`** — استجابة العميل الفعلية لكل لحظة، مع `idempotency_key` (فهرس فريد جزئي `WHERE idempotency_key IS NOT NULL`) يمنع تسجيل نفس التفاعل مرتين عند إعادة إرسال الطلب
+
+**العزل المعماري محفوظ بالكامل**: كل جدول أعلاه Engage بحت — لا عمود ولا قيد جديد على أي جدول Core.
 
 ### تصحيح أمني — Capability Tokens (`migrations/007_engage_session_auth.js`)
 **`engage_pass.access_token`** و**`engage_session.access_token`** (عمودان إضافيان، `UNIQUE`، عشوائيان تشفيريًا 24 بايت) — الآن **السبيل الوحيد** لعنونة أي Pass/Session من واجهة العميل؛ لا يُقبَل `id` الداخلي كمُدخَل بعد الآن في أي نقطة نهاية Engage. يُغلق ثغرة IDOR حقيقية كانت موجودة في الإصدار الأول من Inc-2 (الاعتماد على `id` وحده، القابل للتخمين نظريًا). راجع `docs/PHASE5_GAP_ANALYSIS.md` قسم "الجولة التصحيحية الأمنية" للتفصيل الكامل.

@@ -18,7 +18,8 @@ const { getOrCreateAccount, earnPoints, quoteRedemption, commitRedemption } = re
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker } = require('./lib/engage-worker.js');
-const { startSession, serveNextMoment, endSession } = require('./lib/engage-session.js');
+const { startSession, serveNextMoment, submitResponse, endSession } = require('./lib/engage-session.js');
+const { getFullLedger, getAdminOverview, getPartnerOverview } = require('./lib/engage-ledger.js');
 const gateway = getGateway();
 
 const PORT = process.env.PORT || 8787;
@@ -480,6 +481,26 @@ on('POST', '/api/engage/session/:token/end', null, async (req, res, p) => {
     const session = endSession(p.token);
     sendJSON(res, 200, { id: session.id, status: session.status });
   } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+on('POST', '/api/engage/session/:token/moment/:momentId/respond', null, async (req, res, p) => {
+  const b = await readBody(req);
+  try {
+    const result = submitResponse(p.token, p.momentId, b.action, b.idempotencyKey);
+    sendJSON(res, 200, result);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+
+/* Phase 5 P5-Inc-3: Experience Ledger + Admin/Partner Visibility.
+   Two structurally separate read paths -- see lib/engage-ledger.js for why
+   this is deliberate, not an oversight to later "add a filter" to. */
+on('GET', '/api/admin/engage/ledger', ['SuperAdmin'], async (req, res, p, query) => {
+  sendJSON(res, 200, getFullLedger({ partnerId: query.partnerId, limit: query.limit ? parseInt(query.limit) : undefined }));
+});
+on('GET', '/api/admin/engage/overview', ['SuperAdmin'], async (req, res) => {
+  sendJSON(res, 200, getAdminOverview());
+});
+on('GET', '/api/partner/engage/overview', ['PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  sendJSON(res, 200, getPartnerOverview(session.scope));
 });
 
 /* ------------------------------ REFUNDS (Q03) --------------------------------- */

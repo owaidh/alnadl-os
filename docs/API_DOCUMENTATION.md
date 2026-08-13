@@ -1,4 +1,4 @@
-> **Version:** v2.0.7-p5-inc2-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 (capability-token auth) endpoints · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.7-p5-inc2-corrective
+> **Version:** v2.0.8-p5-inc3 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.8-p5-inc3
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -383,6 +383,21 @@ Authorization: Bearer <token>
 
 ### `GET /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
 نفس الحماية؛ `PartnerAdmin` يرى فقط ما يخص شركته.
+
+### `POST /api/engage/session/:sessionToken/moment/:momentId/respond` — Phase 5 P5-Inc-3
+```json
+{ "action": "completed", "idempotencyKey": "optional-client-generated-key" }
+```
+`action` يجب أن تكون `completed` أو `skipped` (`400` لأي قيمة أخرى). **فحص ملكية صريح**: اللحظة يجب أن تخص الجلسة المُخوَّلة بالضبط عبر `sessionToken` — محاولة الرد على لحظة تخص جلسة أخرى (حتى بتوكن جلسة صحيح آخر) تُرفَض بـ`403`. `idempotencyKey` اختياري يمنع تكرار التسجيل عند إعادة الإرسال — نفس نمط `POST /api/orders/:id/refund` تمامًا.
+
+### `GET /api/admin/engage/ledger` — `SuperAdmin` فقط
+السجل الكامل: كل لحظة، بالـPayload الحرفي، الشخصية، الآلية، `selection_reason`، والنتيجة الفعلية إن وُجدت. يدعم `?partnerId=` للتصفية (لراحة SuperAdmin عند التحقيق في شريك محدد، وليس إلزاميًا).
+
+### `GET /api/admin/engage/overview` — `SuperAdmin` فقط
+إحصاءات مُجمَّعة: `eligible`/`offered`/`started`/`completed`، توزيع الشخصيات، ودورة حياة الآليات.
+
+### `GET /api/partner/engage/overview` — `PartnerAdmin`/`PartnerViewer`
+**⚠️ عزل خصوصية صارم مُطبَّق بنيويًا وليس بفلترة لاحقة**: يُرجع إحصاءات مُجمَّعة لشريك واحد فقط (`offered`/`completed`/توزيع الشخصيات) — **لا Payload، لا اسم آلية، لا `selection_reason`، لا أي تفاصيل داخلية** — الدالة نفسها (`lib/engage-ledger.js`) لا تستعلم هذه الأعمدة إطلاقًا لهذا المسار، وليس فقط تُخفيها.
 
 ## ملاحظة حول Idempotency وWebhooks (Q03، §18)
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل
