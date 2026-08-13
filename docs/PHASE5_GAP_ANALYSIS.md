@@ -1,4 +1,4 @@
-> **Version:** v2.0.17-p5-inc7 · **Status:** P5-Inc-7 DELIVERED (AI Provider Layer + Orchestration + Safety Pipeline + Semantic Novelty), awaiting review before P5-Inc-8 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.17-p5-inc7`
+> **Version:** v2.0.18-p5-inc7-corrective · **Status:** P5-Inc-7 CORRECTIVE ROUND DELIVERED (honest method naming + genuine vector-embedding pipeline), awaiting review before P5-Inc-8 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.18-p5-inc7-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,74 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-7 — الجولة التصحيحية (تسمية صادقة لـ`semantic_embedding` + بنية Embedding حقيقية)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-8.**
+
+### الملاحظة — مقبولة بالكامل ومُصحَّحة
+
+**ما كان موجودًا فعليًا**: `checkNoveltySemantic()` (تطبيع مفاهيم + Jaccard) كانت تُسجِّل `method='semantic_embedding'` — لكنها **ليست** تشابهًا مبنيًا على متجهات (Vectors) إطلاقًا، رغم كونها تقنية حقيقية ومفيدة قياسًا بالتداخل النصي الخام.
+
+### 1) التسمية الصادقة — `semantic_concept_similarity`
+
+الدالة (أُعيدت تسميتها `checkNoveltyConceptSimilarity`) تُسجِّل الآن `method='semantic_concept_similarity'` صراحة — **لن تُخزَّن أبدًا كـ`semantic_embedding`**. **تبقى متاحة كمرشِّح أولي اختياري خفيف**، وهي أيضًا شبكة الأمان التي يتراجع إليها مسار Embedding الحقيقي تلقائيًا عند فشل المزوّد (راجع بند التدهور الآمن أدناه).
+
+### 2) بنية Embedding حقيقية — مستقلة عن المزوّد
+
+`lib/engage-embedding-provider.js`: واجهة `embed(text) -> {vector, model, modelVersion}` + `MockEmbeddingProvider`. **التقنية المُستخدَمة بصراحة تامة**: Character N-gram Feature Hashing (نفس الآلية خلف `HashingVectorizer` في scikit-learn وجزء من كيفية تمثيل fastText للمعلومات الفرعية) — **دالة رياضية بحتة على أحرف النص**، **بلا أي قاموس مُنسَّق إطلاقًا** — تعمل بنفس الآلية على أي لغة، بما فيها العربية، دون أي قاعدة خاصة باللغة.
+
+**صدق حول الحدود**: هذه التقنية تلتقط تشابهًا **معجميًا/صرفيًا** (تداخل حروف/جذور مشتركة) — **لا تلتقط ترادفًا دلاليًا خالصًا** (كلمات مختلفة تمامًا بنفس المعنى، بلا أي تداخل حرفي). ذلك يتطلب نموذج Embedding عصبي مُدرَّب حقيقي — وهو تحديدًا **بنية مزوّد AI حقيقية**، مُصنَّفة أدناه بصراحة كـPre-Go-Live.
+
+**التخزين**: `exposure_memory.embedding_vector_json`/`embedding_model`/`embedding_model_version` (أعمدة جديدة، Nullable — فشل Embedding لا يكسر الصف). **التدهور الآمن**: عند فشل مزوّد Embedding (خطأ/Timeout=2s)، `checkNoveltyEmbedding()` **يتراجع تلقائيًا** لـ`checkNoveltyConceptSimilarity()` مع `degraded:true` صريح — **لا يكسر الجلسة أبدًا**، مُختبَر من طرف لطرف عبر HTTP حقيقي.
+
+### 3) الدليل — على أزواج **لم تُدرَج في أي قاموس مُرادفات بهذا المستودع إطلاقًا**، شاملة العربية
+
+| الزوج | Cosine Similarity الفعلي |
+|---|---|
+| نص متطابق | 1.000 |
+| محتوى غير مرتبط تمامًا (إنجليزي) | 0.160 |
+| **"discovery" مقابل "discover"** (إنجليزي، **غير موجود في `CONCEPT_MAP`**) | **0.504** |
+| محتوى عربي غير مرتبط | 0.220 |
+| **زوج عربي بجذر مشترك (ك-ت-ش-ف)، غير مُدرَج بأي قاموس** | **0.597** |
+
+**فرق حقيقي وقابل للقياس** بين المرتبط وغير المرتبط، بنفس التقنية بالضبط على لغتين مختلفتين تمامًا، دون أي إدخال يدوي لهذه الأزواج تحديدًا في أي قاموس.
+
+### خلل اختباري حقيقي اكتُشف أثناء كتابة الاختبار نفسه (وليس خللاً في المنتج)
+
+اختبار العتبة القابلة للتهيئة استخدم نفس نطاق `partner:pt_nova` مرتين بقيمتين مختلفتين — لكن `setNoveltyPolicyOverride()` **تُدرِج صفًا جديدًا دائمًا ولا تستبدل صفًا قائمًا**، والاستعلام غير المُرتَّب (`SELECT` بلا `ORDER BY`) لا يضمن إرجاع آخر صف مُدرَج. أُصلح باستخدام نطاق Property مستقل ولم يُلمَس من قبل — وليس بتعديل أي منطق إنتاجي.
+
+### 4) تصنيف جاهزية المزوّد — صراحةً، لا وسمًا متفائلًا
+
+| المكوّن | الحالة الحقيقية |
+|---|---|
+| `lib/engage-ai-provider.js` (توليد المحتوى) | **`MockAIProvider` فقط، أساسي وبديل كلاهما** — صحيح ومقصود لبيئة CI الحتمية |
+| `lib/engage-embedding-provider.js` (Embedding) | **`MockEmbeddingProvider` فقط** — نفس المبدأ |
+| **الحالة الرسمية لكليهما** | ❌ **Pre-Go-Live / Integration Pending** — يتطلب: مزوّد حقيقي مُتعاقَد عليه فعليًا + بيانات اعتماد/إعدادات حقيقية + سلوك Timeout/Abort على مستوى الإنتاج + تحقق نشر فعلي. **لن يُدَّعى إغلاقه قبل ذلك** |
+| اسم مزوّد مُثبَّت في طبقة النطاق؟ | **لا، أبدًا** — لا OpenAI ولا Anthropic ولا أي اسم مزوّد أُثبِّت مباشرة في `lib/engage-*.js` — البنية العامة (`generate()`/`embed()`) هي كل ما تعرفه طبقة النطاق |
+
+### ENG-NOV-001 — الآن Done فعليًا، بمعيار صحيح
+
+`method='semantic_embedding'` **لا يُسجَّل الآن إلا عند تشغيل تشابه Vector حقيقي فعليًا** — مُثبَت بأرقام حقيقية على أزواج غير مُدرَجة بأي قاموس، شاملة العربية، مع تدهور آمن مُختبَر.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| إعادة تسمية صادقة (`semantic_concept_similarity`) | ✅ | لا تُخزَّن كـ`semantic_embedding` أبدًا بعد الآن |
+| الإبقاء عليها كمرشِّح أولي اختياري | ✅ | لا تزال مُصدَّرة ومُستخدَمة كشبكة أمان للتدهور |
+| `EmbeddingProvider` مستقلة عن المزوّد | ✅ | نفس مبدأ `MockGateway`/`MockAIProvider` |
+| `MockEmbeddingProvider` حتمي للاختبار الآلي | ✅ | تحكم عبر قاعدة بيانات مشتركة، بنفس درس Inc-7 الأصلي |
+| توليد Vector + تخزين Vector/Model/Version | ✅ | أعمدة جديدة في `exposure_memory`، مُتحقَّق منها مباشرة |
+| Cosine Similarity (أو مقياس مُوثَّق مكافئ) | ✅ | دالة مُختبَرة مباشرة (متطابق=1.0) |
+| عتبة دلالية قابلة للتهيئة | ✅ | `embedding_threshold`، مُختبَرة أنها تُغيِّر السلوك فعليًا |
+| عزل الشريك/الخصوصية | ✅ | نفس الهاتف لدى شريكين → غير مُصنَّف تكرارًا |
+| فشل Embedding يتدهور بأمان | ✅ | مُختبَر مباشرة + من طرف لطرف عبر HTTP حقيقي |
+| دليل على أزواج غير مُدرَجة بقاموس، شاملة العربية | ✅ | جدول أرقام حقيقي أعلاه |
+| `semantic_embedding` + ENG-NOV-001→Done بعد دليل حقيقي فقط | ✅ | مُطبَّق بنيويًا في الكود نفسه، لا بالتوثيق فقط |
+| تصنيف جاهزية المزوّد بصدق (Pre-Go-Live) | ✅ | كلا المزوِّدين (توليد + Embedding) مُصنَّفان صراحة |
+| عدم تثبيت اسم مزوّد في طبقة النطاق | ✅ | مُتحقَّق: لا OpenAI/Anthropic في أي ملف `lib/engage-*.js` |
+| الحفاظ على سلوك Inc-7 و407/407 كخط أساس | ✅ | **422/422 الآن** (407 - 50 + 65 لمجموعة Inc-7 المُحدَّثة) |
 
 ## P5-Inc-7 — سجل التسليم الفعلي (AI Provider Layer + Orchestration + Safety + Semantic Novelty)
 

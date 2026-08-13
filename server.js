@@ -464,11 +464,18 @@ on('POST', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'],
     // read-time clamp in resolveNoveltyPolicy() remains as defense-in-depth
     // for any value that reaches the table by another path, but the write
     // path itself must refuse bad input outright.
-    const { setNoveltyPolicyOverride, MIN_WINDOW_DAYS, MAX_WINDOW_DAYS, MIN_THRESHOLD, MAX_THRESHOLD } = require('./lib/engage-novelty.js');
-    if (!['novelty_window_days', 'novelty_threshold'].includes(b.policyKey)) return sendJSON(res, 400, { error: 'policyKey must be novelty_window_days or novelty_threshold' });
+    // Inc-7 corrective round: embedding_threshold added -- same bounds
+    // validation discipline as novelty_threshold, controls the genuine
+    // vector-embedding similarity cutoff (checkNoveltyEmbedding()) rather
+    // than the concept/text methods' threshold.
+    const { setNoveltyPolicyOverride, MIN_WINDOW_DAYS, MAX_WINDOW_DAYS, MIN_THRESHOLD, MAX_THRESHOLD, MIN_EMBEDDING_THRESHOLD, MAX_EMBEDDING_THRESHOLD } = require('./lib/engage-novelty.js');
+    if (!['novelty_window_days', 'novelty_threshold', 'embedding_threshold'].includes(b.policyKey)) return sendJSON(res, 400, { error: 'policyKey must be novelty_window_days, novelty_threshold, or embedding_threshold' });
     if (typeof b.value !== 'number' || Number.isNaN(b.value)) return sendJSON(res, 400, { error: 'value must be a number' });
     if (b.policyKey === 'novelty_threshold' && (b.value < MIN_THRESHOLD || b.value > MAX_THRESHOLD)) {
       return sendJSON(res, 400, { error: `novelty_threshold must be between ${MIN_THRESHOLD} and ${MAX_THRESHOLD} inclusive` });
+    }
+    if (b.policyKey === 'embedding_threshold' && (b.value < MIN_EMBEDDING_THRESHOLD || b.value > MAX_EMBEDDING_THRESHOLD)) {
+      return sendJSON(res, 400, { error: `embedding_threshold must be between ${MIN_EMBEDDING_THRESHOLD} and ${MAX_EMBEDDING_THRESHOLD} inclusive` });
     }
     if (b.policyKey === 'novelty_window_days' && (b.value < MIN_WINDOW_DAYS || b.value > MAX_WINDOW_DAYS || !Number.isInteger(b.value))) {
       return sendJSON(res, 400, { error: `novelty_window_days must be a whole number between ${MIN_WINDOW_DAYS} and ${MAX_WINDOW_DAYS} inclusive` });
