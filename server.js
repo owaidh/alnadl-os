@@ -452,6 +452,32 @@ on('GET', '/api/engage/pass/:token', null, async (req, res, p) => {
   sendJSON(res, 200, { id: pass.id, status: isExpired ? 'expired' : pass.status, expiresAt: pass.expires_at, createdAt: pass.created_at });
 });
 
+/* UX-5: a guest's ONLY way to discover they have an Engage pass.
+   Until now nothing connected an order to its pass from the guest side:
+   the Worker creates the pass asynchronously (order.confirmed outbox
+   event), and every other Engage endpoint already requires the pass
+   token you would only have if something had already told you it. That
+   made the entire Engage experience unreachable for a real customer --
+   the missing first link in the chain, not a styling gap.
+
+   Deliberately narrow: it returns ONLY whether an eligible pass exists
+   and its own capability token. It exposes no personality, no mechanic,
+   no AI internals, no session state -- everything else still comes from
+   the existing session endpoints, which enforce their own rules. A
+   missing/ineligible/expired pass returns a plain { eligible: false },
+   never an error the guest UI would have to interpret, and never a hint
+   about WHY (per §11: "not expose policy internals... to the guest").
+   Engage being disabled by any flag simply means no pass was ever
+   created, which arrives here as eligible:false and sends the guest
+   straight back to the normal hospitality flow. */
+on('GET', '/api/orders/:id/engage-pass', null, async (req, res, p) => {
+  const pass = db.prepare('SELECT access_token, status, expires_at FROM engage_pass WHERE order_id = ?').get(p.id);
+  if (!pass) return sendJSON(res, 200, { eligible: false });
+  const expired = Date.now() > pass.expires_at;
+  if (pass.status !== 'active' || expired) return sendJSON(res, 200, { eligible: false });
+  sendJSON(res, 200, { eligible: true, accessToken: pass.access_token, expiresAt: pass.expires_at });
+});
+
 /* Phase 5 P5-Inc-2 (corrective round): Venue Policy Override — Ceiling and
    other precedence-chain settings (partner/property/zone scoped). RBAC-gated:
    SuperAdmin can set at any scope; PartnerAdmin only within their own

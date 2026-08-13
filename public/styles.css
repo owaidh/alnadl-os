@@ -508,3 +508,70 @@ table.datatable td{ color:var(--cream-100); padding:9px 10px; border-bottom:1px 
   .phone{ border-width:0; border-radius:0; min-height:100vh; }
   .fohshell{ padding:0; }
 }
+
+/* ==========================================================================
+   UX-5: Engage Experience (spec §11)
+   "Engage must feel like five distinct experience modes governed by the
+   same design system — not one generic chat/card surface with different
+   copy." Each mode below changes surface, rhythm, type treatment and
+   density — while sharing the same tokens, the same 44px targets, and
+   the same reduced-motion respect as everything else in this product.
+   ========================================================================== */
+
+/* Invitation on the tracking screen — optional, never blocking (G11) */
+.engage-invite{ display:flex; align-items:center; gap:12px; margin-top:18px; padding:14px; border-radius:var(--r-md); background:linear-gradient(135deg,var(--purple-100),var(--cream-100)); border:1px solid var(--purple-200); }
+.engage-invite .engage-mark{ width:34px;height:34px;border-radius:var(--r-sm); background:var(--purple-500); color:var(--white); display:flex;align-items:center;justify-content:center; font-size:16px; flex-shrink:0; }
+.engage-invite .t{ flex:1; min-width:0; }
+.engage-invite .t b{ display:block; font-size:13px; color:var(--purple-800); }
+.engage-invite .t span{ display:block; font-size:11px; color:var(--ink-400); margin-top:1px; }
+.engage-invite button{ border:none; background:var(--purple-500); color:var(--white); padding:10px 16px; border-radius:var(--r-sm); font-weight:800; font-size:12.5px; min-height:var(--touch-guest); flex-shrink:0; }
+
+/* Shared Engage shell */
+.engage{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:24px 20px; }
+.engage-card{ width:100%; max-width:340px; text-align:center; }
+.engage-card .engage-mark{ font-size:26px; color:var(--purple-400); margin-bottom:10px; }
+.engage-kicker{ font-size:12px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; opacity:.75; margin-bottom:10px; }
+.engage-body{ margin:0 0 22px; }
+.engage-actions{ display:flex; flex-direction:column; gap:10px; }
+.engage-skip{ border:none; background:none; font-size:12px; font-weight:600; opacity:.6; min-height:var(--touch-guest); }
+.engage-exit{ margin-top:18px; border:none; background:none; font-size:11px; opacity:.45; min-height:var(--touch-guest); }
+.engage-progress{ display:flex; gap:5px; justify-content:center; margin-bottom:16px; }
+.engage-progress span{ width:22px; height:3px; border-radius:2px; background:currentColor; opacity:.2; }
+.engage-progress span.on{ opacity:.85; }
+
+/* RESET — calm, minimal, generous whitespace, one clear moment */
+.engage.reset{ background:var(--cream-050); }
+.engage.reset .engage-card{ color:var(--ink-700); }
+.engage.reset .engage-body{ font-family:var(--display); font-size:20px; line-height:1.9; font-weight:400; padding:0 6px; }
+.engage.reset .engage-kicker{ display:none; }
+
+/* SPARK — light curiosity, compact card, playful but premium */
+.engage.spark{ background:linear-gradient(160deg,var(--purple-100),var(--cream-050)); }
+.engage.spark .engage-card{ color:var(--purple-800); background:var(--white); border-radius:var(--r-lg); padding:24px 20px; box-shadow:var(--shadow-floating); }
+.engage.spark .engage-body{ font-size:16px; line-height:1.6; font-weight:600; }
+
+/* DISCOVER — visual discovery, richer surface, contextual */
+.engage.discover{ background:linear-gradient(150deg,var(--purple-700),var(--purple-950)); }
+.engage.discover .engage-card{ color:var(--cream-050); }
+.engage.discover .engage-kicker{ color:var(--lime-500); }
+.engage.discover .engage-body{ font-family:var(--display); font-size:19px; line-height:1.65; font-weight:700; }
+.engage.discover .btn-primary{ background:var(--white); color:var(--purple-800); }
+
+/* PLAY — energetic, clear participation state */
+.engage.play{ background:linear-gradient(145deg,var(--purple-500),var(--purple-800)); }
+.engage.play .engage-card{ color:var(--white); }
+.engage.play .engage-kicker{ color:var(--lime-500); font-size:13px; }
+.engage.play .engage-body{ font-family:var(--display); font-size:22px; line-height:1.45; font-weight:900; }
+.engage.play .btn-primary{ background:var(--lime-500); color:var(--purple-950); }
+.engage.play .engage-progress span{ height:5px; width:26px; }
+
+/* MIND — elegant cognitive presentation, focused typography */
+.engage.mind{ background:var(--purple-950); }
+.engage.mind .engage-card{ color:var(--cream-100); }
+.engage.mind .engage-body{ font-family:var(--display); font-size:18px; line-height:1.85; font-weight:400; letter-spacing:.01em; }
+.engage.mind .engage-kicker{ color:var(--purple-300); }
+.engage.mind .btn-primary{ background:transparent; border:1px solid var(--purple-300); color:var(--cream-050); box-shadow:none; }
+
+/* End state shares the mode's surface so closure feels part of the same
+   experience, not a jarring hand-off to a generic screen. */
+.engage-card.end h2{ font-family:var(--display); font-size:20px; font-weight:700; margin:0; }

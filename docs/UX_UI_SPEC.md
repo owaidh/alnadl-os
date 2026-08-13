@@ -1,4 +1,4 @@
-> **Version:** v2.5.0-ux4-superadmin · **Status:** UX-4 (SuperAdmin IA) DELIVERED (13 flat buttons replaced by 5 domain-grouped sidebar matching SA02-SA07, persistent scope breadcrumb, all 13 modules verified reachable, responsive collapse) — 532/532 unchanged · **Last Updated:** 2026-08-13 · **Baseline:** `v2.4.1-ux3-corrective` · **This Wave's Tag:** `v2.5.0-ux4-superadmin`
+> **Version:** v2.6.0-ux5-engage · **Status:** UX-5 (Engage Experience) DELIVERED — G11 closed: the Engage guest surface did not exist at all, and the order→pass link was missing server-side. Five genuinely distinct personality modes (3/3 distinct signatures verified), all failure paths end calmly, zero token/AI-internal leakage. 532/532 unchanged · **Last Updated:** 2026-08-13 · **Baseline:** `v2.5.0-ux4-superadmin` · **This Wave's Tag:** `v2.6.0-ux5-engage`
 
 # Alnadl Hospitality OS — UX/UI Specification (§26.1)
 
@@ -123,6 +123,60 @@
 - **Backend Regression**: **504/504 دون تغيير** — قبل وبعد كل تعديل، مُتحقَّق منه 3 مرات منفصلة
 - **Browser E2E**: صفر أخطاء (Playwright، تدفّق الطلب الكامل)
 - **QA بصري**: 15 لقطة شاشة حقيقية — تدفّق الضيف (AR+EN)، تسجيل دخول (تطوير+إنتاج)، SuperAdmin، KDS، حالة Skeleton أثناء التحميل الفعلي (تأخير API متعمَّد لالتقاطها)، حالتا الإنتاج (QR غير صالح + نموذج دخول حقيقي ناجح)
+
+---
+
+# UX-5 — تجربة Engage (وإغلاق G11 المؤجَّل)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم.**
+
+**المصدر**: القسم 11 (Engage Experience UX) + G11 من القسم 21 (المؤجَّل صراحةً في UX-1).
+
+## اكتشاف حقيقي: الواجهة لم تكن موجودة إطلاقًا — وحلقة مفقودة في الخادم
+
+فحص مباشر: **صفر** ذكر لـEngage في `public/app.js`. منظومة Phase 5 كاملة (532 اختبارًا، ثمانية Increments) كانت **غير قابلة للوصول من أي عميل حقيقي**.
+
+**والأهم — حلقة مفقودة في الخادم نفسه**: العامل (Worker) يُنشئ الـPass **لا تزامنيًا** عبر حدث `order.confirmed`، وكل نقاط Engage الأخرى **تطلب رمز الـPass** الذي لن تملكه إلا إذا أخبرك أحد به — **ولا شيء كان يربط الطلب بـPass الخاص به من جهة العميل**. لم تكن فجوة تنسيق، بل **الحلقة الأولى المفقودة في السلسلة كلها**.
+
+**الإصلاح**: `GET /api/orders/:id/engage-pass` — ضيّق عمدًا: يُرجع **فقط** الأهلية والرمز. لا شخصية، لا آلية، لا حالة جلسة، لا أي داخليات. وغير المؤهَّل يُرجع `{eligible:false}` **بلا سبب** — تطبيقًا لـ§11: *"not expose policy internals... to the guest"*.
+
+## خمسة أنماط متمايزة فعليًا — لا بطاقة واحدة بألوان مختلفة
+
+| النمط | المعالجة الفعلية |
+|---|---|
+| **RESET** | سطح كريمي هادئ، خط عرضي 20px بتباعد 1.9، **بلا مؤشر تقدّم إطلاقًا** (عدّاد يناقض "لحظة واحدة واضحة") |
+| **SPARK** | بطاقة بيضاء مدمجة بظل عائم، 16px/600 |
+| **DISCOVER** | تدرّج بنفسجي عميق، عنوان ليموني، زر أبيض، 19px/700 |
+| **PLAY** | تدرّج طاقة، **22px/900**، زر ليموني، مؤشر تقدّم أعرض (حالة مشاركة واضحة) |
+| **MIND** | خلفية شبه سوداء، زر محدَّد بإطار فقط، تباعد أحرف مضبوط، **بلا مؤشر تقدّم** ("no pressure loops") |
+
+**تحقق برمجي**: **3 من 3 توقيعات بصرية متمايزة** (خلفية + معالجة خط) — تمايز حقيقي مقيس، لا ادعاء.
+
+## G11 — دعوة اختيارية لا تحجب شيئًا
+
+الدعوة بطاقة **أسفل** محتوى الطلب، لا تعترض ولا تستبدل شيئًا. **ولا تُعرَض إطلاقًا** عند غياب Pass مؤهَّل — وهو بالضبط ما يبدو عليه تعطيل الميزة أو Kill Switch من هنا. تحقق: `S.engage.eligible===null` يعرض **لا شيء** بدل وميض.
+
+## كل مسارات الفشل تنتهي بهدوء — لا رسالة خطأ واحدة للضيف
+
+انتهاء السقف، نفاد المحتوى الآمن، عطل مزوّد، تعطيل بـFlag — **كلها غير قابلة للتمييز من جهة الضيف بالتصميم**: إما لا دعوة أصلًا، أو خاتمة هادئة بنبرة النمط نفسه ("استمتع ببقية يومك"). التقاط الاستجابة نفسه best-effort ولا يحجب الضيف أبدًا.
+
+**مُتحقَّق بصريًا**: لقطة RESET تُظهر فعلًا الخاتمة الهادئة بعد استهلاك سقفها (لحظة واحدة) — سلوك المواصفة حرفيًا، لا حالة خطأ.
+
+## حدود الخصوصية — مُتحقَّق منها آليًا
+
+- **صفر** ظهور لـ`sessionToken`/`accessToken`/`access_token` في DOM (§11: *"No raw capability token shown or logged in UI"*)
+- **صفر** ظهور لـ`selection_reason`/`mechanic`/`provider`/`embedding`/`rendered_payload`/`prompt` (§11: *"Novelty/repetition logic is invisible to the guest"*)
+
+## نطاق مؤجَّل صراحةً
+
+- **الدعوة الجماعية (PLAY Social)**: نقاط `/invite/create` و`/invite/:token/join` جاهزة ومُختبَرة خلفيًا (Inc-5)، لكن واجهتها تحتاج تصميم حالة مشاركة وخروج آمن يستحق موجته الخاصة — §11 يطلب *"clearly show who/what is shared without exposing personal data"*، وهو قرار تصميم منتج لا مجرد تنفيذ
+- **استئناف الجلسة عبر إعادة التحميل**: الرمز يعيش في ذاكرة الصفحة فقط حاليًا؛ الاستئناف الحتمي يحتاج قرار تخزين واعٍ (§11 يطلبه *"deterministic and tenant/context bound"*)
+
+## الأدلة
+
+- **Backend Regression**: **532/532 دون تغيير**
+- **Browser E2E**: صفر أخطاء، وصفر أخطاء JavaScript عبر التدفّق الكامل
+- **QA بصري**: 3 لقطات لأنماط مختلفة فعليًا + تحققات برمجية للتمايز والخصوصية
 
 ---
 

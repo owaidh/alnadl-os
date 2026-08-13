@@ -127,6 +127,13 @@ const S = {
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
   ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, err:null }, toast:null,
+  // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
+  // token the server handed us plus eligibility — never any policy,
+  // personality reasoning, or AI internals. `moment.payload` is the
+  // already-safety-checked content the server chose to serve; the client
+  // never sees why it was chosen (spec: "Novelty/repetition logic is
+  // invisible to the guest").
+  engage:{ eligible:null, accessToken:null, session:null, moment:null, loading:false, ended:false, error:null, invite:null },
   PARTNER_ID:'pt_nova', PROPERTY_ID:'prop_nova_main',
 };
 
@@ -299,6 +306,71 @@ const App = {
       await api('POST', `/api/orders/${S.currentOrder.id}/feedback`, { stars:S.feedback.stars||5, tags:S.feedback.tags||[], comment:S.feedback.comment||'' });
       App.goScreen('feedbackThanks');
     }catch(e){ showErr(e.message); }
+  },
+
+  /* ---- Engage (UX-5, spec §11) --------------------------------------
+     Every failure path here returns the guest to the normal hospitality
+     flow rather than showing an error: per §11, "Kill-switch/off state
+     falls back to normal hospitality flow without breaking Core", and
+     "Safety... should result in safe alternative content or a clean end
+     state -- not expose policy internals or alarming moderation language
+     to the guest". An ineligible pass, a disabled feature flag, a
+     provider outage and a safety rejection are therefore ALL
+     indistinguishable to the guest by design -- they simply never see an
+     invitation, or they see a calm ending. */
+  async checkEngageEligibility(){
+    if(!S.currentOrder || S.engage.eligible!==null) return;
+    try{
+      const r = await api('GET', `/api/orders/${S.currentOrder.id}/engage-pass`);
+      S.engage.eligible = !!r.eligible;
+      S.engage.accessToken = r.accessToken || null;
+    }catch(e){ S.engage.eligible = false; } // never surfaced to the guest
+    render();
+  },
+  async startEngage(){
+    if(!S.engage.accessToken) return;
+    S.engage.loading = true; S.engage.error = null; App.goScreen('engage');
+    try{
+      const s = await api('POST','/api/engage/session/start',{ accessToken:S.engage.accessToken });
+      S.engage.session = s;
+      await App.nextMoment();
+    }catch(e){ S.engage.loading=false; S.engage.error='start'; render(); }
+  },
+  async nextMoment(){
+    if(!S.engage.session) return;
+    S.engage.loading = true; render();
+    try{
+      const m = await api('POST',`/api/engage/session/${S.engage.session.sessionToken}/next-moment`,{});
+      S.engage.moment = m;
+      S.engage.session.ceilingUsed = m.ceilingUsed;
+      S.engage.loading = false;
+      if(m.sessionEnded) S.engage.ended = true;
+      render();
+    }catch(e){
+      // A ceiling-reached 409 is a NORMAL, graceful ending -- not an error
+      // state. Anything else also ends calmly rather than alarming the guest.
+      S.engage.loading=false; S.engage.ended=true; S.engage.moment=null; render();
+    }
+  },
+  async respondToMoment(action){
+    const m = S.engage.moment; if(!m || !S.engage.session) return;
+    try{
+      await api('POST',`/api/engage/session/${S.engage.session.sessionToken}/moment/${m.momentId}/respond`,
+        { action, idempotencyKey:`${m.momentId}:${action}` });
+    }catch(e){ /* response capture is best-effort; never blocks the guest */ }
+    if(S.engage.ended){ render(); return; }
+    await App.nextMoment();
+  },
+  async endEngage(){
+    if(S.engage.session){
+      try{ await api('POST',`/api/engage/session/${S.engage.session.sessionToken}/end`,{}); }catch(e){}
+    }
+    S.engage.ended = true; render();
+  },
+  exitEngage(){
+    // Back to the normal hospitality flow, exactly as if Engage had never
+    // been offered -- the guest's order/tracking state is untouched.
+    App.goScreen(S.currentOrder && S.currentOrder.status==='Delivered' ? 'feedback' : 'tracking');
   },
 
   /* ---- auth ---- */
@@ -735,6 +807,7 @@ function renderCustomerShell(){
     case 'tracking': inner=scrTracking(); break;
     case 'feedback': inner=scrFeedback(); break;
     case 'feedbackThanks': inner=scrFeedbackThanks(); break;
+    case 'engage': inner=scrEngage(); break;
     default: inner=scrWelcome();
   }
   // White Label (§11): the primary color override is scoped to the .phone
@@ -1028,6 +1101,7 @@ function scrTracking(){
     ${o.status==='Cancelled'? `<div class="notebox" style="background:var(--red-100);color:var(--red-500)">${S.lang==='ar'?'تم إلغاء هذا الطلب':'This order was cancelled'}</div>`:''}
     <div class="deliverybox"><div><div class="l">${t('deliverTo')}</div><div class="v">${o.pointLabel||S.qrContext.point.label}</div></div><div style="font-size:20px">📍</div></div>
     ${o.status==='Delivered'? `<button class="btn-primary" style="margin-top:16px" onclick="App.goScreen('feedback')">${t('howExperience')}</button>`:''}
+    ${engageInvite()}
   </div>`;
 }
 
@@ -1050,6 +1124,104 @@ function scrFeedback(){
 function scrFeedbackThanks(){
   return `<div class="resultwrap"><div class="resulticon ok">✓</div><h2 style="margin:0">${t('thanksFeedback')}</h2>
     <button class="btn-primary" style="max-width:220px" onclick="App.startNewOrder()">${t('backToStart')}</button></div>`;
+}
+
+/* ---------------- ENGAGE (UX-5, spec §11) ----------------
+   Five genuinely distinct experience modes sharing one design system —
+   not one card with different copy. Each personality gets its own
+   surface treatment, its own pacing cue, and its own closing tone,
+   driven by the personality the SERVER chose (the client never decides
+   or even knows why).
+
+   G11 (deferred from UX-1): "Never block order/tracking. Calm opt-in
+   invitation appropriate to context." The invitation below is an
+   optional card BELOW the order's own content — it never gates,
+   interrupts, or replaces anything in the hospitality flow, and it
+   simply does not render when the guest has no eligible pass (which is
+   also exactly what a disabled feature flag or a kill switch looks like
+   from here). */
+function engageInvite(){
+  const e = S.engage;
+  if(e.eligible===null){ App.checkEngageEligibility(); return ''; } // not yet known — render nothing rather than flicker
+  if(!e.eligible) return '';                                        // no pass / disabled / expired — indistinguishable by design
+  return `<div class="engage-invite">
+    <div class="engage-mark">✦</div>
+    <div class="t">
+      <b>${S.lang==='ar'?'لحظة من النادل':'A moment from Alnadl'}</b>
+      <span>${S.lang==='ar'?'شيء صغير بينما تنتظر — اختياري تمامًا':'Something small while you wait — entirely optional'}</span>
+    </div>
+    <button onclick="App.startEngage()">${S.lang==='ar'?'ابدأ':'Start'}</button>
+  </div>`;
+}
+
+const ENGAGE_MODES = {
+  RESET:    { cls:'reset',    showProgress:false, ar:{cta:'خذ لحظة',      close:'استمتع ببقية يومك'},        en:{cta:'Take a moment',  close:'Enjoy the rest of your day'} },
+  SPARK:    { cls:'spark',    showProgress:true,  ar:{cta:'التالي',        close:'إلى اللقاء'},               en:{cta:'Next',           close:'See you next time'} },
+  DISCOVER: { cls:'discover', showProgress:true,  ar:{cta:'اكتشف المزيد',  close:'نتطلع لزيارتك القادمة'},    en:{cta:'Discover more',  close:'Until your next visit'} },
+  PLAY:     { cls:'play',     showProgress:true,  ar:{cta:'هيا',           close:'كانت جولة ممتعة'},          en:{cta:"Let's go",       close:'That was fun'} },
+  MIND:     { cls:'mind',     showProgress:false, ar:{cta:'فكّر معنا',      close:'شكرًا لمشاركتك'},            en:{cta:'Think with us',  close:'Thanks for playing along'} },
+};
+
+function scrEngage(){
+  const e = S.engage;
+  const personality = e.session?.personality || 'RESET';
+  const mode = ENGAGE_MODES[personality] || ENGAGE_MODES.RESET;
+  const copy = S.lang==='ar' ? mode.ar : mode.en;
+
+  // Bounded wait (spec §11: "Loading AI content needs bounded wait UX and
+  // approved static fallback"). The server already guarantees a bounded
+  // wait and always returns approved content -- the guest sees a calm
+  // skeleton shaped like the moment, never a spinner with no end in sight.
+  if(e.loading){
+    return `<div class="engage ${mode.cls}">
+      <div class="engage-card">
+        <div class="skeleton skeleton-text w40" style="height:14px;margin-bottom:16px"></div>
+        <div class="skeleton skeleton-text w80" style="height:22px;margin-bottom:10px"></div>
+        <div class="skeleton skeleton-text w60" style="height:22px"></div>
+      </div>
+    </div>`;
+  }
+
+  // A calm, complete ending -- used for ceiling reached, session ended,
+  // safety fallback exhaustion, and provider trouble alike. The guest is
+  // never told which; all of them are simply "this is finished, here is
+  // the way back" (spec §11 Safety UX).
+  if(e.ended || !e.moment){
+    return `<div class="engage ${mode.cls}">
+      <div class="engage-card end">
+        <div class="engage-mark">✦</div>
+        <h2>${copy.close}</h2>
+        <button class="btn-primary" style="max-width:240px;margin-top:18px" onclick="App.exitEngage()">${S.lang==='ar'?'العودة للطلب':'Back to my order'}</button>
+      </div>
+    </div>`;
+  }
+
+  const p = e.moment.payload || {};
+  const title = S.lang==='ar' ? (p.title_ar||p.title_en||'') : (p.title_en||p.title_ar||'');
+  const body  = S.lang==='ar' ? (p.body_ar||p.body_en||'')  : (p.body_en||p.body_ar||'');
+  const used = e.session?.ceilingUsed || 0;
+  const max  = e.session?.ceilingMax || 0;
+
+  // Progress is shown ONLY where the spec says it helps (SPARK/DISCOVER/
+  // PLAY: "visible progress only if helpful"). RESET and MIND deliberately
+  // show none -- a counter would contradict "one clear moment" and
+  // "no pressure loops".
+  const progress = (mode.showProgress && max>1)
+    ? `<div class="engage-progress" aria-label="${used}/${max}">${Array.from({length:max}).map((_,i)=>`<span class="${i<used?'on':''}"></span>`).join('')}</div>`
+    : '';
+
+  return `<div class="engage ${mode.cls}">
+    <div class="engage-card">
+      ${progress}
+      ${title? `<div class="engage-kicker">${title}</div>`:''}
+      <p class="engage-body">${body}</p>
+      <div class="engage-actions">
+        <button class="btn-primary" onclick="App.respondToMoment('completed')">${copy.cta}</button>
+        <button class="engage-skip" onclick="App.respondToMoment('skipped')">${S.lang==='ar'?'تخطّي':'Skip'}</button>
+      </div>
+      <button class="engage-exit" onclick="App.endEngage()">${S.lang==='ar'?'إنهاء':'End'}</button>
+    </div>
+  </div>`;
 }
 
 /* ---------------- STAFF SHELL ---------------- */
