@@ -1,4 +1,4 @@
-> **Version:** v2.0.14-p5-inc5-corrective2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 (host-inclusive cap) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.14-p5-inc5-corrective2
+> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,11 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### Phase 5 P5-Inc-6 — Feature Flags الكاملة + Roles المُدمَجة
+**`venue_policy_override.scope_type`** يشمل الآن `global` (بجانب partner/property/zone الموجودة) — عمود واحد إضافي في القيد فقط، لا جدول جديد. `engage_enabled` (المفتاح الرئيسي لتفعيل Engage) له الآن نفس سلسلة الأولوية الكاملة المُثبَتة لـCeiling وNovelty: **Global Safety (`lib/engage-flags.js` — مفتاح إيقاف طارئ، SuperAdmin فقط) → Partner Contract (`plans.features_json.engage_enabled`، من Inc-1) → Property Override → Zone Override**. المستوى الأدنى **لا يمكنه أبدًا** تجاوز رفض Global أو Contract — نفس منطق `min()` من `resolveCeiling()` بالضبط، بصيغة Boolean بدل رقمية.
+
+**الأدوار الجديدة (`SafetyReviewer`, `ProductAdmin`)**: قيم نصية عادية في عمود `users.role` **الموجود فعليًا** — لا جدول صلاحيات منفصل، ولا قيد CHECK يحتاج تعديلاً (تحقَّقنا: العمود لا يحمل قيدًا من الأساس). `SafetyReviewer` يصل لـLedger الكامل (`GET /api/admin/engage/ledger`)، `ProductAdmin` يصل للـOverview المُجمَّع فقط (`GET /api/admin/engage/overview`) — **وليس** الـLedger الكامل، تطبيقًا حرفيًا لـ"بيانات شخصية حسب الحاجة فقط".
 
 ### تصحيح دلالي: `max_participants` يشمل المُضيف
 `createInvite()` تُدرج الآن صف `engage_participant` بـ`role='host'` فور إنشاء الغرفة — `max_participants` الافتراضي 8 يعني **إجمالي 8 أشخاص شاملاً المُضيف** (مُضيف + 7 مدعوين كحد أقصى)، وليس مُضيف + 8 مدعوين كما كان الحال قبل هذا التصحيح. لم يتغيّر منطق التحقق الذري في `joinInvite()` — يُحصي المُضيف تلقائيًا بصفته صفًا حقيقيًا في نفس الجدول.

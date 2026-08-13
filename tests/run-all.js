@@ -17,6 +17,7 @@ const suites = [
   './engage-inc3.js',
   './engage-inc4.js',
   './engage-inc5.js',
+  './engage-inc6.js',
 ];
 
 (async () => {

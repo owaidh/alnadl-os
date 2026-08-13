@@ -160,9 +160,22 @@ async function run() {
     // count -- not "at least their own data mixed with nothing extra" but
     // an exact number, proving the SQL WHERE clause itself is what bounds
     // the result set, not an incidental correct outcome of a wider fetch.
-    const { getPartnerOverview, getFullLedger } = require('../lib/engage-ledger.js');
-    const beforeA = getPartnerOverview('pt_nova');
-    const beforeB = getPartnerOverview('pt_alrowad');
+    // Note: getPartnerOverview() now (Inc-6) applies a minimum-cohort
+    // suppression rule on top of the SQL scoping this specific test is
+    // about -- using it directly here would conflate two different
+    // properties. This helper re-implements the SAME tenant-scoped COUNT
+    // query getPartnerOverview() itself uses internally, so this test keeps
+    // verifying exactly what it always verified (the WHERE clause bounds
+    // the result correctly), independent of the cohort feature layered on
+    // top of it in Inc-6 (which has its own dedicated boundary tests in
+    // tests/engage-inc6.js).
+    const { getFullLedger } = require('../lib/engage-ledger.js');
+    const countSessionsForPartner = (partnerId) => db.prepare(`
+      SELECT COUNT(*) c FROM engage_session es JOIN engage_pass ep ON ep.id = es.pass_id
+      WHERE json_extract(ep.context_snapshot_json, '$.partnerId') = ?
+    `).get(partnerId).c;
+    const beforeA = { offered: countSessionsForPartner('pt_nova') };
+    const beforeB = { offered: countSessionsForPartner('pt_alrowad') };
 
     db.prepare(`UPDATE properties SET venue_context = 'coffee' WHERE id = 'prop_nova_main'`).run();
     const scopingPassesA = [1, 2, 3].map(() => makePass(db, { partnerId: 'pt_nova', propertyId: 'prop_nova_main', zoneId: null, pointId: 'PT-014', orderId: nextOrderId() }));
@@ -172,8 +185,8 @@ async function run() {
     const scopingPassesB = [1, 2].map(() => makePass(db, { partnerId: 'pt_alrowad', propertyId: 'prop_alrowad_hq', zoneId: null, pointId: 'PT-014', orderId: nextOrderId() }));
     for (const p of scopingPassesB) await api('POST', '/api/engage/session/start', { accessToken: p.accessToken });
 
-    const afterA = getPartnerOverview('pt_nova');
-    const afterB = getPartnerOverview('pt_alrowad');
+    const afterA = { offered: countSessionsForPartner('pt_nova') };
+    const afterB = { offered: countSessionsForPartner('pt_alrowad') };
     assertEqual(afterA.offered - beforeA.offered, 3, 'SQL SCOPING: Partner A (pt_nova) query returns EXACTLY the 3 sessions just planted for A, not more, not fewer -- the WHERE clause itself bounds the result');
     assertEqual(afterB.offered - beforeB.offered, 2, "SQL SCOPING: Partner B (pt_alrowad) query returns EXACTLY the 2 sessions planted for B -- proves A's 3 new sessions did not leak into B's count");
 

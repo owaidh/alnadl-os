@@ -1,4 +1,4 @@
-> **Version:** v2.0.14-p5-inc5-corrective2 · **Status:** P5-Inc-5 SECOND CORRECTIVE ROUND DELIVERED (max_participants now correctly includes the host), awaiting review before P5-Inc-6 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.14-p5-inc5-corrective2`
+> **Version:** v2.0.15-p5-inc6 · **Status:** P5-Inc-6 DELIVERED (Feature Flags + Engage Roles + Partner Dashboard Privacy), awaiting review before P5-Inc-7 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.15-p5-inc6`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,66 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-6 — سجل التسليم الفعلي (Feature Flags + Roles + Partner Privacy)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-7.**
+
+### الأدوار الجديدة — مُدمَجة، وليست نظامًا موازيًا
+
+`SafetyReviewer` و`ProductAdmin` قيمتان نصيتان عاديتان في عمود `users.role` **الموجود فعليًا منذ Phase 1** — تحققنا مباشرة أن العمود لا يحمل قيد CHECK يحتاج تعديلاً قبل الإضافة. **صفر بنية صلاحيات جديدة**:
+- `SafetyReviewer` → `GET /api/admin/engage/ledger` (السجل الكامل — مطابق §14 "ledger/reports/safety actions")
+- `ProductAdmin` → `GET /api/admin/engage/overview` **فقط** (مُجمَّع، لا Ledger كامل) — تطبيقًا حرفيًا لـ"بيانات شخصية حسب الحاجة فقط"؛ **مُختبَر مباشرة** أن `ProductAdmin` يُرفَض (403) عند محاولة الوصول للـLedger الكامل
+
+### Feature Flag الكامل لـ`engage_enabled` — أربع طبقات حقيقية، لا اثنتان
+
+**قبل Inc-6**: `engage_enabled` كان قرارًا ثنائيًا واحدًا فقط (مستوى الباقة/Contract). **الآن**: سلسلة أولوية كاملة مطابقة تمامًا لنفس نمط `resolveCeiling()`/`resolveNoveltyPolicy()` المُثبَت سابقًا:
+
+```
+Global Safety (مفتاح إيقاف طارئ، SuperAdmin فقط) → Partner Contract → Property → Zone
+```
+
+**لم يُبنَ جدول جديد** — امتداد بسيط لقيد `venue_policy_override.scope_type` ليشمل `global` (تحقَّق أولاً من `changes` في اختبار SQL مباشر قبل أي تعديل)، ونقطة نهاية مُقفَلة تمامًا (`POST /api/admin/engage/kill-switch`، `SuperAdmin` فقط، **منفصلة عمدًا** عن نقطة الـOverrides المشتركة حتى لا يصل إليها `PartnerAdmin` بأي حال).
+
+**الدليل — من أبسط سيناريو للأكثر تعقيدًا**:
+1. Contract=OFF → لا يوجد Override يستطيع التفعيل، حتى لو حاول صراحة
+2. Contract=ON + Property Override=OFF → يُقيَّد بنجاح
+3. **تعارض حقيقي**: Zone=OFF وProperty=ON وContract=ON في آنٍ واحد → **Zone (الأدق) يفوز**
+4. **Global Safety**: المفتاح العام OFF → Engage معطَّل حتى لشريك بعقد PLATFORM فعلي يدفع مقابله
+5. **من طرف إلى طرف حقيقي**: Property Override معطَّل فعليًا → شغَّلنا `processOutboxOnce()` مباشرة، وتحققنا **لم يُنشَأ Pass فعليًا** — ليس فقط أن الدالة تُرجع `false` نظريًا
+
+### عتبة Cohort الأدنى = 10 — كبت الاستجابة كاملة، لا تفصيلها فقط
+
+**قرار خصوصية صريح**: عند عدد جلسات أقل من 10، **الاستجابة بأكملها** تُكبَت (`{suppressed:true}`) — وليس فقط تفصيل الشخصيات مع إبقاء الرقم الخام `offered`. إظهار رقم صغير خام وحده (مثال: "9 جلسات") لا يزال قد يُربَط بمجموعة أفراد محدودة، فالكبت يشمل كل شيء.
+
+**اختبار الحد الدقيق 9/10/11**:
+| العدد | الحالة |
+|---|---|
+| 9 | `{suppressed:true}` — لا `offered` إطلاقًا في الاستجابة |
+| 10 | `{suppressed:false, offered:10, ...}` |
+| 11 | `{suppressed:false, offered:11, ...}` |
+
+**ملاحظة تصحيحية صادقة**: تطبيق هذه العتبة **كسر فعليًا اختبارين** من الجولة التصحيحية السابقة لـInc-3 (اللذان كانا يعتمدان على قراءة `getPartnerOverview().offered` مباشرة لإثبات SQL Scoping، بافتراض ضمني أن الاستجابة تُظهر الرقم دائمًا). **أُصلحا بإعادة تنفيذ نفس التحقق عبر استعلام SQL مباشر مطابق تمامًا لما تستخدمه الدالة داخليًا**، بدل الاعتماد على شكل استجابة تغيّر بموجب ميزة جديدة — فصل نظيف بين ما يختبره كل ملف.
+
+### فحص مباشر: هل يمكن تسريب حقول AI داخلية؟
+
+اختبار صريح يفحص نص JSON الفعلي لاستجابتي Partner Overview وProduct Admin Overview بحثًا عن: `prompt`, `model`, `provider`, `vector`, `embedding`, `mechanic_name`, `mechanic_id`, `rendered_payload`, `selection_reason`, `schema_json` — **لا وجود لأي منها**، لأن الدالتان **لا تستعلمانها في SQL من الأساس**.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| Engage roles مُدمَجة في RBAC الحالي | ✅ | نفس عمود `users.role`، صفر بنية جديدة |
+| Safety Reviewer وProduct Admin حسب الـscope | ✅ | Ledger كامل مقابل Overview مُجمَّع فقط |
+| Partner Dashboard يعرض بيانات آمنة فقط | ✅ | فحص مباشر لغياب الحقول الداخلية |
+| Cohort=10 | ✅ | 9/10/11 مُختبَرة عند الحد بالضبط |
+| Cohort<10 → Suppressed | ✅ | الاستجابة كاملة، لا `offered` خام |
+| منع Cross-Tenant Leakage | ✅ | لا معامل `partnerId` في المسار إطلاقًا |
+| منع Internal AI Fields | ✅ | فحص JSON مباشر، 10 حقول محظورة |
+| Feature Flag Precedence الكامل | ✅ | 4 طبقات، تعارض حقيقي مُختبَر |
+| المستوى الأدنى لا يتجاوز Global/Contract | ✅ | مُختبَر بمحاولتي تجاوز فعليتين |
+| كل تغيير Audit | ✅ | Kill Switch + Policy Overrides كلاهما مُسجَّلان |
+| 299/299 Baseline محفوظ | ✅ | **348/348 الآن** (299 + 49 اختبارًا جديدًا) |
 
 ## P5-Inc-5 — الجولة التصحيحية الثانية (Host يُحتسَب ضمن الحد الأقصى)
 

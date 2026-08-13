@@ -1,4 +1,4 @@
-> **Version:** v2.0.14-p5-inc5-corrective2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.14-p5-inc5-corrective2
+> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -388,6 +388,21 @@ Authorization: Bearer <token>
 ### `GET /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
 نفس الحماية؛ `PartnerAdmin` يرى فقط ما يخص شركته.
 
+### `POST /api/admin/engage/kill-switch` — `SuperAdmin` فقط (Inc-6، Global Safety)
+```json
+{ "enabled": false }
+```
+**المفتاح الوحيد القادر على تعطيل Engage على مستوى المنصة بالكامل**، يتجاوز حتى عقد شريك يدفع فعليًا مقابل الميزة. نقطة نهاية منفصلة عمدًا عن `policy-overrides` المشتركة — لا يمكن لـ`PartnerAdmin` الوصول إليها إطلاقًا حتى لصالح شركته الخاصة. كل تغيير يُسجَّل في `audit_log`.
+
+### `GET /api/admin/engage/kill-switch` — `SuperAdmin` فقط
+`{ "enabled": true }` — الحالة الحالية للمفتاح العام.
+
+**امتداد `POST /api/admin/engage/policy-overrides` (Inc-6)** — شكل ثالث جديد لنفس نقطة النهاية، بجانب `personality+max` (Inc-2) و`policyKey+value` (Inc-4):
+```json
+{ "scopeType": "property", "scopeId": "prop_nova_main", "enabled": false }
+```
+`scopeType` يجب أن تكون `property` أو `zone` فقط لهذا الشكل (`partner` يُضبَط عبر الباقة نفسها، و`global` عبر `kill-switch` أعلاه حصريًا).
+
 ### `POST /api/engage/session/:sessionToken/invite/create` — Phase 5 P5-Inc-5
 ```json
 { "maxParticipants": 4 }
@@ -412,14 +427,24 @@ Authorization: Bearer <token>
 ```
 `action` يجب أن تكون `completed` أو `skipped` (`400` لأي قيمة أخرى). **فحص ملكية صريح**: اللحظة يجب أن تخص الجلسة المُخوَّلة بالضبط عبر `sessionToken` — محاولة الرد على لحظة تخص جلسة أخرى (حتى بتوكن جلسة صحيح آخر) تُرفَض بـ`403`. `idempotencyKey` اختياري يمنع تكرار التسجيل عند إعادة الإرسال — نفس نمط `POST /api/orders/:id/refund` تمامًا.
 
-### `GET /api/admin/engage/ledger` — `SuperAdmin` فقط
-السجل الكامل: كل لحظة، بالـPayload الحرفي، الشخصية، الآلية، `selection_reason`، والنتيجة الفعلية إن وُجدت. يدعم `?partnerId=` للتصفية (لراحة SuperAdmin عند التحقيق في شريك محدد، وليس إلزاميًا).
+### `GET /api/admin/engage/ledger` — `SuperAdmin` أو `SafetyReviewer` (Inc-6)
+السجل الكامل: كل لحظة، بالـPayload الحرفي، الشخصية، الآلية، `selection_reason`، والنتيجة الفعلية إن وُجدت. يدعم `?partnerId=` للتصفية (لراحة SuperAdmin عند التحقيق في شريك محدد، وليس إلزاميًا). `SafetyReviewer` يصل لنفس التفصيل الكامل — مطابقةً لـ§14 ("ledger/reports/safety actions") — **`ProductAdmin` لا يصل لهذه النقطة** (`403`، راجع أدناه).
 
-### `GET /api/admin/engage/overview` — `SuperAdmin` فقط
-إحصاءات مُجمَّعة: `eligible`/`offered`/`started`/`completed`، توزيع الشخصيات، ودورة حياة الآليات.
+### `GET /api/admin/engage/overview` — `SuperAdmin` أو `ProductAdmin` (Inc-6)
+إحصاءات مُجمَّعة فقط: `eligible`/`offered`/`started`/`completed`، توزيع الشخصيات، ودورة حياة الآليات — **لا Payload، لا هوية عميل**. `ProductAdmin` يصل لهذه النقطة (نطاقه "mechanics/learning/analytics") **لكن ليس الـLedger الكامل** — تطبيقًا لـ"بيانات شخصية حسب الحاجة فقط" من §14 بعدم منحه تفاصيل قابلة للتعريف بشكل افتراضي.
 
 ### `GET /api/partner/engage/overview` — `PartnerAdmin`/`PartnerViewer`
-**⚠️ عزل خصوصية صارم مُطبَّق بنيويًا وليس بفلترة لاحقة**: يُرجع إحصاءات مُجمَّعة لشريك واحد فقط (`offered`/`completed`/توزيع الشخصيات) — **لا Payload، لا اسم آلية، لا `selection_reason`، لا أي تفاصيل داخلية** — الدالة نفسها (`lib/engage-ledger.js`) لا تستعلم هذه الأعمدة إطلاقًا لهذا المسار، وليس فقط تُخفيها.
+**⚠️ عزل خصوصية صارم مُطبَّق بنيويًا وليس بفلترة لاحقة**: يُرجع إحصاءات مُجمَّعة لشريك واحد فقط (`offered`/`completed`/توزيع الشخصيات) — **لا Payload، لا اسم آلية، لا `selection_reason`، لا أي تفاصيل داخلية** — الدالة نفسها (`lib/engage-ledger.js`) لا تستعلم هذه الأعمدة إطلاقًا لهذا المسار، وليس فقط تُخفيها. **لا معامل `partnerId` في هذا المسار إطلاقًا** — النطاق يُحدَّد حصريًا من `session.scope` نفسه، فلا يوجد معامل يمكن لشريك استبداله للوصول لبيانات شريك آخر.
+
+**عتبة Cohort الأدنى (Inc-6، §25.9) = 10**: إذا كان عدد الجلسات < 10، **الاستجابة الكاملة تُكبَت**، وليس فقط تفصيل الشخصيات:
+```json
+{ "suppressed": true, "reason": "Insufficient Data", "minimumCohort": 10 }
+```
+عند 10 فأكثر:
+```json
+{ "suppressed": false, "offered": 10, "completed": 6, "byPersonality": { "SPARK": 4, "DISCOVER": 6 } }
+```
+**كبت الاستجابة بالكامل (وليس فقط تفصيل الشخصيات) مقصود**: إظهار `offered` الخام حتى بلا تفصيل شخصيات لا يزال يُسرِّب رقمًا صغيرًا قابلاً للربط بمجموعة أفراد محدودة.
 
 ## ملاحظة حول Idempotency وWebhooks (Q03، §18)
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل

@@ -1,4 +1,4 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-6 engage_enabled precedence · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
 
 # Alnadl Hospitality OS — Packages & Feature Flags Matrix (§4, §26.1)
 
@@ -37,4 +37,20 @@
 - تخفيض الباقة → **لا حذف للبيانات القائمة أبدًا** — العرض يتدهور بأمان (Graceful Degradation): مثال، منفذان قائمان يبقيان قابلين للقراءة حتى لو مُنع إنشاء ثالث، والعلامة التجارية المحفوظة تُعرَض كافتراضية دون حذف الإعداد نفسه.
 
 ## Override تعاقدي لكل شريك
-النظام الحالي **لا يدعم Override فرديًا** خارج حدود الباقة (كل شريك يتبع مزايا باقته حرفيًا). أي استثناء تعاقدي خاص (مثال: شريك على SMART لكن بميزة Loyalty بموجب اتفاق خاص) يتطلب إما ترقية الباقة فعليًا أو تعديل مباشر على `subscriptions.features_json` لذلك الشريك تحديدًا — غير مبني كواجهة إدارية بعد.
+النظام الحالي **لا يدعم Override فرديًا** خارج حدود الباقة (كل شريك يتبع مزايا باقته حرفيًا) لهذه الأعلام أعلاه تحديدًا. أي استثناء تعاقدي خاص (مثال: شريك على SMART لكن بميزة Loyalty بموجب اتفاق خاص) يتطلب إما ترقية الباقة فعليًا أو تعديل مباشر على `subscriptions.features_json` لذلك الشريك تحديدًا — غير مبني كواجهة إدارية بعد.
+
+## `engage_enabled` — Feature Flag استثنائي بسلسلة أولوية كاملة (Phase 5)
+
+على عكس كل الأعلام أعلاه (ثنائية القيمة، مستوى الباقة فقط)، `engage_enabled` له سلسلة أولوية هرمية كاملة (§25.8، مُطبَّقة عبر `lib/engage-flags.js`):
+
+```
+Global Safety (مفتاح إيقاف طارئ، SuperAdmin فقط، POST /api/admin/engage/kill-switch)
+    ↓ يتجاوز كل ما يلي إن كان OFF
+Partner Contract (plans.features_json.engage_enabled — نفس آلية باقي الأعلام أعلاه)
+    ↓ لا يمكن لما يلي تجاوز رفضه
+Property Override (venue_policy_override, scope_type='property')
+    ↓ الأدق يفوز إن وُجد
+Zone Override (venue_policy_override, scope_type='zone')
+```
+
+**القاعدة الصارمة**: أي مستوى أدنى يمكنه فقط أن **يُقيِّد** (يُحوِّل لـOFF) — لا يمكنه أبدًا **تفعيل** ما رفضه مستوى أعلى. مُختبَر مباشرة في `tests/engage-inc6.js` بكل توليفة تعارض ممكنة.

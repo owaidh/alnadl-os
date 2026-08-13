@@ -1,10 +1,18 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-6 roles · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
 
 # Alnadl Hospitality OS — Roles & Permissions Matrix (§19, §26.1)
 
 **المصدر**: مُستخرَجة مباشرة من حراسات المسارات (`on(method, path, [roles], handler)`) في `server.js` — وليست موثَّقة يدويًا بمعزل عن الكود، لذا لا يمكن أن تنحرف عنه.
 
-## الأدوار الثمانية
+## الأدوار العشرة
+
+**اثنان جديدان (Phase 5 P5-Inc-6)، بنفس آلية `users.role` والحراسات — لا نظام صلاحيات منفصل:**
+| الدور | النطاق | الوصف |
+|---|---|---|
+| `SafetyReviewer` | كل الشركاء (داخلي، لا `partner_scope`) | Ledger الكامل لـEngage فقط (`GET /api/admin/engage/ledger`) — مطابق §14 "ledger/reports/safety actions" |
+| `ProductAdmin` | كل الشركاء (داخلي، لا `partner_scope`) | Overview المُجمَّع لـEngage فقط (`GET /api/admin/engage/overview`) — **لا** الـLedger الكامل، تطبيقًا لـ"بيانات شخصية حسب الحاجة فقط" |
+
+**الثمانية الأصلية:**
 | الدور | النطاق | الوصف |
 |---|---|---|
 | `Customer` | عام، بلا تسجيل دخول | نقاط API العامة فقط (QR، القائمة، الطلب، الدفع) |

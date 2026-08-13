@@ -378,6 +378,12 @@ function seedIfEmpty() {
     ['partneradmin', 'PartnerAdmin', partnerId],
     ['finance', 'AlnadlFinance', null],
     ['admin', 'SuperAdmin', null],
+    // Phase 5 P5-Inc-6: Engage-specific internal roles, integrated into
+    // this SAME users table and RBAC mechanism -- not a separate
+    // permissions system. Scope is null (internal/ALNADL-side roles, not
+    // tenant-scoped), matching 'admin'/'finance' above.
+    ['safetyreviewer', 'SafetyReviewer', null],
+    ['productadmin', 'ProductAdmin', null],
   ];
   for (const [username, role, scope] of users) {
     db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)

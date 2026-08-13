@@ -480,7 +480,40 @@ on('POST', '/api/admin/engage/policy-overrides', ['SuperAdmin', 'PartnerAdmin'],
     return sendJSON(res, 201, { ok: true });
   }
 
-  return sendJSON(res, 400, { error: 'request must include either personality+max (Ceiling) or policyKey+value (Novelty)' });
+  if (b.enabled !== undefined) {
+    // Inc-6: engage_enabled Property/Zone override -- part of the full
+    // Global Safety -> Contract -> Property -> Zone precedence chain (see
+    // lib/engage-flags.js). Global itself is deliberately NOT settable
+    // through this shared endpoint -- see the dedicated SuperAdmin-only
+    // kill-switch route below, kept separate so tenant-scoped PartnerAdmin
+    // write access (checked above) can never reach the platform-wide lever.
+    if (!['property', 'zone'].includes(b.scopeType)) return sendJSON(res, 400, { error: 'engage_enabled overrides apply at property or zone scope only (Contract is set via the plan; Global uses the kill-switch endpoint)' });
+    if (typeof b.enabled !== 'boolean') return sendJSON(res, 400, { error: 'enabled must be a boolean' });
+    const { setEngageEnabledOverride } = require('./lib/engage-flags.js');
+    setEngageEnabledOverride(b.scopeType, b.scopeId, b.enabled, session.username);
+    audit(session.username, session.role, 'engage_policy_override_set', b.scopeId, null, { scopeType: b.scopeType, policyKey: 'engage_enabled', enabled: b.enabled }, null);
+    return sendJSON(res, 201, { ok: true });
+  }
+
+  return sendJSON(res, 400, { error: 'request must include personality+max (Ceiling), policyKey+value (Novelty), or enabled (engage_enabled)' });
+});
+
+/* Phase 5 P5-Inc-6: Global Safety kill switch for Engage. SuperAdmin ONLY
+   -- deliberately its own route, not folded into the shared
+   policy-overrides endpoint above, so no tenant-scoped role can ever reach
+   the platform-wide lever even if a future refactor loosened that
+   endpoint's role list. */
+on('POST', '/api/admin/engage/kill-switch', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  if (typeof b.enabled !== 'boolean') return sendJSON(res, 400, { error: 'enabled must be a boolean' });
+  const { setGlobalKillSwitch } = require('./lib/engage-flags.js');
+  setGlobalKillSwitch(b.enabled, session.username);
+  audit(session.username, session.role, 'engage_global_kill_switch_set', 'system', null, { enabled: b.enabled }, null);
+  sendJSON(res, 200, { ok: true, enabled: b.enabled });
+});
+on('GET', '/api/admin/engage/kill-switch', ['SuperAdmin'], async (req, res) => {
+  const { getGlobalKillSwitchState } = require('./lib/engage-flags.js');
+  sendJSON(res, 200, { enabled: getGlobalKillSwitchState() });
 });
 
 /* Phase 5 P5-Inc-2 (corrective round): Session lifecycle + Moment serving.
@@ -544,10 +577,10 @@ on('POST', '/api/engage/invite/:inviteToken/join', null, async (req, res, p) => 
 /* Phase 5 P5-Inc-3: Experience Ledger + Admin/Partner Visibility.
    Two structurally separate read paths -- see lib/engage-ledger.js for why
    this is deliberate, not an oversight to later "add a filter" to. */
-on('GET', '/api/admin/engage/ledger', ['SuperAdmin'], async (req, res, p, query) => {
+on('GET', '/api/admin/engage/ledger', ['SuperAdmin', 'SafetyReviewer'], async (req, res, p, query) => {
   sendJSON(res, 200, getFullLedger({ partnerId: query.partnerId, limit: query.limit ? parseInt(query.limit) : undefined }));
 });
-on('GET', '/api/admin/engage/overview', ['SuperAdmin'], async (req, res) => {
+on('GET', '/api/admin/engage/overview', ['SuperAdmin', 'ProductAdmin'], async (req, res) => {
   sendJSON(res, 200, getAdminOverview());
 });
 on('GET', '/api/partner/engage/overview', ['PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
