@@ -1396,12 +1396,67 @@ function renderAudit(){
 
 function renderPartnerOverview(){
   const ov = S.partner.overview; if(!ov) return kpiDashboardSkeleton(4);
-  return `<div class="kpirow">
-    <div class="kpi"><div class="lbl">${t('grossSales')}</div><div class="val">${money(ov.grossSales)}</div><div class="sub">SAR</div></div>
-    <div class="kpi"><div class="lbl">${t('orders')}</div><div class="val">${ov.orders}</div></div>
-    <div class="kpi"><div class="lbl">${t('aov')}</div><div class="val">${money(ov.aov)}</div><div class="sub">SAR</div></div>
-    <div class="kpi"><div class="lbl">${S.lang==='ar'?'سلال متعددة المنافذ':'Cross-Outlet Basket Rate'}</div><div class="val">${ov.crossOutletBasketRate!=null?ov.crossOutletBasketRate:0}%</div></div>
+  const today = ov.today || {};
+  const perf = ov.performance || {};
+  const moneyLayer = ov.money || {};
+  const attention = ov.attention || [];
+
+  // UX-3 (spec §8): every value here comes from the server's computed
+  // decision layers — nothing is derived or estimated client-side. Where
+  // the server genuinely could not compute a signal (no feedback yet, no
+  // recorded fulfillment timings, no prior period to compare against) it
+  // returns null and we say so plainly rather than showing a fake 0.
+  const dash = (v, suffix) => v==null ? `<span style="color:var(--ink-400);font-weight:600;font-size:15px">—</span>` : `${v}${suffix||''}`;
+
+  const attentionLabels = {
+    sla_breach:      a => S.lang==='ar'? `${a.count} طلب تجاوز مهلة التجهيز الآن` : `${a.count} order(s) past their prep SLA right now`,
+    disabled_points: a => S.lang==='ar'? `${a.count} نقطة معطّلة` : `${a.count} disabled point(s)`,
+    refunds_7d:      a => S.lang==='ar'? `${a.count} استرجاع خلال 7 أيام (${money2(a.amount)} ر.س)` : `${a.count} refund(s) in 7 days (${money2(a.amount)} SAR)`,
+    low_rating:      a => S.lang==='ar'? `متوسط التقييم منخفض: ★ ${a.value}` : `Low average rating: ★ ${a.value}`,
+    settlement_disputed: a => S.lang==='ar'? `${a.count} تسوية متنازع عليها` : `${a.count} disputed settlement(s)`,
+  };
+
+  return `
+  <!-- Layer 1: Today snapshot -->
+  <div class="kpirow">
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'مبيعات اليوم':'Sales today'}</div><div class="val">${money2(today.grossSales)}</div><div class="sub">SAR</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'طلبات اليوم':'Orders today'}</div><div class="val">${today.orders!=null?today.orders:'—'}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'الالتزام بالمهلة':'Service SLA'}</div><div class="val" style="color:${today.slaPercent==null?'inherit':today.slaPercent>=90?'var(--sage-500)':today.slaPercent>=75?'var(--amber-500)':'var(--red-500)'}">${dash(today.slaPercent,'%')}</div><div class="sub">${today.slaPercent==null?(S.lang==='ar'?'لا توجد بيانات تجهيز مسجّلة':'no recorded prep timings'):''}</div></div>
+    <div class="kpi"><div class="lbl">${S.lang==='ar'?'التقييم':'Rating'}</div><div class="val">${today.avgRating!=null?('★ '+today.avgRating):'—'}</div><div class="sub">${today.ratingCount?`${today.ratingCount} ${S.lang==='ar'?'تقييم':'ratings'}`:(S.lang==='ar'?'لا تقييمات بعد':'no ratings yet')}</div></div>
   </div>
+
+  <!-- Layer 2: Attention — what needs action, before any table -->
+  <div class="panel">
+    <h3>${S.lang==='ar'?'يحتاج انتباهك':'Needs your attention'}</h3>
+    ${attention.length===0
+      ? `<div class="statepanel on-dark" style="padding:18px 8px"><div class="glyph" style="color:var(--sage-500)">✓</div><h4>${S.lang==='ar'?'لا توجد تنبيهات':'Nothing needs attention'}</h4><p>${S.lang==='ar'?'لا توجد تجاوزات مهلة أو نقاط معطّلة أو تسويات متنازع عليها الآن.':'No SLA breaches, disabled points, or disputed settlements right now.'}</p></div>`
+      : attention.map(a=>`<div class="attentionrow ${a.severity}">
+          <span class="dot"></span>
+          <span class="txt">${(attentionLabels[a.kind]||(()=>a.kind))(a)}</span>
+          <span class="sev">${a.severity==='high'?(S.lang==='ar'?'عالٍ':'High'):(S.lang==='ar'?'متوسط':'Medium')}</span>
+        </div>`).join('')}
+  </div>
+
+  <!-- Layer 3: Performance -->
+  <div class="grid2">
+    <div class="panel"><h3>${S.lang==='ar'?'الأداء':'Performance'}</h3>
+      <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'أفضل منفذ':'Top outlet'}</span><span>${perf.topOutlet?(S.lang==='ar'?perf.topOutlet.name_ar:perf.topOutlet.name_en):'—'}</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'أضعف منفذ':'Bottom outlet'}</span><span>${perf.bottomOutlet?(S.lang==='ar'?perf.bottomOutlet.name_ar:perf.bottomOutlet.name_en):'—'}</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'آخر 7 أيام':'Last 7 days'}</span><span>${money2(perf.last7Gross)} SAR</span></div>
+      <div class="totalline" style="border-top:1px dashed var(--ink-600);padding-top:8px;margin-top:6px;color:${perf.trendPercent==null?'var(--ink-400)':perf.trendPercent>=0?'var(--sage-500)':'var(--red-500)'};font-weight:800">
+        <span>${S.lang==='ar'?'مقارنة بالـ7 السابقة':'vs prior 7 days'}</span>
+        <span>${perf.trendPercent==null?(S.lang==='ar'?'لا فترة سابقة للمقارنة':'no prior period'):`${perf.trendPercent>=0?'▲ +':'▼ '}${perf.trendPercent}%`}</span></div>
+    </div>
+    <!-- Layer 4: Money -->
+    <div class="panel"><h3>${S.lang==='ar'?'المالية':'Money'}</h3>
+      <div class="totalline" style="color:var(--ink-200)"><span>${t('partnerShare')}</span><span>${money2(moneyLayer.partnerShare)} SAR</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${S.lang==='ar'?'تسويات معلّقة':'Pending settlements'}</span><span>${moneyLayer.pendingSettlementCount||0}${moneyLayer.pendingSettlementAmount?` · ${money2(moneyLayer.pendingSettlementAmount)} SAR`:''}</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${t('discounts')}</span><span>${money2(moneyLayer.discounts)} SAR</span></div>
+      <div class="totalline" style="color:var(--ink-200)"><span>${t('refunds')}</span><span>${money2(moneyLayer.refunds)} SAR</span></div>
+    </div>
+  </div>
+
+  <!-- Detail tables: below the decision layers, per spec ("Actions... secondary to operational insight") -->
   <div class="grid2">
     <div class="panel"><h3>${t('topZones')}</h3><table class="datatable"><tr><th>${S.lang==='ar'?'المنطقة':'Zone'}</th><th>${t('orders')}</th></tr>
       ${ov.topZones.map(z=>`<tr><td>${z.zone}</td><td>${z.count}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}</table></div>
@@ -1412,6 +1467,10 @@ function renderPartnerOverview(){
     </div>
   </div>`;
 }
+// UX-3: money() formats a number; money2() additionally tolerates null
+// (returning an em-dash) so a genuinely-unavailable figure never renders
+// as a misleading "0.00".
+function money2(n){ return n==null ? '—' : money(n); }
 
 function renderSettlements(){
   const rows = S.settlements || [];

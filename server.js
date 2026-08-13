@@ -1251,8 +1251,117 @@ on('GET', '/api/partner/overview', ['PartnerViewer', 'PartnerAdmin', 'SuperAdmin
     };
   }).sort((a, b) => b.gross - a.gross);
 
-  sendJSON(res, 200, { grossSales: round2(gross), orders: orders.length, aov: round2(aov), topZones, crossOutletBasketRate, outletPerformance });
+  sendJSON(res, 200, { grossSales: round2(gross), orders: orders.length, aov: round2(aov), topZones, crossOutletBasketRate, outletPerformance, ...partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) });
 });
+
+/* ---------------------------------------------------------------------------
+   UX-3 (spec §8 "Partner Dashboard — Decision UX"): the overview above
+   answered "what are my totals?" but not the spec's actual question --
+   "How are my locations performing and what needs attention?". Every
+   value below is computed from data this system genuinely already
+   records (fulfillment timestamps, feedback rows, refunds, settlements,
+   points.active, outlets.sla_prep_min) -- nothing here is invented or
+   estimated. Where a signal genuinely cannot be computed from existing
+   data, it is omitted entirely rather than faked.
+
+   Partner privacy (§8 "Partner privacy rule"): this function only ever
+   reads rows already scoped to THIS partnerId (the caller has already
+   passed assertPartnerScope above), and returns only aggregates the
+   partner is entitled to. It never touches Engage internals, mechanic
+   reasoning, AI payloads, or any other tenant's rows.
+--------------------------------------------------------------------------- */
+function partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) {
+  const now = Date.now();
+  const DAY = 86400000;
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
+
+  // ---- Today snapshot (spec: "Gross sales, orders, AOV, service SLA, rating, active outlets, current incidents") ----
+  const todayOrders = orders.filter(o => o.created_at >= todayMs);
+  const todayDelivered = todayOrders.filter(o => o.status === 'Delivered');
+  const todayGross = todayDelivered.reduce((s, o) => s + o.total, 0);
+  const todayAov = todayOrders.length ? todayOrders.reduce((s, o) => s + o.total, 0) / todayOrders.length : 0;
+
+  // Service SLA: measured from real fulfillment timestamps against each
+  // order's outlet-configured prep budget. Orders with no recorded
+  // ready_at simply aren't counted -- no assumed timings.
+  let slaMet = 0, slaTotal = 0;
+  for (const o of orders) {
+    const f = db.prepare('SELECT accepted_at, ready_at FROM fulfillment WHERE order_id = ?').get(o.id);
+    if (!f || !f.ready_at) continue;
+    const startedAt = f.accepted_at || o.created_at;
+    const outletRow = db.prepare(`SELECT ou.sla_prep_min FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ? LIMIT 1`).get(o.id);
+    const budgetMin = (outletRow && outletRow.sla_prep_min) || DEFAULT_SLA_PREP_MIN;
+    slaTotal++;
+    if ((f.ready_at - startedAt) / 60000 <= budgetMin) slaMet++;
+  }
+  const slaPercent = slaTotal ? round2((slaMet / slaTotal) * 100) : null;
+
+  const orderIdsAll = orders.map(o => o.id);
+  const ratingRow = orderIdsAll.length
+    ? db.prepare(`SELECT AVG(stars) avg, COUNT(*) c FROM feedback WHERE order_id IN (${orderIdsAll.map(() => '?').join(',')})`).get(...orderIdsAll)
+    : { avg: null, c: 0 };
+  const avgRating = ratingRow.avg ? round2(ratingRow.avg) : null;
+
+  const activeOutlets = db.prepare(`SELECT COUNT(*) c FROM outlets WHERE status='Active' AND property_id IN (SELECT id FROM properties WHERE partner_id = ?)`).get(partnerId).c;
+
+  // ---- Attention (spec: "SLA breaches, offline/disabled points, unusual refunds, low rating, settlement issue") ----
+  const attention = [];
+
+  const openBreaches = orders.filter(o => {
+    if (!['Paid', 'Accepted', 'Preparing'].includes(o.status)) return false;
+    const outletRow = db.prepare(`SELECT ou.sla_prep_min FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ? LIMIT 1`).get(o.id);
+    const budgetMin = (outletRow && outletRow.sla_prep_min) || DEFAULT_SLA_PREP_MIN;
+    return (now - o.created_at) / 60000 > budgetMin;
+  }).length;
+  if (openBreaches > 0) attention.push({ kind: 'sla_breach', severity: 'high', count: openBreaches });
+
+  const disabledPoints = db.prepare(`SELECT COUNT(*) c FROM points WHERE active = 0 AND zone_id IN (SELECT id FROM zones WHERE property_id IN (SELECT id FROM properties WHERE partner_id = ?))`).get(partnerId).c;
+  if (disabledPoints > 0) attention.push({ kind: 'disabled_points', severity: 'medium', count: disabledPoints });
+
+  const refundRows = orderIdsAll.length
+    ? db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount),0) total FROM refunds WHERE order_id IN (${orderIdsAll.map(() => '?').join(',')}) AND created_at >= ?`).get(...orderIdsAll, now - 7 * DAY)
+    : { c: 0, total: 0 };
+  if (refundRows.c > 0) attention.push({ kind: 'refunds_7d', severity: 'medium', count: refundRows.c, amount: round2(refundRows.total) });
+
+  if (avgRating != null && avgRating < 3.5 && ratingRow.c >= 3) attention.push({ kind: 'low_rating', severity: 'high', value: avgRating });
+
+  const disputed = db.prepare(`SELECT COUNT(*) c FROM settlements WHERE partner_id = ? AND status = 'Disputed'`).get(partnerId).c;
+  if (disputed > 0) attention.push({ kind: 'settlement_disputed', severity: 'high', count: disputed });
+
+  // ---- Performance (spec: "Top/bottom outlet, top/bottom zone, trend vs prior comparable period") ----
+  const ranked = outletPerformance.filter(o => o.orders > 0);
+  const topOutlet = ranked.length ? ranked[0] : null;
+  const bottomOutlet = ranked.length > 1 ? ranked[ranked.length - 1] : null;
+
+  const last7 = delivered.filter(o => o.created_at >= now - 7 * DAY).reduce((s, o) => s + o.total, 0);
+  const prev7 = delivered.filter(o => o.created_at >= now - 14 * DAY && o.created_at < now - 7 * DAY).reduce((s, o) => s + o.total, 0);
+  // Only report a trend when there is a genuine prior period to compare
+  // against -- a "+100%" against zero baseline would be meaningless.
+  const trendPercent = prev7 > 0 ? round2(((last7 - prev7) / prev7) * 100) : null;
+
+  // ---- Money (spec: "Partner share, pending settlement, refunds/discounts, next settlement") ----
+  const partnerShareTotal = outletPerformance.reduce((s, o) => s + o.partnerAmount, 0);
+  const pendingSettlements = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(partner_share),0) total FROM settlements WHERE partner_id = ? AND status NOT IN ('Paid')`).get(partnerId);
+  const discountsTotal = orders.reduce((s, o) => s + (o.discount_amount || 0), 0);
+  const refundsAllTime = orderIdsAll.length
+    ? db.prepare(`SELECT COALESCE(SUM(amount),0) total FROM refunds WHERE order_id IN (${orderIdsAll.map(() => '?').join(',')})`).get(...orderIdsAll).total
+    : 0;
+
+  return {
+    today: {
+      grossSales: round2(todayGross), orders: todayOrders.length, aov: round2(todayAov),
+      slaPercent, avgRating, ratingCount: ratingRow.c, activeOutlets, openIncidents: attention.filter(a => a.severity === 'high').length,
+    },
+    attention,
+    performance: { topOutlet, bottomOutlet, trendPercent, last7Gross: round2(last7), prev7Gross: round2(prev7) },
+    money: {
+      partnerShare: round2(partnerShareTotal),
+      pendingSettlementCount: pendingSettlements.c, pendingSettlementAmount: round2(pendingSettlements.total),
+      discounts: round2(discountsTotal), refunds: round2(refundsAllTime),
+    },
+  };
+}
 function round2(n) { return Math.round(n * 100) / 100; }
 
 /* ------------------------------ SETTLEMENT (quick preview, does not persist) --------------------------------- */
