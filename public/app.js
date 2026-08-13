@@ -1053,6 +1053,69 @@ function scrFeedbackThanks(){
 }
 
 /* ---------------- STAFF SHELL ---------------- */
+// UX-4 (spec §9 P1: "Do not place 13+ modules as equal horizontal
+// buttons. The current pattern will become materially worse as Inc-5-8
+// add Experience/AI/Learning/Lab surfaces."). SuperAdmin had exactly 13
+// flat, equal-weight buttons -- the precise pattern flagged.
+//
+// Navigation is now defined as DOMAIN GROUPS matching the spec's own
+// SA01-SA08 module groups, rendered in the sidebar component that UX-0
+// built as a foundation but deliberately left unwired until this wave
+// (the spec's §32 sequencing put the rollout here, once the platform's
+// module list was known -- which it now is, Phase 5 included).
+//
+// Roles with few modules (Operator, Runner, SiteManager) keep the flat
+// bar: a sidebar for 1-2 items would be pure overhead, and the spec's
+// concern is explicitly about breadth. The grouping below is data, not
+// layout -- renderStaffShell decides which presentation each role gets.
+function navGroupsFor(role){
+  const L = (ar,en) => S.lang==='ar'?ar:en;
+  const groups = {
+    SuperAdmin: [
+      { id:'SA02', label:L('الشركاء','Partners'), items:[
+        ['tenants', L('الشركاء والباقات','Tenants & Plans')],
+        ['portfolio', L('محفظة المواقع','Portfolio')],
+        ['users', L('المستخدمون','Users')],
+      ]},
+      { id:'SA03', label:L('العمليات','Operations'), items:[
+        ['outlets', L('المنافذ','Outlets')],
+        ['zones', t('adminZones')],
+        ['catalog', t('adminCatalog')],
+        ['merchants', L('الشركاء التجاريون','Merchants')],
+      ]},
+      { id:'SA04', label:L('التجاري','Commercial'), items:[
+        ['revenue', L('نماذج الإيراد','Revenue Models')],
+        ['settlements', t('revShareTitle')],
+        ['refunds', L('الاسترجاعات','Refunds')],
+        ['wallets', L('محافظ الشركات','Corporate Wallets')],
+      ]},
+      { id:'SA06', label:L('المنصة','Platform'), items:[
+        ['branding', L('العلامة التجارية','White Label')],
+      ]},
+      { id:'SA07', label:L('الحوكمة','Governance'), items:[
+        ['audit', t('auditLog')],
+      ]},
+    ],
+    PartnerAdmin: [
+      { id:'P-OPS', label:L('العمليات','Operations'), items:[
+        ['outlets', L('المنافذ','Outlets')],
+        ['zones', t('adminZones')],
+        ['catalog', t('adminCatalog')],
+        ['merchants', L('الشركاء التجاريون','Merchants')],
+      ]},
+      { id:'P-COM', label:L('التجاري','Commercial'), items:[
+        ['revenue', L('نماذج الإيراد','Revenue Models')],
+        ['wallets', L('محافظ الشركات','Corporate Wallets')],
+        ['billing', L('الباقة','Plan')],
+      ]},
+      { id:'P-ADM', label:L('الإدارة','Administration'), items:[
+        ['users', L('المستخدمون','Users')],
+      ]},
+    ],
+  };
+  return groups[role] || null;
+}
+
 function renderStaffShell(){
   const role = S.session.user.role;
   const navByRole = {
@@ -1085,14 +1148,42 @@ function renderStaffShell(){
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
 
-  return `<div class="bohshell"><div class="bohwrap">
+  const groups = navGroupsFor(role);
+  const currentLabel = groups
+    ? (groups.flatMap(g=>g.items).find(i=>i[0]===S.screen)?.[1] || '')
+    : (nav.find(n=>n[0]===S.screen)?.[1] || '');
+
+  // UX-4 (spec SA02: "Persistent scope breadcrumb"): the header now
+  // states which domain group the current module belongs to, so a
+  // SuperAdmin moving between 13 modules always knows where they are.
+  const currentGroup = groups ? groups.find(g=>g.items.some(i=>i[0]===S.screen)) : null;
+  const breadcrumb = currentGroup
+    ? `<span class="crumb">${currentGroup.label}</span><span class="crumbsep">›</span>`
+    : '';
+
+  const shellInner = `
     <div class="boh-header">
-      <div class="boh-title"><h1>${nav.find(n=>n[0]===S.screen)?.[1] || ''}</h1><p>${t('scope_note')}</p></div>
-      <div class="boh-nav">${nav.map(([id,lbl])=>`<button class="${S.screen===id?'active':''}" onclick="App.setStaffScreen('${id}')">${lbl}</button>`).join('')}</div>
+      <div class="boh-title"><h1>${breadcrumb}${currentLabel}</h1><p>${t('scope_note')}</p></div>
+      ${groups? '' : `<div class="boh-nav">${nav.map(([id,lbl])=>`<button class="${S.screen===id?'active':''}" onclick="App.setStaffScreen('${id}')">${lbl}</button>`).join('')}</div>`}
     </div>
     ${S.ui.err? `<div class="errbox">${S.ui.err}</div>`:''}
-    ${inner}
-  </div></div>
+    ${inner}`;
+
+  const body = groups
+    ? `<div class="admin-layout">
+        <nav class="sidebar" aria-label="${S.lang==='ar'?'التنقل':'Navigation'}">
+          <div class="sidebar-scope">${S.lang==='ar'?'النطاق الحالي':'Current scope'}<b>${S.session.user.username} · ${role}</b></div>
+          ${groups.map(g=>`
+            <div class="sidebar-group">
+              <div class="sidebar-group-label">${g.label}</div>
+              ${g.items.map(([id,lbl])=>`<button class="sidebar-link ${S.screen===id?'active':''}" onclick="App.setStaffScreen('${id}')">${lbl}</button>`).join('')}
+            </div>`).join('')}
+        </nav>
+        <div class="bohshell"><div class="bohwrap">${shellInner}</div></div>
+      </div>`
+    : `<div class="bohshell"><div class="bohwrap">${shellInner}</div></div>`;
+
+  return `${body}
   ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}
   ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}`;
 }
