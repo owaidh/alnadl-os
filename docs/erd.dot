@@ -6,7 +6,7 @@ digraph ERD {
   rankdir=LR;
   node [shape=box, style="rounded,filled", fillcolor="#FEFCF9", color="#C08A3E", fontname="Helvetica", fontsize=11];
   edge [fontname="Helvetica", fontsize=9, color="#8A7C63"];
-  graph [fontname="Helvetica", fontsize=14, labelloc=t, label="Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.3 + P5-Inc-1/2/3/4)"];
+  graph [fontname="Helvetica", fontsize=14, labelloc=t, label="Alnadl Hospitality OS — Entity Relationship Diagram (v2.0.3 + P5-Inc-1/2/3/4/5)"];
 
   subgraph cluster_tenancy {
     label="Tenancy & Site (§6, §5)"; style=dashed; color="#A6752F";
@@ -29,11 +29,12 @@ digraph ERD {
     loyalty_accounts; loyalty_transactions; wallet_accounts; wallet_transactions;
   }
   subgraph cluster_engage {
-    label="ALNADL Engage — Phase 5 (P5-Inc-1/2/3/4)"; style=dashed; color="#2E5C4B";
+    label="ALNADL Engage — Phase 5 (P5-Inc-1/2/3/4/5)"; style=dashed; color="#2E5C4B";
     engage_pass; engage_session; engage_outbox; engage_audit_log;
     mechanic; mechanic_version; moment; payload_version; venue_policy_override;
     experience_event; response_event;
     customer_engage_profile; exposure_memory; novelty_evaluation;
+    group_room; engage_participant;
   }
 
   subgraph cluster_platform {
@@ -41,6 +42,9 @@ digraph ERD {
     plans; subscriptions; partner_branding; users; audit_log; notifications;
     promotions; feedback; qr_analytics_events; schema_migrations;
   }
+
+  engage_session -> group_room [label="1:N", color="#2E5C4B"];
+  group_room -> engage_participant [label="1:N", color="#2E5C4B"];
 
   customer_engage_profile -> exposure_memory [label="1:N", color="#2E5C4B"];
   mechanic -> exposure_memory [label="1:N (optional)", color="#2E5C4B", style=dashed];

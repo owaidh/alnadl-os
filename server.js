@@ -19,6 +19,7 @@ const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker } = require('./lib/engage-worker.js');
 const { startSession, serveNextMoment, submitResponse, endSession } = require('./lib/engage-session.js');
+const { createInvite, joinInvite } = require('./lib/engage-social.js');
 const { getFullLedger, getAdminOverview, getPartnerOverview } = require('./lib/engage-ledger.js');
 const gateway = getGateway();
 
@@ -517,6 +518,25 @@ on('POST', '/api/engage/session/:token/moment/:momentId/respond', null, async (r
   const b = await readBody(req);
   try {
     const result = submitResponse(p.token, p.momentId, b.action, b.idempotencyKey);
+    sendJSON(res, 200, result);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+
+/* Phase 5 P5-Inc-5: Social / Group Invite. Creation requires the host's own
+   session token (same capability-token pattern as everything else in
+   Engage). Joining requires ONLY the invite token itself -- an invitee
+   never needs a Pass/Session of their own, per §25.6. */
+on('POST', '/api/engage/session/:token/invite/create', null, async (req, res, p) => {
+  const b = await readBody(req);
+  try {
+    const invite = createInvite(p.token, b.maxParticipants);
+    sendJSON(res, 200, invite);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+on('POST', '/api/engage/invite/:inviteToken/join', null, async (req, res, p) => {
+  const b = await readBody(req);
+  try {
+    const result = joinInvite(p.inviteToken, b.displayName);
     sendJSON(res, 200, result);
   } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
 });

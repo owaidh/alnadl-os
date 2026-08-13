@@ -1,4 +1,4 @@
-> **Version:** v2.0.11-p5-inc4-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 (pseudonymized identity + strict validation) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.11-p5-inc4-corrective
+> **Version:** v2.0.12-p5-inc5 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.12-p5-inc5
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,12 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### جداول الدعوة الجماعية — Phase 5 P5-Inc-5 (`migrations/010_engage_inc5.js`)
+- **`group_room`** — `session_id` يربط الغرفة بجلسة المُضيف الأصلية (الاتجاه الوحيد المسموح: Engage→Core لا يزال محفوظًا، هذا ربط داخل Engage نفسه). `invite_token` عشوائي تشفيريًا (24 بايت)، مُنفصل تمامًا عن `access_token` الخاص بالجلسة — تسريب رمز الدعوة (المُصمَّم للمشاركة أصلًا) لا يكشف أبدًا قدرة المُضيف الخاصة. `expires_at` = وقت الإنشاء + 30 دقيقة، **لكن الانتهاء الفعلي يُفرَض بشرطين معًا عند الانضمام**: الوقت لم ينتهِ **و** جلسة المُضيف لا تزال `running` — أيهما يتحقق أولًا يُبطل الدعوة
+- **`engage_participant`** — لا `session_id` خاص بالمدعو ولا أي ربط بطلب/دفع — المدعو لا يحتاج Pass/Session مستقلة إطلاقًا، مطابقةً لـ§25.6 حرفيًا. `max_participants` الافتراضي 8، **لا يمكن رفعه أبدًا فوق هذا السقف** حتى لو طلب المُضيف صراحة رقمًا أكبر (يُقيَّد للـ8 بصمت عند الطلب، لا يُرفَض — فرق متعمَّد عن تحقق Novelty الصارم في التصحيح السابق، لأن هذا سقف أمان وليس مدخل بيانات خاطئ الصياغة)
+
+**Rate Limiting على الانضمام**: يُعيد استخدام نفس نمط `isRateLimited`/`recordFailedAttempt` من `lib/auth.js` (تسجيل الدخول) حرفيًا، بمفتاح `invite_token` بدل اسم المستخدم — لا بنية Rate Limiting جديدة.
 
 ### تصحيح: تطبيع الهاتف + Pseudonymization عبر HMAC (بلا Migration جديدة — منطق فقط)
 `customer_engage_profile.identity_ref` **لم يعد يُخزِّن رقم الهاتف الخام أبدًا** — `lib/engage-novelty.js` يُطبِّع الصيغ الشائعة أولًا (`normalizePhone`) ثم يُحوِّلها لـ HMAC-SHA256(المفتاح=`SESSION_SECRET`، المُدخَل=`partnerId:normalizedPhone`) عبر `pseudonymizeIdentity`. نفس الرقم بأي صيغة سعودية شائعة يُطبَّع لنفس القيمة، ومعرّف الشريك جزء من HMAC نفسه (عزل مزدوج: بعمود `partner_id` وبالمُدخَل المُشفَّر معًا).

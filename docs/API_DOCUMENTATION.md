@@ -1,4 +1,4 @@
-> **Version:** v2.0.11-p5-inc4-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.11-p5-inc4-corrective
+> **Version:** v2.0.12-p5-inc5 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.12-p5-inc5
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -387,6 +387,24 @@ Authorization: Bearer <token>
 
 ### `GET /api/admin/engage/policy-overrides` — إداري، RBAC مُطبَّق
 نفس الحماية؛ `PartnerAdmin` يرى فقط ما يخص شركته.
+
+### `POST /api/engage/session/:sessionToken/invite/create` — Phase 5 P5-Inc-5
+```json
+{ "maxParticipants": 4 }
+```
+`maxParticipants` اختياري (افتراضي 8) — **لا يمكن رفعه فوق 8 أبدًا** حتى بطلب صريح بقيمة أكبر (يُقيَّد صامتًا لسقف الأمان، لا يُرفَض — هذا سقف حماية وليس تحقّق مُدخَلات). يتطلب `sessionToken` لجلسة مُضيف قائمة وبحالة `running` (`403` لرمز غير معروف، `409` لجلسة غير قائمة).
+```json
+{ "inviteToken": "d9Ri0XK3...", "expiresAt": 173..., "maxParticipants": 8 }
+```
+
+### `POST /api/engage/invite/:inviteToken/join` — عام، لا يتطلب Pass/Session للمدعو
+```json
+{ "displayName": "اسم اختياري" }
+```
+**الانتهاء بشرطين معًا** — 30 دقيقة من الإنشاء **أو** انتهاء جلسة المُضيف، أيهما أسبق (`404` موحَّدة لكلتا الحالتين، ولحالة "الرمز غير موجود أصلًا" أيضًا — لا تمييز يكشف أيهما وقع). `409` عند امتلاء الغرفة. **`429`** عند تجاوز معدل المحاولات (Rate Limiting بنفس آلية تسجيل الدخول). الاستجابة **لا تحتوي أبدًا** على معرّف الطلب أو أي بيانات مالية/دفع خاصة بالمُضيف — فقط سياق الغرفة (الشخصية، عدد المشاركين).
+```json
+{ "participantId": "epa_...", "personality": "PLAY", "participantCount": 2, "maxParticipants": 8 }
+```
 
 ### `POST /api/engage/session/:sessionToken/moment/:momentId/respond` — Phase 5 P5-Inc-3
 ```json

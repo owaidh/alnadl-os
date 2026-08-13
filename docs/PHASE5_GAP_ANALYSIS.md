@@ -1,4 +1,4 @@
-> **Version:** v2.0.11-p5-inc4-corrective · **Status:** P5-Inc-4 CORRECTIVE ROUND DELIVERED (phone normalization + HMAC pseudonymization + strict Novelty policy validation), awaiting review before P5-Inc-5 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.11-p5-inc4-corrective`
+> **Version:** v2.0.12-p5-inc5 · **Status:** P5-Inc-5 DELIVERED (Social/Group Invite), awaiting review before P5-Inc-6 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.12-p5-inc5`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,35 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-5 — سجل التسليم الفعلي (Social / Group Invite)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-6.**
+
+### مطابقة §25.6 من الوثيقة الأصلية بندًا ببند
+
+| بند §25.6 | التنفيذ |
+|---|---|
+| لا Invite إلا من Pass/Session صالحة | `createInvite()` يتحقق من `session.status === 'running'` قبل أي إنشاء |
+| رمز غير قابل للتخمين، لا يكشف IDs حساسة | 24 بايت عشوائية تشفيريًا، **منفصلة تمامًا** عن `access_token` الخاص بالجلسة |
+| انتهاء افتراضي = 30 دقيقة أو نهاية Session أيهما أسبق | مُختبَر بشرطين منفصلين فعليًا: انتهاء زمني، وانتهاء جلسة قبل الوقت المحدد |
+| حد افتراضي = 8 مشاركين | **لا يمكن تجاوزه أبدًا** — طلب 50 مشاركًا يُقيَّد صامتًا لـ8، لا يُرفَض (سقف أمان لا تحقّق مُدخَلات) |
+| Join يمنع Cross-Tenant، يخضع Rate Limiting | كلاهما مُختبَر مباشرة (تبديل نوع الرمز، وتجاوز حد المحاولات) |
+| المدعو لا يحتاج Order مستقل، ولا يحصل على صلاحيات الطلب/الدفع | `joinInvite()` لا يطلب أي Pass/Token من المدعو؛ الاستجابة **فُحِصت مباشرة** لغياب أي حقل طلب/دفع |
+
+### قرار تصميمي مُتعمَّد يستحق الانتباه: `409` لا `404` لاختلاف الدلالة بين "غير موجود" و"موجود لكن غير صالح للانضمام"
+
+`createInvite()` يُرجع `409` صراحةً عند محاولة إنشاء دعوة من جلسة مُنتهية (الجلسة **موجودة**، لكن حالتها تمنع العملية) — بخلاف `joinInvite()` الذي يُرجع `404` موحَّدة لكل من "الرمز غير موجود إطلاقًا" و"الرمز موجود لكن منتهي الصلاحية" (تعمّد عدم التمييز، لأن الدعوة المنتهية لا يجب أن تكشف للمنضم أنها "كانت موجودة" في وقت ما — نفس منطق الأمان المُطبَّق على رموز Pass/Session في Inc-2).
+
+### شروط القبول — كل بند، بدليله الفعلي
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| `group_room` + `engage_participant` | ✅ | مُنشأتان، مُختبَرتان بالكامل |
+| `engage.invite.create` + `engage.invite.join` | ✅ | نقطتا نهاية HTTP حقيقيتان |
+| Rate Limiting | ✅ | 11 محاولة انضمام متتالية → 429 عند التجاوز |
+| Boundary tests (توكن، انتهاء، حد المشاركين) | ✅ | 26 اختبارًا، كل حد مُختبَر عند تخومه بالضبط |
+| 258/258 Baseline محفوظ | ✅ | **284/284 الآن** (258 + 26 اختبارًا جديدًا) |
 
 ## P5-Inc-4 — الجولة التصحيحية (Pseudonymization + Policy Validation)
 
