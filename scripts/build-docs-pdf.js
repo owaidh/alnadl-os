@@ -17,6 +17,7 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 
 const DOCS = [
   { file: 'README.md', category: 'دليل المشروع · Project Guide' },
+  { file: 'docs/SYSTEM_GUIDE.md', category: 'المرجع الشامل ودليل الاستخدام · Complete System Guide' },
   { file: 'HANDOVER.md', category: 'التسليم الفني النهائي · Final Handover' },
   { file: 'docs/MASTER_REQUIREMENTS.md', category: 'المتطلبات · Requirements' },
   { file: 'docs/PRD.md', category: 'المتطلبات · Requirements' },
