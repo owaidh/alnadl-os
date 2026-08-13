@@ -537,7 +537,7 @@ on('POST', '/api/engage/session/start', null, async (req, res) => {
 });
 on('POST', '/api/engage/session/:token/next-moment', null, async (req, res, p) => {
   try {
-    const result = serveNextMoment(p.token);
+    const result = await serveNextMoment(p.token);
     sendJSON(res, 200, result);
   } catch (e) { sendJSON(res, e.status || 500, { error: e.message, ceilingReached: e.ceilingReached || false }); }
 });

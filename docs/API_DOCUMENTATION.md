@@ -1,4 +1,4 @@
-> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
+> **Version:** v2.0.17-p5-inc7 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.17-p5-inc7
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -402,6 +402,9 @@ Authorization: Bearer <token>
 { "scopeType": "property", "scopeId": "prop_nova_main", "enabled": false }
 ```
 `scopeType` يجب أن تكون `property` أو `zone` فقط لهذا الشكل (`partner` يُضبَط عبر الباقة نفسها، و`global` عبر `kill-switch` أعلاه حصريًا).
+
+### `POST /api/engage/session/:sessionToken/next-moment` — تحديث Inc-7
+**غير متزامنة الآن** (استدعاء AI محتمل بمهلة 4 ثوانٍ) — نفس التوقيع والاستجابة السابقة، مع حقل إضافي `source` صريح دائمًا (`"ai_generated"` أو `"approved_fallback"`). **العميل لا يرى أبدًا** خطأ مزوّد خام، مهلة منتهية، أو استجابة مُشوَّهة — كل هذه الحالات تُعالَج داخليًا وتنتهي دائمًا بمحتوى صالح مُقدَّم فعليًا (`HTTP 200`)، أو `409` لسبب Ceiling/Session العادي فقط كما كان.
 
 ### `POST /api/engage/session/:sessionToken/invite/create` — Phase 5 P5-Inc-5
 ```json

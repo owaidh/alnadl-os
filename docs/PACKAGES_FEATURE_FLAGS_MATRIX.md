@@ -1,4 +1,4 @@
-> **Version:** v2.0.16-p5-inc6-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-6 engage_enabled precedence (corrected) · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.16-p5-inc6-corrective
+> **Version:** v2.0.17-p5-inc7 · **Status:** FINAL (Phase 1-4) + P5-Inc-7 engage_ai_generation flag · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.17-p5-inc7
 
 # Alnadl Hospitality OS — Packages & Feature Flags Matrix (§4, §26.1)
 
@@ -38,6 +38,10 @@
 
 ## Override تعاقدي لكل شريك
 النظام الحالي **لا يدعم Override فرديًا** خارج حدود الباقة (كل شريك يتبع مزايا باقته حرفيًا) لهذه الأعلام أعلاه تحديدًا. أي استثناء تعاقدي خاص (مثال: شريك على SMART لكن بميزة Loyalty بموجب اتفاق خاص) يتطلب إما ترقية الباقة فعليًا أو تعديل مباشر على `subscriptions.features_json` لذلك الشريك تحديدًا — غير مبني كواجهة إدارية بعد.
+
+## `engage_ai_generation` — نفس سلسلة الأولوية الكاملة، مفتاح مستقل عن `engage_enabled` (Phase 5 P5-Inc-7)
+
+يتبع **بالضبط** نفس نمط `engage_enabled` — أربع طبقات، دالة عامة مشتركة (`resolveFlag()` في `lib/engage-flags.js`) — لكن **بمفتاح إيقاف طارئ مستقل تمامًا**. تعطيل الذكاء الاصطناعي عالميًا (مثال: حادثة مع مزوّد AI) **لا يُعطِّل** Engage الثابت نفسه — المحتوى الاحتياطي المُعتمَد يستمر في العمل طبيعيًا. مُختبَر مباشرة: تعطيل مفتاح AI العام لا يُغيّر نتيجة `resolveEngageEnabled()` إطلاقًا.
 
 ## `engage_enabled` — Feature Flag استثنائي بسلسلة أولوية كاملة (Phase 5)
 
