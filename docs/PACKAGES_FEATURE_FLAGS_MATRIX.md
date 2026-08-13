@@ -1,4 +1,4 @@
-> **Version:** v2.0.15-p5-inc6 · **Status:** FINAL (Phase 1-4) + P5-Inc-6 engage_enabled precedence · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.15-p5-inc6
+> **Version:** v2.0.16-p5-inc6-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-6 engage_enabled precedence (corrected) · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.16-p5-inc6-corrective
 
 # Alnadl Hospitality OS — Packages & Feature Flags Matrix (§4, §26.1)
 
@@ -53,4 +53,4 @@ Property Override (venue_policy_override, scope_type='property')
 Zone Override (venue_policy_override, scope_type='zone')
 ```
 
-**القاعدة الصارمة**: أي مستوى أدنى يمكنه فقط أن **يُقيِّد** (يُحوِّل لـOFF) — لا يمكنه أبدًا **تفعيل** ما رفضه مستوى أعلى. مُختبَر مباشرة في `tests/engage-inc6.js` بكل توليفة تعارض ممكنة.
+**القاعدة الصارمة (مُصحَّحة، الجولة التصحيحية v2.0.16)**: **Global Safety** و**Partner Contract** حظران مطلقان — لا يمكن لأي مستوى أدنى تجاوزهما مهما كان. **بعد تجاوز هذين الحظرين فقط**، `Property` و`Zone` أصبحا Override هرميًا حقيقيًا: **الأدق يفوز دائمًا** — قد يعني هذا أن `Zone` صريحة تُفعِّل ما قيَّده `Property` (مثال: `Property=OFF` لكن `Zone=ON` صراحةً → **يُفعَّل**)، بنفس صيغة `zone ?? property ?? افتراضي` المُطبَّقة في Ceiling/Novelty بالضبط. **جدول حقيقة كامل (9 حالات) مُختبَر مباشرة** في `tests/engage-inc6.js`، راجع `docs/PHASE5_GAP_ANALYSIS.md` قسم "الجولة التصحيحية" للتفصيل الكامل.

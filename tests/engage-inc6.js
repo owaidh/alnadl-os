@@ -178,6 +178,51 @@ async function run() {
     assertEqual(resolveEngageEnabled(true, 'pt_nova', 'prop_nova_main', 'z_pool'), true, 'a DIFFERENT zone with no override of its own still resolves via Property=ON normally');
 
     // ============================================================
+    // CORRECTIVE ROUND: full truth table for resolveEngageEnabled()
+    // ============================================================
+    // Each row uses its OWN fresh, never-before-touched property_id/zone_id
+    // strings so no row's override can leak into another's expected result
+    // via a shared scope_id from earlier in this test file.
+    const { setEngageEnabledOverride } = require('../lib/engage-flags.js');
+
+    // Row 1: Global=OFF always wins, regardless of everything else being ON
+    await api('POST', '/api/admin/engage/kill-switch', { enabled: false }, adminToken);
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_1', 'tt_zone_1'), false, 'TRUTH TABLE row 1: Global=OFF, Contract=ON, no overrides -> OFF (Global always wins)');
+    await api('POST', '/api/admin/engage/kill-switch', { enabled: true }, adminToken);
+
+    // Row 2: Contract=OFF always wins over unset Property/Zone
+    assertEqual(resolveEngageEnabled(false, 'pt_nova', 'tt_prop_2', 'tt_zone_2'), false, 'TRUTH TABLE row 2: Global=ON, Contract=OFF, no overrides -> OFF (Contract always wins)');
+
+    // Row 3: baseline -- Global ON, Contract ON, nothing set -> ON
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_3', 'tt_zone_3'), true, 'TRUTH TABLE row 3: Global=ON, Contract=ON, no Property/Zone override -> ON (Contract baseline stands)');
+
+    // Row 4: Property=OFF, no Zone -> OFF
+    setEngageEnabledOverride('property', 'tt_prop_4', false, 'test-admin');
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_4', 'tt_zone_4'), false, 'TRUTH TABLE row 4: Property=OFF, Zone unset -> OFF');
+
+    // Row 5: Property=ON, Zone=OFF -> OFF (Zone more specific)
+    setEngageEnabledOverride('property', 'tt_prop_5', true, 'test-admin');
+    setEngageEnabledOverride('zone', 'tt_zone_5', false, 'test-admin');
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_5', 'tt_zone_5'), false, 'TRUTH TABLE row 5: Property=ON, Zone=OFF -> OFF (most specific explicit value wins)');
+
+    // Row 6: *** the exact case flagged in review *** Property=OFF, Zone=ON -> ON
+    setEngageEnabledOverride('property', 'tt_prop_6', false, 'test-admin');
+    setEngageEnabledOverride('zone', 'tt_zone_6', true, 'test-admin');
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_6', 'tt_zone_6'), true, 'TRUTH TABLE row 6 (THE FIX): Property=OFF, Zone=ON -> ON -- the most specific explicit value (Zone) wins even when a LESS specific level (Property) says otherwise; this exact case previously resolved incorrectly to OFF before this corrective round');
+
+    // Row 7: Property=ON, Zone=ON -> ON
+    setEngageEnabledOverride('property', 'tt_prop_7', true, 'test-admin');
+    setEngageEnabledOverride('zone', 'tt_zone_7', true, 'test-admin');
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_7', 'tt_zone_7'), true, 'TRUTH TABLE row 7: Property=ON, Zone=ON -> ON');
+
+    // Confirms: Zone can NEVER override Global=OFF or Contract=OFF, even
+    // with an explicit Zone=ON override in place (reusing row 7's property/zone).
+    await api('POST', '/api/admin/engage/kill-switch', { enabled: false }, adminToken);
+    assertEqual(resolveEngageEnabled(true, 'pt_nova', 'tt_prop_7', 'tt_zone_7'), false, 'TRUTH TABLE: Global=OFF still wins even with an explicit Zone=ON override in place -- Zone cannot override Global under any configuration');
+    await api('POST', '/api/admin/engage/kill-switch', { enabled: true }, adminToken);
+    assertEqual(resolveEngageEnabled(false, 'pt_nova', 'tt_prop_7', 'tt_zone_7'), false, 'TRUTH TABLE: Contract=OFF still wins even with an explicit Zone=ON override in place -- Zone cannot override Contract under any configuration');
+
+    // ============================================================
     // NEGATIVE: disabled Engage end-to-end -- worker actually skips pass creation
     // ============================================================
     const platformPlan = db.prepare(`SELECT * FROM plans WHERE code = 'PLATFORM'`).get();

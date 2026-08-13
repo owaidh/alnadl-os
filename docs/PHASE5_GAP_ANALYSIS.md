@@ -1,4 +1,4 @@
-> **Version:** v2.0.15-p5-inc6 · **Status:** P5-Inc-6 DELIVERED (Feature Flags + Engage Roles + Partner Dashboard Privacy), awaiting review before P5-Inc-7 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.15-p5-inc6`
+> **Version:** v2.0.16-p5-inc6-corrective · **Status:** P5-Inc-6 CORRECTIVE ROUND DELIVERED (engage_enabled Property/Zone precedence semantic fixed), awaiting review before P5-Inc-7 begins · **Last Updated:** 2026-08-13 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.16-p5-inc6-corrective`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,59 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-6 — الجولة التصحيحية (دلالة Property/Zone الصحيحة)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-7.**
+
+### الخلل — حقيقي ومُصحَّح بالكامل
+
+**قبل هذه الجولة**: `resolveEngageEnabled()` كانت تُعامل `Property=false` **و**`Zone=false` كليهما كقيدين نهائيين مستقلَين:
+```js
+if (zoneOverride === false || propertyOverride === false) return false;
+```
+هذا يعني أن `Property=OFF` كانت تفوز **حتى لو كان `Zone=ON` صراحةً أدق منها** — عكس مبدأ "الأدق يفوز" المُطبَّق بنجاح في Ceiling وNovelty. الحالة الناقصة تحديدًا: `Global=ON → Contract=ON → Property=OFF → Zone=ON` كانت تُحسَب خطأً كـ**OFF**، رغم أن Zone (الأدق) يقول ON صراحةً.
+
+### الإصلاح — نفس صيغة `??` المُثبَتة، مُطبَّقة بشكل صحيح هذه المرة
+
+```js
+// بعد التحقق من الحظرين المطلقين فقط (Global، Contract):
+return zoneOverride ?? propertyOverride ?? true;
+```
+`??` (Nullish Coalescing) يتجاوز فقط `null`/`undefined` — **وليس `false`** — فـ`Zone=false` صريحة تُرجَع فورًا كنتيجة نهائية، بينما `Zone` غير المضبوطة (`null`) تنتقل صحيحًا لـ`Property`. هذا يُحقِّق "الأدق يفوز" حرفيًا لأول مرة.
+
+**خلل بنيوي إضافي حقيقي اكتُشف أثناء هذا الإصلاح نفسه**: النسخة الأولى من التعديل تركت سطر `return true;` ميتًا (Unreachable) بعد `return zoneOverride ?? propertyOverride ?? true;` — بقايا من الكود القديم. اكتُشف بمراجعة الدالة كاملة بعد التعديل مباشرة، وأُزيل فورًا قبل أي اختبار.
+
+### جدول الحقيقة الكامل — 9 حالات، بدليل مباشر لكل واحدة
+
+| # | Global | Contract | Property | Zone | النتيجة | ملاحظة |
+|---|---|---|---|---|---|---|
+| 1 | OFF | ON | — | — | **OFF** | Global يفوز دائمًا |
+| 2 | ON | OFF | — | — | **OFF** | Contract يفوز دائمًا |
+| 3 | ON | ON | — | — | **ON** | الأساس بلا Overrides |
+| 4 | ON | ON | OFF | — | **OFF** | |
+| 5 | ON | ON | ON | OFF | **OFF** | Zone أدق |
+| **6** | ON | ON | **OFF** | **ON** | **ON** | **الحالة الناقصة — مُصحَّحة الآن** |
+| 7 | ON | ON | ON | ON | **ON** | |
+| — | OFF | ON | — | Zone=ON | **OFF** | Zone لا يتجاوز Global أبدًا |
+| — | ON | OFF | — | Zone=ON | **OFF** | Zone لا يتجاوز Contract أبدًا |
+
+**كل صف مُختبَر مباشرة** بمعرّفات Scope منفصلة تمامًا لكل صف (لا تداخل بين الاختبارات)، بالإضافة لاختبارين صريحين يُثبتان أن Zone **لا يمكنه أبدًا** تجاوز Global أو Contract حتى مع تفعيل صريح.
+
+### الحفاظ على كل شيء آخر
+
+Tenant Isolation، Audit، Kill Switch، وسلوك Worker المُعطَّل — **لم تُمَس إطلاقًا**؛ كل الاختبارات الأصلية (49) التي غطَّت هذه الجوانب أُعيد تشغيلها كما هي دون أي تعديل، ونجحت جميعًا.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| تصحيح `resolveEngageEnabled()` للدلالة الصحيحة | ✅ | صيغة `??` مطابقة لـCeiling/Novelty |
+| جدول حقيقة كامل | ✅ | 9 حالات، كل واحدة بدليل مباشر منفصل |
+| حالة Property=OFF+Zone=ON صراحةً | ✅ | الصف السادس، النتيجة الأهم في هذا الإصلاح |
+| Zone لا يتجاوز Global/Contract أبدًا | ✅ | اختباران صريحان إضافيان |
+| الحفاظ على Isolation/Audit/Kill Switch/Worker | ✅ | 49 اختبارًا أصليًا دون تعديل، كلها ناجحة |
+| Regression كامل | ✅ | **357/357** (348 + 58 لمجموعة Inc-6 المُحدَّثة) |
 
 ## P5-Inc-6 — سجل التسليم الفعلي (Feature Flags + Roles + Partner Privacy)
 
