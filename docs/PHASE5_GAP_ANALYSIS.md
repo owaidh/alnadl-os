@@ -1,4 +1,4 @@
-> **Version:** v2.0.5-p5-inc1-corrective · **Status:** P5-Inc-1 CORRECTIVE ROUND DELIVERED (outbox retry/dead-letter + atomic transactional outbox), awaiting review before P5-Inc-2 begins · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.5-p5-inc1-corrective`
+> **Version:** v2.0.6-p5-inc2 · **Status:** P5-Inc-2 DELIVERED (Personality Engine + Ceiling + Policy Precedence), awaiting review before P5-Inc-3 begins · **Last Updated:** 2026-08-12 · **Baseline:** `v2.0.3-p4-baseline-locked` · **This Increment's Tag:** `v2.0.6-p5-inc2`
 
 # Alnadl Hospitality OS — Phase 5 (ALNADL Engage) Gap Analysis & Technical Design — REVISION 2
 
@@ -9,6 +9,45 @@
 | Rev 1 | التحليل الأولي — 8 Increments، مبدأ العزل، Inc-1 schema أولي |
 | Rev 2 | يعالج 10 ملاحظات: اتجاه FK حقيقي في SQL (لا تعليقات فقط)، Inc-7/Inc-8 إلزاميان بالكامل ضمن Phase 5 (فقط بيانات اعتماد الإنتاج الفعلية Pre-Go-Live)، ENG-NOV-001 يبقى Partial حتى الحل الدلالي الكامل، Target Data Model كامل (21 جدولاً)، تصميم `order.confirmed` غير متزامن مُوضَّح، Target Architecture كاملة، تفصيل كل Increment (Scope/Requirement IDs/DB/API/Dependencies/Tests/Risks/Flags/DoD/Deliverables)، Traceability كاملة لكل متطلبات الوثيقة الأصلية، تقدير زمني نهائي |
 | **P5-Inc-1 DELIVERED** | ✅ مُنفَّذ ومُختبَر بالكامل — راجع القسم الجديد أدناه |
+
+## P5-Inc-2 — سجل التسليم الفعلي (بعد التنفيذ)
+
+**الحالة: مُسلَّم، بانتظار مراجعتكم قبل بدء Inc-3.**
+
+### التصميم الفعلي
+
+**تحليل الشخصية (`lib/engage-personality.js`)**: إشارتان فقط من بيانات Core القائمة فعليًا — لا Master Data مكرر:
+- إشارة المنطقة (`zones.type`): `Business→RESET`, `Leisure→PLAY`, `VIP→MIND`
+- إشارة المنشأة (`properties.venue_context`, عمود إضافي جديد): `corporate→RESET`, `coffee→SPARK`, `hotel→DISCOVER`, `entertainment→PLAY`, `vip_lounge→MIND`
+- الأولوية: إشارة المنطقة أقوى (مثال: قاعة اجتماعات داخل فندق = RESET رغم أن المنشأة "DISCOVER" عمومًا)، ثم إشارة المنشأة، ثم RESET كافتراضي أكثر أمانًا
+
+**Engagement Ceiling وPolicy Precedence**: صيغة رياضية واحدة تُحقِّق التسلسل الهرمي كاملاً:
+```
+resolved = zone_override ?? property_override ?? contract_override ?? DEFAULT_CEILING[personality]
+if contract_override موجود: resolved = min(resolved, contract_override)  // Contract يبقى سقفًا حتى لو حاول مستوى أدق تجاوزه
+resolved = min(resolved, HARD_CEILING[personality])  // Global Safety، مطلق، لا استثناء
+```
+`HARD_CEILING.RESET = 1` **دائمًا** — هذا ما يجعل "منع التكرار" مضمونًا هيكليًا، لا اتفاقيًا.
+
+### خلل حقيقي حرج اكتُشف وأُصلح أثناء الاختبار المباشر (قبل أي اختبار HTTP)
+
+**محاولة تجاوز RESET ("No Replay") كانت ممكنة فعليًا في المسودة الأولى**: كانت `startSession()` تتحقق فقط من وجود جلسة بحالة `running` لنفس الـPass — بما أن جلسة RESET تنتهي تلقائيًا فور تقديم لحظتها الوحيدة (`status='ended'`)، فإن استدعاء `startSession()` مرة أخرى لنفس الـPass **كان يُنشئ جلسة جديدة بالكامل بسقف جديد**، متجاوزًا "تجربة واحدة فقط" بالكامل بمجرد إعادة الدخول. **أُصلح فورًا**: التحقق الآن يشمل أي جلسة سابقة لهذا الـPass (بغض النظر عن حالتها)، فتُعاد نفس الجلسة (المنتهية) دائمًا — مُختبَر بمحاولة تجاوز فعلية مباشرة: النتيجة **مضمون رياضيًا 1 لحظة كحد أقصى لكل Pass أبدًا**، وليس افتراضًا.
+
+### شروط القبول
+
+| الشرط | الحالة | الدليل |
+|---|---|---|
+| الشخصيات الخمس كاملة | ✅ | RESET/SPARK/DISCOVER/PLAY/MIND — مُختبَرة جميعًا من بيانات Core حقيقية |
+| حدود كل Context مع اختبارات Boundary فعلية | ✅ | ليس Happy Path فقط: RESET (1→حظر)، SPARK (3→حظر الرابعة)، MIND (Override يرفع من 1→2→حظر الثالثة) |
+| Policy Precedence كامل (Global→Contract→Property→Zone) | ✅ | 3 اختبارات مخصصة: Global Safety لا يُتجاوَز، Contract يمنع Property من التجاوز، Zone يفوز عند التخصيص الأعلى |
+| إثبات أن المستوى الأدنى لا يتجاوز Global Safety أو Contract | ✅ | مُختبَر بمحاولتي تجاوز فعليتين منفصلتين، كلتاهما مرفوضتان بدقة |
+| Session creation وربطها بالـPass | ✅ | `engage_session.pass_id` مُتحقَّق منه مباشرة من قاعدة البيانات |
+| منع أكثر من تجربة في RESET | ✅ **(بعد إصلاح خلل حقيقي، راجع أعلاه)** | صفر تكرار مضمون هيكليًا (`HARD_CEILING.RESET=1`) + محاولة تجاوز فعلية مرفوضة |
+| حدود Moments لكل Personality | ✅ | كل الخمس شخصيات، كل حد مُختبَر عند تخومه بالضبط |
+| إنهاء Session/Ceiling بصورة صحيحة | ✅ | إنهاء تلقائي فور بلوغ السقف + `session/end` صريح Idempotent |
+| الحفاظ على 105/105 كـBaseline | ✅ | **141/141 الآن** (105 + 36 اختبارًا جديدًا لـInc-2) |
+
+**ملاحظة صادقة واحدة غير متعلقة بـInc-2**: أثناء العمل، ظهرت مرة واحدة (من أصل 5 محاولات تشغيل) نتيجة Flake غير حتمية في اختبارات Q02 الزمنية القائمة من قبل (`api-phase4.js`) — أُعيد التشغيل 4 مرات متتالية بعدها ونجحت في كل مرة. هذا Flake موجود مسبقًا في اختبارات زمنية حساسة للتوقيت وليس ناتجًا عن أي تغيير في Inc-2، لكنه يستحق تسجيله بصراحة كعنصر تحسين مستقبلي (Hardening) لا علاقة له بقبول Inc-2 نفسه.
 
 ## P5-Inc-1 — سجل التسليم الفعلي (بعد التنفيذ)
 

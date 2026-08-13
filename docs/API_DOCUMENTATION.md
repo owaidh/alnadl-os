@@ -1,4 +1,4 @@
-> **Version:** v2.0.5-p5-inc1-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1 endpoint (corrective round) · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.5-p5-inc1-corrective
+> **Version:** v2.0.6-p5-inc2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 endpoints · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.6-p5-inc2
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -348,6 +348,27 @@ Authorization: Bearer <token>
 **آلية الربط `order.confirmed` (غير متزامنة بالكامل، ذرّية مع تأكيد الدفع):** عند نجاح الدفع، `server.js` يكتب صفًا واحدًا في `engage_outbox` **داخل نفس معاملة (Transaction) تحديث حالة الطلب** — إما يثبت الاثنان معًا أو لا يثبت أي منهما (جولة تصحيحية v2.0.5، Atomic Outbox Pattern). Worker مستقل (`startEngageWorker()`, استطلاع كل 5 ثوانٍ) يقرأ الصفوف المؤهَّلة، يتحقق من `engage_enabled` للشريك، وينشئ `engage_pass` فقط إن كانت الميزة مُفعَّلة. **إيقاف الـWorker بالكامل لا يُغيّر أي شيء في مسار الدفع/الطلب** — مُختبَر بشكل صريح (`ENG-ISO-001` في `tests/engage-inc1.js`).
 
 **سياسة إعادة المحاولة (v2.0.5):** فشل عابر أثناء المعالجة (وليس `engage_enabled=false`، تلك ليست فشلاً) يُبقي الصف `pending` مع `next_attempt_at` بـBackoff أُسِّي (سقف 30 ثانية) حتى `max_attempts` (افتراضي 5)، ثم ينتقل لحالة `dead_letter` نهائية مع `last_error` وسجل تدقيق كامل.
+
+## 23) ALNADL Engage — Phase 5 P5-Inc-2
+
+### `POST /api/engage/session/start`
+```json
+{ "passId": "ep_..." }
+```
+عام (لا مصادقة — الـPass نفسه هو التفويض، بنفس فلسفة رمز QR). يُرجع الجلسة القائمة لنفس الـPass إن وُجدت (بغض النظر عن حالتها — هذا مقصود، راجع §Inc-2 في `docs/PHASE5_GAP_ANALYSIS.md` للتفصيل الأمني)، وإلا يُنشئ جلسة جديدة بشخصية وسقف محسوبَين تلقائيًا.
+```json
+{ "id": "es_...", "personality": "SPARK", "ceilingMax": 3, "ceilingUsed": 0, "status": "running" }
+```
+`404` إن كان الـPass غير موجود، `409` إن كان غير نشط/منتهي الصلاحية.
+
+### `POST /api/engage/session/:id/next-moment`
+يُقدِّم اللحظة التالية من المحتوى الثابت المُعتمَد (`source:"approved_fallback"`) لشخصية الجلسة، ويزيد عدّاد `ceiling_moments_used`. **`409` مع `ceilingReached:true`** إن بلغت الجلسة سقفها. الجلسة تنتهي تلقائيًا (`status:'ended'`) فور بلوغ السقف بهذا الاستدعاء نفسه.
+```json
+{ "momentId": "mo_...", "payload": {...}, "ceilingUsed": 2, "ceilingMax": 3, "sessionEnded": false }
+```
+
+### `POST /api/engage/session/:id/end`
+إنهاء صريح، Idempotent (استدعاؤه على جلسة منتهية بالفعل لا يُنتج خطأً).
 
 ## ملاحظة حول Idempotency وWebhooks (Q03، §18)
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل

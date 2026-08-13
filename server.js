@@ -18,6 +18,7 @@ const { getOrCreateAccount, earnPoints, quoteRedemption, commitRedemption } = re
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker } = require('./lib/engage-worker.js');
+const { startSession, serveNextMoment, endSession } = require('./lib/engage-session.js');
 const gateway = getGateway();
 
 const PORT = process.env.PORT || 8787;
@@ -404,6 +405,29 @@ on('GET', '/api/engage/pass/:id', null, async (req, res, p) => {
   if (!pass) return sendJSON(res, 404, { error: 'Not found' });
   const isExpired = pass.status === 'active' && Date.now() > pass.expires_at;
   sendJSON(res, 200, { id: pass.id, status: isExpired ? 'expired' : pass.status, expiresAt: pass.expires_at, createdAt: pass.created_at });
+});
+
+/* Phase 5 P5-Inc-2: Session lifecycle + Moment serving. All three are
+   public/customer-facing (no auth) — an Engage Pass IS the authorization,
+   the same way a QR token is throughout the rest of this system. */
+on('POST', '/api/engage/session/start', null, async (req, res) => {
+  const b = await readBody(req);
+  try {
+    const session = startSession(b.passId);
+    sendJSON(res, 200, { id: session.id, personality: session.personality, ceilingMax: session.ceiling_moments_max, ceilingUsed: session.ceiling_moments_used, status: session.status });
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
+});
+on('POST', '/api/engage/session/:id/next-moment', null, async (req, res, p) => {
+  try {
+    const result = serveNextMoment(p.id);
+    sendJSON(res, 200, result);
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message, ceilingReached: e.ceilingReached || false }); }
+});
+on('POST', '/api/engage/session/:id/end', null, async (req, res, p) => {
+  try {
+    const session = endSession(p.id);
+    sendJSON(res, 200, { id: session.id, status: session.status });
+  } catch (e) { sendJSON(res, e.status || 500, { error: e.message }); }
 });
 
 /* ------------------------------ REFUNDS (Q03) --------------------------------- */

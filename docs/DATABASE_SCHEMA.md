@@ -1,4 +1,4 @@
-> **Version:** v2.0.5-p5-inc1-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1 (corrective: retry/dead-letter + atomic transaction) · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.5-p5-inc1-corrective
+> **Version:** v2.0.6-p5-inc2 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2 tables · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.6-p5-inc2
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -141,6 +141,12 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### `partner_branding` (Phase 4 §11/§12)
 صف واحد لكل شريك (`partner_id` PK). شريك بلا صف هنا (كل الشركاء افتراضيًا) يُعرَض بعلامة النادل الافتراضية. يحمل أيضًا نموذجًا تجاريًا مستقلاً تمامًا (`fee_model`, `setup_fee_amount`, `recurring_fee_amount`) عن نموذج إيراد أي منفذ تابع له.
+
+### جداول ALNADL Engage — Phase 5 P5-Inc-2 (`migrations/006_engage_inc2.js`)
+- **`properties.venue_context`** — عمود إضافي جديد (`corporate`/`coffee`/`hotel`/`entertainment`/`vip_lounge`)، الإشارة الأساسية لمحرك الشخصية عند غياب إشارة منطقة أقوى
+- **`mechanic`/`mechanic_version`** — بنية تحتية مشتركة مع Mechanic Lab المستقبلية (Inc-8)؛ Inc-2 يزرع فقط 5 آليات ثابتة مُعتمَدة مسبقًا (`lifecycle_state='promoted'`, `created_by='alnadl_admin'`) — واحدة لكل شخصية، تمثيل حرفي لمتطلب "Approved Static/Fallback Content"
+- **`moment`/`payload_version`** — كل لحظة مُقدَّمة فعليًا للعميل + المحتوى الحرفي المعروض (غير قابل للتعديل بعد إنشائه)
+- **`venue_policy_override`** — جدول التخصيص الهرمي (`scope_type`: partner/property/zone، `policy_key`: مثال `ceiling_MIND`) — يُطبَّق عبر `lib/engage-personality.js` بصيغة `min()` مُتسلسلة تضمن أن لا مستوى أدق يتجاوز Global Safety أو قيدًا تعاقديًا أعلى
 
 ### جداول ALNADL Engage — Phase 5 P5-Inc-1 (`migrations/004_engage_inc1.js`)
 **اتجاه الاعتماد مؤكَّد ومُختبَر**: `Engage → Core` حصريًا — `engage_pass.order_id` قيد `FOREIGN KEY ... REFERENCES orders(id)` **حقيقي** (`ON DELETE CASCADE ON UPDATE CASCADE`)، مُختبَر فعليًا برفض إدراج بمرجع غير صالح. لا جدول Core (`orders`, `payments`...) يحمل أي عمود أو قيد نحو Engage. تدفق البيانات (وليس الاعتماد) يسير بالاتجاه المعاكس: `Core → Engage` عبر `order.confirmed` → صف واحد في `engage_outbox` (كتابة محلية غير مشروطة، لا قرار Engage-specific داخل Core).
