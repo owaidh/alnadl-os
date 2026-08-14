@@ -8,3 +8,14 @@ test-*.sqlite-wal
 test-*.sqlite-journal
 *.log
 node_modules/
+
+# Generated documentation artifacts.
+# docs/pdf/ is rebuilt from the markdown sources with:
+#     node scripts/build-docs-pdf.js
+# Every delivery round regenerated all 26 PDFs, and git stored each
+# rebuild as fresh ~5MB of binary blobs that do not delta-compress --
+# which is why .git had grown to 33MB while the actual source is under
+# 1MB. Generated output does not belong in version control; the
+# markdown sources are the tracked truth, and the PDFs are still built
+# and shipped in every package.
+docs/pdf/
