@@ -563,6 +563,8 @@ node tests/run-all.js     # 570 اختبارًا
 
 # الجزء التاسع — حالة جاهزية الإطلاق (Go-Live Status)
 
+> **المرجع التفصيلي**: `docs/GOLIVE_STATUS_MATRIX.md` يحتوي المصفوفة الكاملة بندًا بندًا (Requirement · Status · Evidence · External Dependency · Remaining Action)، و`docs/POSTGRESQL_MIGRATION_PLAN.md` يحتوي تدقيق قابلية النقل وخطة التنفيذ ومتطلبات البيئة.
+
 **هذا الجزء يفصل بصراحة بين أربع حالات.** لا يُوصف أي بند بأنه مُنجَز ما لم يكن مُنفَّذًا ومُختبَرًا فعليًا.
 
 ## ✅ Implemented & Production-Ready
