@@ -1,4 +1,4 @@
-> **Version:** v2.0.19-p5-inc8 · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7/8 endpoints · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.19-p5-inc8
+> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -488,3 +488,48 @@ Authorization: Bearer <token>
 - `POST /api/orders/:id/pay` idempotent فعليًا: استدعاء مُكرَّر بعد نجاح أول استدعاء يُرجع `{ idempotent: true }` دون تكرار التحصيل
 - `POST /api/orders/:id/refund` idempotent عبر `idempotencyKey` اختياري (راجع القسم 20)
 - `verifyWebhook()` في `lib/payment.js` نقطة تكامل جاهزة — أي Adapter حقيقي **يجب** أن يُنفِّذ التحقق الفعلي من توقيع HMAC هنا قبل أي إنتاج (راجع `docs/GAP_REGISTER.md` بند Q05)
+
+
+---
+
+## Go-Live P0/P1 — نقاط جديدة
+
+### إدارة الباقات والمزايا (P0-2) — SuperAdmin فقط
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/api/admin/plans` | قائمة الباقات مع مزاياها وعدد المشتركين |
+| POST | `/api/admin/plans` | إنشاء باقة — `{code, name_ar, name_en, monthlyFee, techFeeRate, entitlements}` |
+| PATCH | `/api/admin/plans/:id` | تعديل — **المزايا تُدمج ولا تُستبدل**، و`code` غير قابل للتغيير |
+| DELETE | `/api/admin/plans/:id` | حذف — **يُرفض (409)** إن وُجد مشتركون |
+
+> `entitlements` كائن Boolean حر — إضافة مزايا مستقبلية بلا تغيير مخطط.
+
+### التحقق من الضيف (P0-5) — عامة
+| Method | Path | الوصف |
+|---|---|---|
+| POST | `/api/loyalty/verify/start` | بدء تحدٍّ — `{t, phone, channel}` · يُرجع `{ok, reason}` فقط |
+| POST | `/api/loyalty/verify/confirm` | تأكيد — `{t, phone, code}` |
+
+> `t` = رمز QR، ومنه يُشتق نطاق الشريك **على الخادم**. بلا مزوّد: `{ok:false, reason:'no_provider'}`.
+
+### الولاء — أصبحت مُقيَّدة بالشريك (P0-4)
+`GET /api/loyalty/:phone` و`/history` تتطلبان الآن `?t=<qr_token>`. بلا رمز صالح ⇒ رصيد صفر وسجل فارغ — **ولا يُكشف وجود الرقم من عدمه**.
+
+### التشغيل (P1)
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/health` | حياة العملية — لا يلمس قاعدة البيانات |
+| GET | `/ready` | جاهزية استقبال الحركة — يفحص القاعدة فعليًا · `503` عند التعطّل أو `draining` |
+
+### محدّد المعدل (P0-6)
+| الحزمة | الحد | النافذة |
+|---|---|---|
+| `order_create` | 10 | دقيقة |
+| `loyalty_lookup` | 20 | دقيقة |
+| `verification` | 5 | 5 دقائق |
+| `engage_discovery` | 30 | دقيقة |
+| `public_default` | 120 | دقيقة |
+
+قابلة للضبط بـ`RATE_LIMIT_<BUCKET>_LIMIT` و`_WINDOW_MS`. التجاوز ⇒ **429** مع `Retry-After`. **Webhook الدفع مُستثنى عمدًا** (إسقاط إعادة محاولات المزوّد يكسر المطابقة المالية)، وتسجيل دخول الموظفين له محدّده الخاص.
+
+> ⚠️ المحدّد في الذاكرة: آمن لنسخة واحدة. **عند تعدد النسخ** يتضاعف الحد الفعلي — يلزم مخزن مشترك (Redis) وهو غير مُنفَّذ.

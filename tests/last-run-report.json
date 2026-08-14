@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-14T03:56:58.388Z",
+  "timestamp": "2026-08-14T04:34:50.442Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -67,6 +67,18 @@
     },
     {
       "suite": "./loyalty-partner-scope.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./golive-ops.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./golive-onboarding.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./golive-p1.js",
       "status": "PASS"
     }
   ],

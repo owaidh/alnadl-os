@@ -1,4 +1,4 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED — 13/20 fully closed, 3/20 partially closed as formally-accepted technical debt (73/73 automated tests, verified count), 4/20 explicitly open (Pre-Go-Live). P4-GATE-001 through 008 all satisfied (see dedicated section below) — this baseline is now locked per the Phase 5 pre-gate requirement. · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
 
 # Alnadl Hospitality OS — Gap Register (Final Quality & Completion Requirements Response)
 
@@ -67,3 +67,37 @@ Phase 5 لها سجل تتبّع خاص بها، منفصل عمدًا عن Q01-
 | **v2.0.2-corrective-2 (هذا الإصدار)** | إعادة كتابة هذه الوثيقة كجدول وحيد بلا حالات تاريخية متبقية (كانت Q01/Q03/Q04 لا تزال تُقرأ "لم يُبنَ" رغم إنجازها)؛ إصلاح خلل تنسيق جدول حقيقي (صفا Q10/Q11 كانا مُدمَجين سطرًا واحدًا بلا فاصل)؛ تصحيح مرجع Q13 لآخر Tag؛ فرض `SESSION_SECRET` إلزاميًا في Production بدل تحذير فقط؛ منع Demo Seed التلقائي في Production؛ تصحيح/حذف مرجع Migration 004 غير الحقيقي في `db.js` |
 
 راجع `docs/CHANGELOG.md` للتفصيل الكامل الحرفي، و`git log --oneline` للتاريخ الفعلي بلا حذف.
+
+
+---
+
+## Go-Live P0/P1 — سجل الجولة
+
+### مُغلق ومُثبَت
+
+| المعرّف | الفجوة | الإغلاق |
+|---|---|---|
+| GL-P0-2 | **لا مسار لإنشاء باقة** — نشر إنتاجي فارغ لا يمكن تفعيل أول عميل مدفوع فيه | `POST/PATCH/DELETE /api/admin/plans` · 31 اختبارًا من قاعدة فارغة حتى طلب مدفوع |
+| GL-P0-2b | **Onboarding لا يُنشئ تاجرًا ولا منفذًا** ⇒ كتالوج أول مستأجر **غير مرئي للضيف** | تجهيز تلقائي للتاجر والمنفذ · **كشفه الاختبار لا المراجعة** |
+| GL-P0-2c | `POST /api/admin/products` **لا يضبط `merchant_id`** ⇒ منتج مُنشأ عبر الواجهة غير مرئي في الكتالوج | افتراض تاجر العقار · نفس الاكتشاف |
+| GL-P0-4 | **الولاء عابر لكل الشركاء** — كسب عند (أ) واستبدال عند (ب) | مفتاح `(partner_id, customer_key)` · 41 اختبارًا |
+| GL-P0-4b | `customer_key TEXT UNIQUE` يجعل العزل **مستحيلًا بنيويًا** | إعادة بناء الجدول في المهاجرة 015 مع حفظ كل رصيد |
+| GL-P0-5 | لا بنية تحقق | `sendChallenge`/`verifyChallenge` مع Hash وانتهاء ومحاولات وتبريد ومنع إعادة |
+| GL-P0-6 | **26 نقطة عامة بلا محدّد معدل** | محدّد مركزي في المُوجِّه · 25 اختبارًا · 429 حقيقي |
+| GL-P1-1 | لا Health/Readiness | `/health` و`/ready` · صفر تسريب |
+| GL-P1-2 | سجلات غير مُهيكلة، بلا تنقيح | JSON + تنقيح تلقائي + Correlation ID |
+| GL-P1-3 | لا إغلاق منظّم | SIGTERM/SIGINT · 33 اختبارًا |
+
+### قائم — حاجز إطلاق
+
+| المعرّف | الفجوة | لماذا لم تُغلق |
+|---|---|---|
+| **GL-P0-1** | **PostgreSQL للإنتاج** | لا خادم ولا `pg` في البيئة، والشبكة محجوبة. 515 استدعاء متزامن عبر 35 ملفًا ⇒ تحويل متتالٍ لـ`async`. **يحتاج بيئة مناسبة وموجة مخصصة** |
+
+### قائم — بانتظار قرار خارجي
+
+| المعرّف | الفجوة | المطلوب منك |
+|---|---|---|
+| **GL-P0-3** | **مزوّد دفع حقيقي** | اختيار المزود · وثائق توقيع Webhook · مفاتيح Sandbox · شبكة |
+| GL-VER | مزوّد تحقق | قرارك: **عدم الربط الآن** — البنية جاهزة |
+| GL-AI | مزوّد AI لـEngage | قرارك: **عدم الربط** — المحتوى الثابت يعمل |

@@ -23,6 +23,9 @@ const suites = [
   './partner-dashboard.js',
   './engage-security.js',
   './loyalty-partner-scope.js',
+  './golive-ops.js',
+  './golive-onboarding.js',
+  './golive-p1.js',
 ];
 
 (async () => {

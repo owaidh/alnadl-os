@@ -16,9 +16,11 @@ const { getSubscription, requireFeature } = require('./lib/plan.js');
 const { getGateway } = require('./lib/payment.js');
 const { getOrCreateAccount, findAccount, getHistory, earnPoints, quoteRedemption, commitRedemption, isLoyaltyEnabled } = require('./lib/loyalty.js');
 const { sendChallenge, verifyChallenge, isVerificationAvailable } = require('./lib/verification.js');
+const { checkLimit, storeName: rateLimitStore, sweep: sweepRateLimits } = require('./lib/rate-limit.js');
+const { log, correlationId } = require('./lib/logger.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
-const { processOutboxOnce, startEngageWorker } = require('./lib/engage-worker.js');
+const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
 const { startSession, serveNextMoment, submitResponse, endSession } = require('./lib/engage-session.js');
 const { createInvite, joinInvite } = require('./lib/engage-social.js');
 const { getFullLedger, getAdminOverview, getPartnerOverview } = require('./lib/engage-ledger.js');
@@ -115,12 +117,66 @@ function getOrderWithContext(id) {
 
 /* ------------------------------- routing --------------------------------- */
 const routes = [];
-function on(method, pattern, roles, handler) {
+function on(method, pattern, roles, handler, opts) {
   // pattern like '/api/orders/:id/pay' -> regex with named groups
   const names = [];
   const rx = '^' + pattern.replace(/:[a-zA-Z]+/g, (m) => { names.push(m.slice(1)); return '([^/]+)'; }) + '$';
-  routes.push({ method, regex: new RegExp(rx), names, roles, handler });
+  routes.push({ method, pattern, regex: new RegExp(rx), names, roles, handler, limit: (opts && opts.limit) || null });
 }
+
+/* Go-Live P0 §3.9 / P0-6 — which rate-limit bucket a public route falls in.
+   Resolved centrally from the route pattern rather than annotated at each
+   of the 26 public endpoints one by one, so a NEW public route inherits a
+   sensible default instead of silently shipping unthrottled. Authenticated
+   admin/staff routes are not limited here: they already sit behind a role
+   check, and throttling a busy KDS would be an operational hazard, not a
+   safeguard. */
+function bucketForPublicRoute(method, pattern) {
+  if (method === 'POST' && pattern === '/api/orders') return 'order_create';
+  if (pattern.startsWith('/api/loyalty/verify')) return 'verification';
+  if (pattern.startsWith('/api/loyalty/')) return 'loyalty_lookup';
+  if (pattern.endsWith('/engage-pass') || pattern.startsWith('/api/engage/pass')) return 'engage_discovery';
+  // Webhooks are called by the payment provider, not by guests; throttling
+  // them would drop legitimate provider retries and break reconciliation.
+  if (pattern === '/api/payments/webhook') return null;
+  // Staff login keeps its own dedicated per-username limiter in lib/auth.js.
+  if (pattern === '/api/auth/login') return null;
+  return 'public_default';
+}
+
+/* ---------------- P1 §4.1 — Health & Readiness ----------------------------
+   Two endpoints with deliberately different meanings:
+     /health  — is this PROCESS alive? Never touches the database, so an
+                orchestrator does not kill a healthy process just because a
+                dependency is briefly unavailable (that is what /ready is for).
+     /ready   — should this instance receive TRAFFIC? Actually exercises the
+                database and reports 503 when it cannot serve.
+   Neither reveals secrets, versions of dependencies, connection strings or
+   internal paths (§4.1: "لا تكشف endpoints أسرارًا"). */
+on('GET', '/health', null, async (req, res) => {
+  sendJSON(res, 200, { status: 'ok', uptimeSec: Math.floor(process.uptime()) });
+});
+on('GET', '/ready', null, async (req, res) => {
+  const checks = {};
+  let ok = true;
+  // A draining instance must be pulled out of rotation immediately (§4.5).
+  if (typeof isShuttingDown === 'function' && isShuttingDown()) {
+    return sendJSON(res, 503, { status: 'draining', checks: { database: 'draining' } });
+  }
+  try {
+    db.prepare('SELECT 1 AS ok').get();
+    checks.database = 'ok';
+  } catch (e) {
+    checks.database = 'unavailable'; ok = false; // never echo the driver error
+  }
+  try {
+    const pending = db.prepare(`SELECT COUNT(*) c FROM engage_outbox WHERE status = 'pending'`).get().c;
+    checks.engageWorker = pending >= 0 ? 'ok' : 'unknown';
+  } catch (e) {
+    checks.engageWorker = 'unknown'; // Engage is optional; never fails readiness
+  }
+  sendJSON(res, ok ? 200 : 503, { status: ok ? 'ready' : 'not_ready', checks });
+});
 
 /* ------------------------------ AUTH --------------------------------- */
 on('POST', '/api/auth/login', null, async (req, res) => {
@@ -1112,6 +1168,97 @@ function assertTenantWrite(session, ownerPartnerId) {
   }
 }
 
+/* ------------- ADMIN: PLANS & ENTITLEMENTS (Go-Live P0-2) ------------------
+   THE BLOCKER THIS CLOSES
+   A fresh production database seeds a SuperAdmin account and nothing else --
+   deliberately, since no demo data belongs in production. But there was no
+   endpoint to create a PLAN either, and a partner cannot hold a
+   subscription without one. The result: a genuinely new production
+   deployment could not activate its first paying customer at all without
+   someone opening the database by hand. That is the gap this closes.
+
+   SuperAdmin only. Entitlements are free-form booleans on purpose -- new
+   capability flags (loyalty_enabled, engage_enabled, future ones) can be
+   introduced without a schema change or a code deploy, which is exactly
+   what §3.7 asks for. Values are coerced to real booleans so a stray
+   "false" string can never read as truthy at a feature gate. */
+const RESERVED_PLAN_CODES = new Set(['OPERATE', 'SMART', 'CONNECT', 'PLATFORM']);
+
+function coerceEntitlements(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(k)) continue; // ignore malformed keys
+    out[k] = v === true || v === 'true' || v === 1 || v === '1';
+  }
+  return out;
+}
+
+on('GET', '/api/admin/plans', ['SuperAdmin'], async (req, res) => {
+  const rows = db.prepare('SELECT * FROM plans ORDER BY monthly_fee ASC').all();
+  sendJSON(res, 200, rows.map(r => ({
+    id: r.id, code: r.code, name_ar: r.name_ar, name_en: r.name_en,
+    monthlyFee: r.monthly_fee, techFeeRate: r.tech_fee_rate,
+    entitlements: JSON.parse(r.features_json || '{}'),
+    subscribers: db.prepare('SELECT COUNT(*) c FROM subscriptions WHERE plan_id = ?').get(r.id).c,
+  })));
+});
+
+on('POST', '/api/admin/plans', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const code = String(b.code || '').trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]{1,31}$/.test(code)) return sendJSON(res, 400, { error: 'code must be 2-32 chars, A-Z 0-9 _' });
+  if (db.prepare('SELECT 1 FROM plans WHERE code = ?').get(code)) return sendJSON(res, 409, { error: 'A plan with that code already exists' });
+  const monthlyFee = Number(b.monthlyFee);
+  const techFeeRate = Number(b.techFeeRate);
+  if (!Number.isFinite(monthlyFee) || monthlyFee < 0) return sendJSON(res, 400, { error: 'monthlyFee must be a non-negative number' });
+  if (!Number.isFinite(techFeeRate) || techFeeRate < 0 || techFeeRate > 1) return sendJSON(res, 400, { error: 'techFeeRate must be between 0 and 1' });
+
+  const id = uid('plan');
+  const entitlements = coerceEntitlements(b.entitlements);
+  db.prepare(`INSERT INTO plans (id,code,name_ar,name_en,monthly_fee,tech_fee_rate,features_json) VALUES (?,?,?,?,?,?,?)`)
+    .run(id, code, b.name_ar || code, b.name_en || code, monthlyFee, techFeeRate, JSON.stringify(entitlements));
+  audit(session.username, session.role, 'plan_create', id, null, { code, monthlyFee, techFeeRate, entitlements }, null);
+  sendJSON(res, 201, { id, code, entitlements });
+});
+
+on('PATCH', '/api/admin/plans/:id', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const before = db.prepare('SELECT * FROM plans WHERE id = ?').get(p.id);
+  if (!before) return sendJSON(res, 404, { error: 'Plan not found' });
+
+  // Pricing and entitlements are editable; the CODE is not. Subscriptions,
+  // the revenue ledger and settlements all reference a plan by identity --
+  // letting a code be rewritten under live subscribers would silently
+  // change what an existing contract means.
+  const monthlyFee = b.monthlyFee !== undefined ? Number(b.monthlyFee) : before.monthly_fee;
+  const techFeeRate = b.techFeeRate !== undefined ? Number(b.techFeeRate) : before.tech_fee_rate;
+  if (!Number.isFinite(monthlyFee) || monthlyFee < 0) return sendJSON(res, 400, { error: 'monthlyFee must be a non-negative number' });
+  if (!Number.isFinite(techFeeRate) || techFeeRate < 0 || techFeeRate > 1) return sendJSON(res, 400, { error: 'techFeeRate must be between 0 and 1' });
+
+  // Entitlements MERGE rather than replace, so a partial update cannot
+  // silently strip capabilities a live subscriber depends on.
+  const merged = { ...JSON.parse(before.features_json || '{}'), ...coerceEntitlements(b.entitlements) };
+  db.prepare('UPDATE plans SET name_ar=?, name_en=?, monthly_fee=?, tech_fee_rate=?, features_json=? WHERE id=?')
+    .run(b.name_ar || before.name_ar, b.name_en || before.name_en, monthlyFee, techFeeRate, JSON.stringify(merged), p.id);
+  audit(session.username, session.role, 'plan_update', p.id,
+    { monthlyFee: before.monthly_fee, techFeeRate: before.tech_fee_rate, entitlements: JSON.parse(before.features_json || '{}') },
+    { monthlyFee, techFeeRate, entitlements: merged }, null);
+  sendJSON(res, 200, { id: p.id, entitlements: merged });
+});
+
+on('DELETE', '/api/admin/plans/:id', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(p.id);
+  if (!plan) return sendJSON(res, 404, { error: 'Plan not found' });
+  const subscribers = db.prepare('SELECT COUNT(*) c FROM subscriptions WHERE plan_id = ?').get(p.id).c;
+  // Refuse rather than cascade: deleting a plan under live subscribers
+  // would leave partners with a dangling subscription and no entitlements.
+  if (subscribers > 0) return sendJSON(res, 409, { error: `Plan has ${subscribers} active subscription(s) — reassign them first` });
+  db.prepare('DELETE FROM plans WHERE id = ?').run(p.id);
+  audit(session.username, session.role, 'plan_delete', p.id, { code: plan.code }, null, null);
+  sendJSON(res, 200, { ok: true });
+});
+
 /* ------------------------------ ADMIN: partners/properties/zones/points --------------------------------- */
 on('GET', '/api/admin/partners', ['SuperAdmin'], async (req, res) => {
   const partners = db.prepare('SELECT * FROM partners').all();
@@ -1158,6 +1305,18 @@ on('POST', '/api/admin/onboard', ['SuperAdmin'], async (req, res, p, q, session)
   db.prepare(`INSERT INTO properties (id,partner_id,name_ar,name_en,timezone,address,status) VALUES (?,?,?,?,?,?,?)`)
     .run(propertyId, partnerId, b.propertyNameAr || b.partnerNameAr, b.propertyNameEn || b.partnerNameEn, 'Asia/Riyadh', b.address || '', 'Active');
   const now = Date.now();
+  // P0-2: a property with no merchant and no outlet can never render a
+  // catalog -- GET /api/catalog filters products by visible merchant, and
+  // Unified Cart routes by outlet. Onboarding therefore provisions the
+  // property's own Alnadl-operated merchant and default outlet, so the
+  // first tenant is genuinely orderable rather than merely existing.
+  const defaultMerchantId = uid('m');
+  db.prepare(`INSERT INTO merchants (id,property_id,name_ar,name_en,kind,commission_rate,status) VALUES (?,?,?,?,'alnadl',0,'Active')`)
+    .run(defaultMerchantId, propertyId, b.propertyNameAr || b.partnerNameAr, b.propertyNameEn || b.partnerNameEn);
+  db.prepare(`INSERT INTO outlets (id,property_id,name_ar,name_en,type,operator,delivery_mode,sla_prep_min,sla_delivery_min,commission_rate,status,created_at)
+              VALUES (?,?,?,?,'coffee','alnadl','runner',8,10,0,'Active',?)`)
+    .run(uid('out'), propertyId, b.propertyNameAr || b.partnerNameAr, b.propertyNameEn || b.partnerNameEn, Date.now());
+
   db.prepare(`INSERT INTO subscriptions (id,partner_id,plan_id,status,started_at,renews_at) VALUES (?,?,?,?,?,?)`)
     .run(uid('sub'), partnerId, plan.id, 'Active', now, now + 30 * 86400000);
   audit(session.username, session.role, 'tenant_onboard', partnerId, null, { partnerId, propertyId, plan: plan.code }, null);
@@ -1293,19 +1452,31 @@ on('POST', '/api/admin/products', ['SuperAdmin', 'PartnerAdmin'], async (req, re
   // Default to the property's first Outlet if none specified (§17 backward
   // compatibility — admin catalog UI doesn't ask for an outlet yet, so every
   // product still needs to land in a valid one for Unified Cart to route it).
+  const category = db.prepare('SELECT property_id FROM categories WHERE id = ?').get(b.categoryId);
   let outletId = b.outletId || null;
   if (!outletId) {
-    const category = db.prepare('SELECT property_id FROM categories WHERE id = ?').get(b.categoryId);
     const fallbackOutlet = category ? db.prepare(`SELECT id FROM outlets WHERE property_id = ? ORDER BY created_at ASC LIMIT 1`).get(category.property_id) : null;
     outletId = fallbackOutlet ? fallbackOutlet.id : null;
+  }
+  // P0-2: merchant_id was never defaulted, and GET /api/catalog filters
+  // products by visible merchant -- so a product created through the admin
+  // API was invisible to guests even though ordering it directly worked.
+  // Caught by the onboarding test, not by review. Defaults to the
+  // property's own Alnadl-operated merchant, the same fallback shape
+  // already used for outlets above.
+  let merchantId = b.merchantId || null;
+  if (!merchantId && category) {
+    const fallbackMerchant = db.prepare(`SELECT id FROM merchants WHERE property_id = ? AND kind = 'alnadl' AND status = 'Active' ORDER BY rowid ASC LIMIT 1`).get(category.property_id)
+      || db.prepare(`SELECT id FROM merchants WHERE property_id = ? AND status = 'Active' ORDER BY rowid ASC LIMIT 1`).get(category.property_id);
+    merchantId = fallbackMerchant ? fallbackMerchant.id : null;
   }
   // UX-1: imageUrl is optional and URL-based (a link to an already-hosted
   // image — a real file-upload/storage pipeline is a separate, much
   // larger piece of infrastructure this delivery does not build). A
   // product with no image set still renders correctly via the UX-0
   // monogram fallback on the guest side.
-  db.prepare("INSERT INTO products (id,category_id,outlet_id,sku,name_ar,name_en,base_price,image_url,status) VALUES (?,?,?,?,?,?,?,?,'Active')")
-    .run(id, b.categoryId, outletId, b.sku || id, b.name_ar, b.name_en, b.basePrice, b.imageUrl || null);
+  db.prepare("INSERT INTO products (id,category_id,merchant_id,outlet_id,sku,name_ar,name_en,base_price,image_url,status) VALUES (?,?,?,?,?,?,?,?,?,'Active')")
+    .run(id, b.categoryId, merchantId, outletId, b.sku || id, b.name_ar, b.name_en, b.basePrice, b.imageUrl || null);
   audit(session.username, session.role, 'create', id, null, b, null);
   sendJSON(res, 201, { id });
 });
@@ -2009,7 +2180,10 @@ const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
   const pathname = parsed.pathname;
 
-  if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
+  // /health and /ready are registered routes, not static assets — they must
+  // reach the dispatcher below rather than being looked up on disk.
+  const OPS_ROUTES = new Set(['/health', '/ready']);
+  if (!pathname.startsWith('/api/') && !OPS_ROUTES.has(pathname)) return serveStatic(req, res, pathname);
 
   for (const r of routes) {
     if (r.method !== req.method) continue;
@@ -2017,19 +2191,85 @@ const server = http.createServer(async (req, res) => {
     if (!m) continue;
     const params = {};
     r.names.forEach((n, i) => { params[n] = decodeURIComponent(m[i + 1]); });
+    // §4.2 correlation id: minted (or inherited from the proxy) once per
+    // request and echoed back, so a guest-reported problem can be traced
+    // across logs without guessing at timestamps.
+    const reqId = correlationId(req);
+    res.setHeader('X-Request-Id', reqId);
+    const startedAt = Date.now();
     try {
+      // Public routes are throttled BEFORE any handler work or DB access,
+      // so a flood costs a Map lookup rather than a query (§3.9).
+      if (!r.roles) {
+        const bucket = bucketForPublicRoute(r.method, r.pattern);
+        if (bucket) {
+          const limited = checkLimit(bucket, req);
+          if (limited) {
+            res.setHeader('Retry-After', String(limited.retryAfterSec));
+            log.warn('rate_limited', { reqId, route: r.pattern, bucket });
+            return sendJSON(res, 429, { error: 'Too many requests' });
+          }
+        }
+      }
       let session = null;
       if (r.roles) {
         session = requireRole(authenticate(req), r.roles);
       }
       await r.handler(req, res, params, parsed.query, session);
+      const ms = Date.now() - startedAt;
+      // Only slow requests are logged at info on the happy path -- logging
+      // every 200 on a polling KDS would bury the signal in noise.
+      if (ms > 1000) log.warn('slow_request', { reqId, route: r.pattern, method: r.method, ms });
     } catch (e) {
-      sendJSON(res, e.status || 500, { error: e.message || 'Server error' });
+      const status = e.status || 500;
+      // 5xx is a real defect and always logged; 4xx is the API working as
+      // designed (bad input, forbidden) and is not an operational alert.
+      if (status >= 500) {
+        log.error('request_failed', { reqId, route: r.pattern, method: r.method, status, ms: Date.now() - startedAt }, e);
+      }
+      // The client never receives an internal message on a 500 (§4.2).
+      sendJSON(res, status, { error: status >= 500 ? 'Server error' : (e.message || 'Request failed') });
     }
     return;
   }
   sendJSON(res, 404, { error: 'No such route' });
 });
+
+/* ---------------- P1 §4.5 — Graceful shutdown & worker safety -------------
+   On SIGTERM/SIGINT: stop accepting NEW connections, let in-flight requests
+   finish, then close the database cleanly. The Engage worker is stopped
+   first so it cannot begin new outbox work mid-teardown -- any row it had
+   not yet claimed simply stays 'pending' and is picked up by the next
+   instance, which is exactly the property the outbox pattern exists for.
+   A hard-exit timer guarantees the process still dies if a request hangs,
+   so an orchestrator never has to SIGKILL a wedged pod. */
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(JSON.stringify({ level: 'info', event: 'shutdown_start', signal }));
+
+  const forceTimer = setTimeout(() => {
+    console.log(JSON.stringify({ level: 'warn', event: 'shutdown_forced', reason: 'in-flight requests exceeded grace period' }));
+    process.exit(1);
+  }, 10_000);
+  forceTimer.unref();
+
+  try { if (typeof stopEngageWorker === 'function') stopEngageWorker(); } catch (e) {}
+
+  server.close(() => {
+    try { db.close(); } catch (e) {}
+    console.log(JSON.stringify({ level: 'info', event: 'shutdown_complete', signal }));
+    clearTimeout(forceTimer);
+    process.exit(0);
+  });
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+/* §4.5: readiness must flip BEFORE the process goes away, so a load
+   balancer stops routing to a draining instance instead of racing it. */
+function isShuttingDown() { return shuttingDown; }
 
 server.listen(PORT, () => {
   console.log(`Alnadl Hospitality OS backend listening on http://localhost:${PORT}`);
@@ -2042,6 +2282,16 @@ server.listen(PORT, () => {
   // tests/engage-inc1.js, which stops it and re-runs the full Phase 1-4
   // suite unchanged.
   startEngageWorker();
+  // Keep the in-memory rate-limit windows bounded (§3.9).
+  const rlSweep = setInterval(() => { try { sweepRateLimits(); } catch (e) {} }, 300_000);
+  rlSweep.unref();
+  // §3.9: an in-memory limiter across several instances multiplies the
+  // effective limit by the instance count. Warn loudly rather than let a
+  // multi-instance production deployment believe it is protected.
+  if (process.env.NODE_ENV === 'production' && process.env.APP_INSTANCES && Number(process.env.APP_INSTANCES) > 1) {
+    console.warn(JSON.stringify({ level: 'warn', event: 'rate_limit_store_unsafe',
+      detail: 'in-memory rate limiting with APP_INSTANCES>1 multiplies the effective limit; use a shared store' }));
+  }
   // Q06 (2nd round): the hard NODE_ENV=production check now happens at
   // lib/auth.js module load time (resolveSessionSecret()), before the
   // server ever reaches listen() — the process exits before this point if

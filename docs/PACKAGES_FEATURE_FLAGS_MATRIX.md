@@ -1,4 +1,4 @@
-> **Version:** v2.0.17-p5-inc7 · **Status:** FINAL (Phase 1-4) + P5-Inc-7 engage_ai_generation flag · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.17-p5-inc7
+> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
 
 # Alnadl Hospitality OS — Packages & Feature Flags Matrix (§4, §26.1)
 
@@ -58,3 +58,25 @@ Zone Override (venue_policy_override, scope_type='zone')
 ```
 
 **القاعدة الصارمة (مُصحَّحة، الجولة التصحيحية v2.0.16)**: **Global Safety** و**Partner Contract** حظران مطلقان — لا يمكن لأي مستوى أدنى تجاوزهما مهما كان. **بعد تجاوز هذين الحظرين فقط**، `Property` و`Zone` أصبحا Override هرميًا حقيقيًا: **الأدق يفوز دائمًا** — قد يعني هذا أن `Zone` صريحة تُفعِّل ما قيَّده `Property` (مثال: `Property=OFF` لكن `Zone=ON` صراحةً → **يُفعَّل**)، بنفس صيغة `zone ?? property ?? افتراضي` المُطبَّقة في Ceiling/Novelty بالضبط. **جدول حقيقة كامل (9 حالات) مُختبَر مباشرة** في `tests/engage-inc6.js`، راجع `docs/PHASE5_GAP_ANALYSIS.md` قسم "الجولة التصحيحية" للتفصيل الكامل.
+
+
+---
+
+## Go-Live P0 §3.7 — مزايا الولاء (Entitlements)
+
+**التحوّل الجوهري**: لم تعد الميزة مربوطة باسم باقة. كان الفحص فعليًا `plan.code === 'PLATFORM'` عبر عَلَم `loyalty` — **أسماء الباقات أدوات تجارية تتغيّر، والقدرات لا**.
+
+| العَلَم | المعنى | الحالة |
+|---|---|---|
+| `loyalty_enabled` | كسب النقاط | **مُنفَّذ** |
+| `loyalty_redeem_enabled` | السماح بالاستبدال — **رافعة منفصلة** | **مُنفَّذ** |
+| `loyalty_custom_rules` | قواعد تخصيص | بنية جاهزة، غير مبنية |
+| `loyalty_campaigns` | حملات ومضاعفات | مؤجَّل (P2) |
+| `loyalty_analytics` | تحليلات ولاء | مؤجَّل (P2) |
+| `loyalty_engage_integration` | ربط Engage بالمكافآت | مؤجَّل (P2) |
+
+**التوافق الخلفي**: العَلَم القديم `loyalty` ما زال يعمل — الاشتراكات القائمة لا تفقد الميزة أثناء الانتقال. الأعلام الجديدة تُقدَّم عند وجودها.
+
+**فصل الرافعتين مقصود**: شريك قد يريد الكسب فعّالًا والاستبدال مغلقًا حتى يتوفر مزوّد تحقق (§3.8).
+
+**إضافة مزايا جديدة** لا تحتاج تغيير مخطط ولا نشرًا — `POST/PATCH /api/admin/plans` يقبل أي مفتاح Boolean.

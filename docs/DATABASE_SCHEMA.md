@@ -1,4 +1,4 @@
-> **Version:** v2.0.20-p5-inc8-corrective · **Status:** FINAL (Phase 1-4) + P5-Inc-1/2/3/4/5/6/7/8 (traffic allocation fixed) tables · **Last Updated:** 2026-08-13 · **Release Tag:** v2.0.20-p5-inc8-corrective
+> **Version:** v2.8.0-golive-p0p1 · **Status:** Phase 1-5 + UX-0..5 + Go-Live P0/P1 · **Last Updated:** 2026-08-14
 
 # Alnadl Hospitality OS — Database Schema
 
@@ -155,6 +155,21 @@ schema_migrations (Q08 — سجل تتبّع Migrations المُطبَّقة)
 
 ### تصحيح حرج: ربط الحوكمة بالتخديم الفعلي — بلا Migration جديدة (منطق فقط)
 **فجوة حقيقية مؤكَّدة**: استعلام التخديم الإنتاجي كان مُثبَّتًا حرفيًا على `category='static_fallback' AND lifecycle_state='promoted'` — آليات `canary` لم تكن تصل لأي عميل حقيقي إطلاقًا (0%، بغض النظر عن `canary_percentage`)، وأي آلية بحوكمة Mechanic Lab لم تكن لتصل لعميل حقيقي حتى بعد اعتمادها بالكامل. **الحوكمة كانت حقيقية، منفصلة تمامًا عمّا يُخدَّم فعليًا**. أُصلح بـ`resolveEligibleMechanicVersion()` — دالة تخصيص حتمية (HMAC على `${profile.id}:${mechanicVersionId}`، 10000 حاوية) تحل محل الاستعلام الثابت، مُتحقَّق منها عبر HTTP حقيقي (2000 جلسة فعلية، هدف 5% → 5.50% فعليًا قبل التوثيق الرسمي، 5.265% على 20000 هوية في مجموعة الاختبار النهائية).
+
+
+### Go-Live P0 — جداول وأعمدة الولاء والتحقق (`migrations/015_loyalty_partner_scope.js`)
+
+**تغيير بنيوي حقيقي**: `loyalty_accounts` كان يحمل `customer_key TEXT UNIQUE` — قيد يجعل عزل الشريك **مستحيلًا بنيويًا** (نفس الرقم لا يمكن أن يوجد لدى شريكين). SQLite لا يسمح بإسقاط قيد عمود، فأُعيد بناء الجدول (نفس أسلوب المهاجرة 001) مع حفظ كل صف ورصيد.
+
+| العمود الجديد | الغرض |
+|---|---|
+| `partner_id` | نطاق الشريك — المفتاح المنطقي الآن `(partner_id, customer_key)` عبر فهرس جزئي فريد |
+| `migration_status` | `active` / `needs_review` / `orphan_no_orders` — راجع قاعدة عدم التخمين أدناه |
+| `verification_status` | `unverified` / `verified` — **مستقل عن أي مزوّد نقل** |
+
+**قاعدة الترحيل (§9) — التصنيف لا التخمين**: الحساب القديم يُنسب لشريك **فقط** إذا لمس تاريخ طلباته شريكًا واحدًا يقينًا. المتعدد يُحجر (`needs_review`)، وعديم التاريخ يُحجر (`orphan_no_orders`). المحجوز **غير مرئي** لأي بحث مُقيَّد بالشريك — فلا يُصرف رصيد لم يُطالب به أحد — لكن **الصف والرصيد محفوظان**، لا يُحذفان.
+
+**`verification_challenges`** (جديد): `id, partner_id, customer_key, channel, code_hash, status, attempts, created_at, expires_at, consumed_at`. **الرمز يُخزَّن مُجزَّأً فقط**، ولا يُحفظ نصًا صريحًا إطلاقًا.
 
 ### جداول Mechanic Lab — Phase 5 P5-Inc-8 (`migrations/014_engage_inc8.js`)
 **ملاحظة مهمة**: قيد `mechanic_version.lifecycle_state` كان **موجودًا فعليًا منذ Inc-2** (`migration 006`) ويشمل الحالات الثماني كاملة (`draft/simulated/canary/emerging/promoted/held/rejected/retired`) — لم تكن هناك حاجة لتوسيعه، فقط لبناء منطق الحوكمة الفعلي فوقه لأول مرة.

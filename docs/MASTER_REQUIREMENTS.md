@@ -1,4 +1,4 @@
-> **Version:** v2.0.3 · **Status:** PHASE 1-4 TECHNICAL BASELINE LOCKED · **Last Updated:** 2026-08-12 · **Release Tag:** v2.0.3-p4-baseline-locked
+> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
 
 # Alnadl Hospitality OS — Master Requirements (§26.1)
 
@@ -49,3 +49,29 @@
 
 ## سجل التغييرات
 راجع `docs/CHANGELOG.md` لكل إصدار (tag) وما تضمّنه بالتفصيل.
+
+
+---
+
+## Go-Live Requirements — حالة التغطية
+
+| البند | الحالة |
+|---|---|
+| §3.1 PostgreSQL | ⛔ **لم يُنفَّذ** — حاجز إطلاق قائم |
+| §3.2 Production Onboarding | ✅ مُنفَّذ ومُختبَر من قاعدة فارغة |
+| §3.3 Payment حقيقي | ⏸ Adapter جاهز — **بانتظار اختيار المزود ومفاتيحه** |
+| §3.4 الولاء معزول لكل شريك | ✅ مُنفَّذ ومُختبَر |
+| §3.5 هوية الضيف بلا SMS | ✅ الطلب بلا اسم أو جوال · الولاء اختياري |
+| §3.6 بنية التحقق | ✅ مُنفَّذة — بلا ربط مزوّد (بقرارك) |
+| §3.7 Entitlements | ✅ مُنفَّذة، بديلة لأسماء الباقات |
+| §3.8 سياسة الاستبدال | ✅ `verified_only` افتراضيًا |
+| §3.9 Rate Limiting | ✅ مركزي على كل النقاط العامة |
+| §4.1 Health/Readiness | ✅ |
+| §4.2 Logging/Monitoring | ✅ JSON + تنقيح + Correlation ID |
+| §4.3 Backup/Restore | ⏸ يحتاج بيئة إنتاج فعلية للتدريب عليه |
+| §4.4 Secrets/HTTPS | ✅ الحواجز قائمة ومُوسَّعة، ومفترضات الوكيل العكسي موثّقة |
+| §4.5 Graceful Shutdown | ✅ مُنفَّذ ومُختبَر |
+| §5 Engage عند الإطلاق | ✅ يعمل بالمحتوى الثابت، بلا AI خارجي |
+| §6 P2 | 📋 لم يُبدأ عمدًا |
+
+**شرط GO لم يتحقق بعد**: §3.1 قائم، و§3.3 ينتظر قرارك.
