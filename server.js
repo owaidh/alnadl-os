@@ -14,7 +14,8 @@ const { canTransition, actorAllowed, TRANSITIONS } = require('./lib/statemachine
 const { computeSettlement, saveSettlement } = require('./lib/settlement.js');
 const { getSubscription, requireFeature } = require('./lib/plan.js');
 const { getGateway } = require('./lib/payment.js');
-const { getOrCreateAccount, earnPoints, quoteRedemption, commitRedemption } = require('./lib/loyalty.js');
+const { getOrCreateAccount, findAccount, getHistory, earnPoints, quoteRedemption, commitRedemption, isLoyaltyEnabled } = require('./lib/loyalty.js');
+const { sendChallenge, verifyChallenge, isVerificationAvailable } = require('./lib/verification.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker } = require('./lib/engage-worker.js');
@@ -198,15 +199,66 @@ on('GET', '/api/catalog', null, async (req, res, p, query) => {
   sendJSON(res, 200, { categories: cats, products: products.filter(p => visibleMerchantIds.has(p.merchant_id)), merchants: visibleMerchants });
 });
 
-/* ------------------------------ LOYALTY (Phase 3, §15) --------------------------------- */
-on('GET', '/api/loyalty/:phone', null, async (req, res, p) => {
-  const acct = getOrCreateAccount(p.phone);
+/* ------------------------------ LOYALTY (Phase 3 §15; Go-Live P0 §3.4-§3.8) ---------
+   Both endpoints are now PARTNER-SCOPED. The partner is derived server-side
+   from the guest's own QR token -- never from a client-supplied partnerId,
+   which would defeat the isolation entirely. A guest without a QR context
+   has no partner scope and therefore no loyalty view at all.
+
+   §3.8: these are read paths on a value-bearing balance, so they never
+   create an account (findAccount, not getOrCreateAccount) -- merely asking
+   about a number must not materialise one -- and they do not confirm
+   whether a number is known. An unknown number and a known one with no
+   activity return the same shape. */
+function partnerScopeFromQrToken(token) {
+  if (!token) return null;
+  const row = db.prepare(`
+    SELECT pr.partner_id FROM qr_tokens q
+    JOIN points pt ON pt.id = q.point_id
+    JOIN zones z ON z.id = pt.zone_id
+    JOIN properties pr ON pr.id = z.property_id
+    WHERE q.token = ? AND q.active = 1`).get(token);
+  return row ? row.partner_id : null;
+}
+
+on('GET', '/api/loyalty/:phone', null, async (req, res, p, query) => {
+  const partnerId = partnerScopeFromQrToken(query.t);
+  if (!partnerId) return sendJSON(res, 200, { pointsBalance: 0 });
+  const acct = findAccount(partnerId, p.phone);
   sendJSON(res, 200, { pointsBalance: acct ? acct.points_balance : 0 });
 });
-on('GET', '/api/loyalty/:phone/history', null, async (req, res, p) => {
-  const acct = db.prepare('SELECT * FROM loyalty_accounts WHERE customer_key = ?').get(p.phone);
+on('GET', '/api/loyalty/:phone/history', null, async (req, res, p, query) => {
+  const partnerId = partnerScopeFromQrToken(query.t);
+  if (!partnerId) return sendJSON(res, 200, []);
+  const acct = findAccount(partnerId, p.phone);
   if (!acct) return sendJSON(res, 200, []);
-  sendJSON(res, 200, db.prepare('SELECT * FROM loyalty_transactions WHERE account_id = ? ORDER BY created_at DESC LIMIT 50').all(acct.id));
+  sendJSON(res, 200, getHistory(acct.id));
+});
+
+/* --------------- GUEST VERIFICATION (Go-Live P0 §3.6) ---------------------
+   Provider-agnostic by construction: these two endpoints talk to
+   lib/verification.js, which owns expiry / attempt limits / cooldown /
+   replay protection ONCE so no future provider reimplements them. With no
+   provider configured (the default today) sendChallenge reports
+   no_provider, which is exactly what keeps §3.8's 'verified_only'
+   redemption policy honest rather than nominal.
+
+   Partner scope comes from the guest's QR token, never from the request. */
+on('POST', '/api/loyalty/verify/start', null, async (req, res) => {
+  const body = await readBody(req);
+  const partnerId = partnerScopeFromQrToken(body.t);
+  if (!partnerId) return sendJSON(res, 200, { ok: false, reason: 'invalid_request' });
+  const result = await sendChallenge(partnerId, body.phone, body.channel || 'sms');
+  // Deliberately no internal detail beyond a stable machine reason, and
+  // never the code itself (§7: no OTP in DOM or logs).
+  sendJSON(res, 200, { ok: result.ok, reason: result.reason });
+});
+on('POST', '/api/loyalty/verify/confirm', null, async (req, res) => {
+  const body = await readBody(req);
+  const partnerId = partnerScopeFromQrToken(body.t);
+  if (!partnerId) return sendJSON(res, 200, { ok: false, reason: 'invalid_request' });
+  const result = verifyChallenge(partnerId, body.phone, body.code);
+  sendJSON(res, 200, { ok: result.ok, reason: result.reason });
 });
 
 /* ------------------------------ ORDERS (customer) --------------------------------- */
@@ -253,8 +305,10 @@ on('POST', '/api/orders', null, async (req, res) => {
   // Loyalty redemption (Phase 3, §15) — gated by the partner's plan.
   let loyaltyDiscount = 0, loyaltyPointsUsed = 0, loyaltyAccountId = null;
   if (body.redeemPoints) {
-    requireFeature(property.partner_id, 'loyalty');
-    const q = quoteRedemption(customerPhone, parseInt(body.redeemPoints) || 0, subtotal - discountAmount);
+    // Entitlement is checked inside quoteRedemption via feature flags now
+    // (§3.7), so a plan rename can never silently disable loyalty. The
+    // partner comes from the resolved property, never from the request.
+    const q = quoteRedemption(property.partner_id, customerPhone, parseInt(body.redeemPoints) || 0, subtotal - discountAmount);
     loyaltyDiscount = q.discount; loyaltyPointsUsed = q.pointsUsed; loyaltyAccountId = q.accountId || null;
   }
 
@@ -915,11 +969,12 @@ on('POST', '/api/orders/:id/transition', ['Operator', 'SiteManager', 'Runner', '
   audit(session.username, session.role, 'status_change', order.id, { status: order.status }, { status: to }, body.reason || null);
   const notifyEvent = { Accepted:'order_accepted', Ready:'order_ready', 'Out for Delivery':'order_out', Delivered:'order_delivered', Cancelled:'order_cancelled' }[to];
   if (notifyEvent) notify(notifyEvent, order.id, 'push');
-  // Loyalty: earn points on successful delivery (§15) — only if the partner's plan includes loyalty
+  // Loyalty: earn points on successful delivery (§15). The entitlement check
+  // now lives inside earnPoints as a feature flag (§3.7) rather than a plan
+  // name here, and the account is scoped to this order's own partner (§3.4).
   let loyaltyEarned = null;
   if (to === 'Delivered' && order.customer_phone) {
-    const sub = getSubscription(order.partner_id);
-    if (sub && sub.features.loyalty) loyaltyEarned = earnPoints(order.customer_phone, order.id, order.total);
+    loyaltyEarned = earnPoints(order.partner_id, order.customer_phone, order.id, order.total);
   }
   sendJSON(res, 200, { id: order.id, status: to, loyaltyEarned: loyaltyEarned ? loyaltyEarned.points_balance : undefined });
 });

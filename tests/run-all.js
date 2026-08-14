@@ -22,6 +22,7 @@ const suites = [
   './engage-inc8.js',
   './partner-dashboard.js',
   './engage-security.js',
+  './loyalty-partner-scope.js',
 ];
 
 (async () => {

@@ -112,7 +112,10 @@ CREATE TABLE IF NOT EXISTS settlement_events (
 );
 -- ===== Phase 2/3: Loyalty, Corporate Wallet, Restaurant/Marketplace (§15, §19, §9) =====
 CREATE TABLE IF NOT EXISTS loyalty_accounts (
-  id TEXT PRIMARY KEY, customer_key TEXT UNIQUE, points_balance INTEGER DEFAULT 0, created_at INTEGER
+  -- customer_key is deliberately NOT globally UNIQUE: the same phone is a
+  -- separate loyalty account at each partner (Go-Live P0 3.4). Uniqueness is
+  -- enforced per-partner by idx_loyalty_partner_customer in migration 015.
+  id TEXT PRIMARY KEY, customer_key TEXT, points_balance INTEGER DEFAULT 0, created_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS loyalty_transactions (
   id TEXT PRIMARY KEY, account_id TEXT, order_id TEXT, points_delta INTEGER, reason TEXT, created_at INTEGER
@@ -335,7 +338,11 @@ function seedIfEmpty() {
         multiOutlet:true, unifiedCart:true, restaurantIntegration:true, whiteLabel:false, multiProperty:false }],
     ['plan_platform', 'PLATFORM', 'ALNADL PLATFORM', 'ALNADL PLATFORM', 6000, 0.025,
       { qrOrdering:true, digitalPayment:true, partnerDashboard:true, loyalty:true, marketplace:true, analytics:true, corporateWallet:true,
-        multiOutlet:true, unifiedCart:true, restaurantIntegration:true, whiteLabel:true, multiProperty:true }],
+        multiOutlet:true, unifiedCart:true, restaurantIntegration:true, whiteLabel:true, multiProperty:true,
+        // Go-Live P0 3.7 — capability flags replace the plan-name gate.
+        // The legacy `loyalty` flag above is kept so existing subscriptions
+        // keep working; lib/loyalty.js prefers these when present.
+        loyalty_enabled:true, loyalty_redeem_enabled:true }],
   ];
   for (const [id, code, ar, en, fee, techRate, features] of plans) {
     db.prepare(`INSERT INTO plans (id,code,name_ar,name_en,monthly_fee,tech_fee_rate,features_json) VALUES (?,?,?,?,?,?,?)`)

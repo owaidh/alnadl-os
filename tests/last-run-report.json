@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-14T03:02:00.172Z",
+  "timestamp": "2026-08-14T03:51:35.439Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -63,6 +63,10 @@
     },
     {
       "suite": "./engage-security.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./loyalty-partner-scope.js",
       "status": "PASS"
     }
   ],
