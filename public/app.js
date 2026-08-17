@@ -122,12 +122,12 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, partnerProfile:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, partnerProfile:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
   // token the server handed us plus eligibility — never any policy,
   // personality reasoning, or AI internals. `moment.payload` is the
@@ -654,6 +654,41 @@ const App = {
       render();
     }
   },
+  /* Corrective — تفعيل الشريك من الواجهة (Draft → Active وغيرها).
+     النقطة والاختبارات بُنيت في R2 لكن بلا مسار في الواجهة، فكان التفعيل
+     يتطلب استدعاء API يدويًا -- معيار FAIL صريح. لا نقطة جديدة ولا توسيع
+     صلاحية: نفس POST /api/admin/partners/:id/status ونفس قواعد دورة الحياة. */
+  async loadPartnerStatus(partnerId){
+    try{ S.partnerStatusInfo = { partnerId, ...(await api('GET',`/api/admin/partners/${partnerId}/status`,null,true)) }; }
+    catch(e){ S.partnerStatusInfo = { partnerId, error: e.message }; }
+    render();
+  },
+  openStatusChange(partnerId, to){
+    S.ui.statusChange = { partnerId, to, submitting:false, error:null };
+    render();
+  },
+  dismissStatusChange(){ S.ui.statusChange = null; render(); },
+  async submitStatusChange(){
+    const c = S.ui.statusChange; if(!c || c.submitting) return;
+    const reason = document.getElementById('scReason')?.value?.trim();
+    if(!reason || reason.length < 4){
+      S.ui.statusChange.error = S.lang==='ar'?'السبب مطلوب (4 أحرف على الأقل)':'A reason of at least 4 characters is required';
+      render(); return;
+    }
+    S.ui.statusChange.submitting = true; S.ui.statusChange.error = null; render();
+    try{
+      await api('POST', `/api/admin/partners/${c.partnerId}/status`, { status: c.to, reason }, true);
+      showToast(t('toast_saved'));
+      S.ui.statusChange = null;
+      // الحالة والقدرات تُعاد قراءتها من الخادم بعد النجاح، لا تُخمَّن محليًا
+      await Promise.all([App.loadPartnerStatus(c.partnerId), App.loadPartnerProfile(c.partnerId), App.loadTenants()]);
+    }catch(e){
+      S.ui.statusChange.submitting = false;
+      // الخادم قد يرفض بشروط دورة الحياة (مثل طلبات مفتوحة) -- تُعرض كما هي
+      S.ui.statusChange.error = e.message;
+      render();
+    }
+  },
   async loadPartnerProfile(partnerId){
     if(!partnerId) return;
     S.partnerProfile = { partnerId, loading:true }; render();
@@ -670,7 +705,7 @@ const App = {
     S.partnerProfile = { partnerId, loading:false, overview, subscription, users, zones, outlets, settlements, engage };
     render();
   },
-  openPartnerProfile(partnerId){ S.screen='partnerprofile'; App.loadPartnerProfile(partnerId); },
+  openPartnerProfile(partnerId){ S.screen='partnerprofile'; App.loadPartnerProfile(partnerId); App.loadPartnerStatus(partnerId); },
   async loadEngageState(partnerId){
     const q = partnerId ? `?partnerId=${encodeURIComponent(partnerId)}` : '';
     try{ S.engageState = await api('GET', '/api/engage/effective-state'+q, null, true); }
@@ -1586,7 +1621,8 @@ function renderStaffShell(){
   return `${body}
   ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}
   ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}
-  ${S.ui.refundFor? renderRefundModal():''}`;
+  ${S.ui.refundFor? renderRefundModal():''}
+  ${S.ui.statusChange? renderStatusChangeModal():''}`;
 }
 
 // UX-2 (spec R03 "Delivery exception — Destination + order + reason
@@ -2060,6 +2096,76 @@ function renderRefundModal(){
   </div></div>`;
 }
 
+/* Corrective — حالة الشريك وإجراءات الانتقال داخل ملف الشريك.
+   لا يُعرض إلا ما تُرجعه allowedTransitions من الخادم: الخيار المحجوب
+   (مثل الإغلاق مع طلبات مفتوحة) لا يظهر كزر يفشل، بل يُصرَّح بسببه. */
+function renderPartnerStatusCard(partnerId){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.partnerStatusInfo;
+  if(!st || st.partnerId !== partnerId) return '<div class="panel"><div class="skeleton skeleton-row"></div></div>';
+  if(st.error) return `<div class="panel"><p class="ph">${L('تعذّر قراءة الحالة','Could not read status')}</p></div>`;
+
+  const LABEL = { Draft:L('مسودة','Draft'), Active:L('فعّال','Active'),
+                  Suspended:L('موقوف','Suspended'), Closed:L('مُغلق','Closed') };
+  const TONE = { Draft:'pending', Active:'ok', Suspended:'cancel', Closed:'cancel' };
+  const BLOCK = { PARTNER_HAS_OPEN_ORDERS: L('توجد طلبات مفتوحة','Open orders exist') };
+  const allowed = st.allowedTransitions || [];
+  const blocked = st.blockedTransitions || [];
+
+  return `
+  <div class="panel">
+    <h3>${L('حالة الشريك','Partner Status')}</h3>
+    <div class="totalline" style="color:var(--ink-200)">
+      <span>${L('الحالة الحالية','Current status')}</span>
+      <span><span class="badge ${TONE[st.status]||'pending'}">${LABEL[st.status]||esc(st.status)}</span></span>
+    </div>
+    ${st.status==='Draft' ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin-top:10px">
+      ${L('هذا الشريك في مرحلة الإعداد ولم يُفعَّل بعد: رمز QR لا يُحلّ ولا يُقبل أي طلب. فعّله عند اكتمال الإعداد.','This partner is still in setup and not live: the QR does not resolve and no order is accepted. Activate it once setup is complete.')}
+    </div>`:''}
+    ${typeof st.openOrders === 'number' ? `<div class="totalline" style="color:var(--ink-200)">
+      <span>${L('طلبات مفتوحة','Open orders')}</span><span>${st.openOrders}</span></div>`:''}
+
+    ${allowed.length ? `<div class="actrow" style="flex-wrap:wrap">
+      ${allowed.map(to=>`<button class="btn-small ${to==='Active'?'brass':''}"
+        ${to==='Closed'?'style="color:var(--red-500);border-color:var(--red-500)"':''}
+        onclick="App.openStatusChange('${esc(partnerId)}','${esc(to)}')">
+        ${L('تحويل إلى','Move to')} ${LABEL[to]||esc(to)}</button>`).join('')}
+    </div>`:`<p class="ph" style="margin-top:10px">${L('لا انتقالات متاحة الآن','No transitions available right now')}</p>`}
+
+    ${blocked.length ? `<div style="margin-top:10px">
+      ${blocked.map(b=>`<div class="attentionrow medium"><span class="dot"></span>
+        <span class="txt">${L('محجوب','Blocked')}: ${LABEL[b.to]||esc(b.to)} — ${BLOCK[b.code]||esc(b.code||'')}${b.openOrders?` (${b.openOrders})`:''}</span>
+        <span class="sev">${L('شرط','Precondition')}</span></div>`).join('')}
+    </div>`:''}
+  </div>`;
+}
+
+/* نافذة تأكيد الانتقال -- تغيير حالة الشريك يوقف أو يفتح أعمالًا، فيُؤكَّد صراحةً. */
+function renderStatusChangeModal(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const c = S.ui.statusChange; if(!c) return '';
+  const LABEL = { Draft:L('مسودة','Draft'), Active:L('فعّال','Active'),
+                  Suspended:L('موقوف','Suspended'), Closed:L('مُغلق','Closed') };
+  const EFFECT = {
+    Active: L('سيبدأ قبول الطلبات ويعمل رمز QR.','Ordering starts and the QR begins resolving.'),
+    Suspended: L('سيتوقف قبول الطلبات الجديدة، وتُكمل الطلبات المفتوحة، وتبقى التسويات متاحة.','New orders stop, open orders continue to completion, and settlements remain available.'),
+    Closed: L('إغلاق تشغيلي دائم. لا دخول ولا طلبات — والتاريخ المالي والتدقيق يبقى كاملًا.','Permanent operational closure. No login and no orders — the full financial history and audit are retained.'),
+    Draft: L('عودة إلى مرحلة الإعداد.','Back to the setup stage.'),
+  };
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissStatusChange()"><div class="ordsheet">
+    <h3>${L('تحويل الحالة إلى','Move status to')} ${LABEL[c.to]||esc(c.to)}</h3>
+    <div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">${EFFECT[c.to]||''}</div>
+    <div class="formfield"><label>${L('السبب (مطلوب)','Reason (required)')}</label>
+      <input id="scReason" placeholder="${L('سبب التغيير — يُسجَّل في التدقيق','Reason — recorded in the audit log')}"></div>
+    ${c.error ? `<div class="errbox" style="margin-top:10px">${esc(c.error)}</div>`:''}
+    <div class="actrow">
+      <button class="${c.to==='Closed'?'btn-danger-line':'btn-small brass'}" onclick="App.submitStatusChange()" ${c.submitting?'disabled':''}>
+        ${c.submitting ? L('جارٍ التنفيذ…','Processing…') : L('تأكيد','Confirm')}</button>
+      <button class="ghostbtn" onclick="App.dismissStatusChange()" ${c.submitting?'disabled':''}>${t('close')}</button>
+    </div>
+  </div></div>`;
+}
+
 function renderPartnerProfile(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const pf = S.partnerProfile;
@@ -2110,6 +2216,8 @@ function renderPartnerProfile(){
     <div class="kpi"><div class="lbl">${L('منافذ نشطة','Active outlets')}</div><div class="val">${ov&&ov.today?ov.today.activeOutlets:'—'}</div></div>
     <div class="kpi"><div class="lbl">${L('تنبيهات','Attention')}</div><div class="val" style="color:${ov&&ov.attention&&ov.attention.length?'var(--red-500)':'inherit'}">${ov&&ov.attention?ov.attention.length:'—'}</div></div>
   </div>
+
+  ${renderPartnerStatusCard(pf.partnerId)}
 
   <div class="grid2">
     <!-- Plan / Subscription -->

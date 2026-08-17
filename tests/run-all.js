@@ -33,6 +33,7 @@ const suites = [
   './partner-lifecycle.js',
   './loyalty-admin.js',
   './sitemanager-surfaces.js',
+  './corrective-closure.js',
 ];
 
 (async () => {

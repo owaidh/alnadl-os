@@ -1030,8 +1030,18 @@ on('POST', '/api/orders/:id/refund', ['AlnadlFinance', 'SiteManager', 'SuperAdmi
   const totalPaid = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM payments WHERE order_id = ? AND status = 'Captured'`).get(p.id).s;
   const alreadyRefunded = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE order_id = ? AND status = 'Refunded'`).get(p.id).s;
   const remaining = Math.round((totalPaid - alreadyRefunded) * 100) / 100;
-  const amount = Math.round((parseFloat(body.amount) || 0) * 100) / 100;
 
+  // Corrective: حذف `amount` يعني **الرصيد المتبقي القابل للاسترجاع**، لا صفرًا.
+  // كانت الواجهة تقول "اترك المبلغ فارغًا لاسترجاع كامل" بينما يرفضه الخادم
+  // بـ400 -- تناقض حقيقي بين ما وُعِد به المشغّل وما ينفّذه النظام. المصدر
+  // الوحيد للمبلغ الكامل هو `remaining` المحسوب أعلاه، فلا يمكن للعميل أن
+  // يتجاوزه ولا أن يخمّنه.
+  const amountOmitted = body.amount === undefined || body.amount === null || body.amount === '';
+  const amount = amountOmitted
+    ? remaining
+    : Math.round((parseFloat(body.amount) || 0) * 100) / 100;
+
+  if (remaining <= 0) return sendJSON(res, 409, { error: 'Nothing left to refund on this order' });
   if (amount <= 0) return sendJSON(res, 400, { error: 'Refund amount must be positive' });
   if (amount > remaining + 0.01) return sendJSON(res, 409, { error: `Refund amount (${amount}) exceeds remaining refundable balance (${remaining}) — prevents double/over-refund` });
   if (!body.reason) return sendJSON(res, 400, { error: 'Refund reason is required for the audit trail' });

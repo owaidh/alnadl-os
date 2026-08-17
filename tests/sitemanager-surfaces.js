@@ -116,16 +116,38 @@ async function run() {
     const opNotif = await api('GET', '/api/admin/notifications', null, OP);
     assertEqual(opNotif.status, 403, 'R3 ولا يصل للتنبيهات الإدارية');
 
-    // ============ Properties: مؤجَّلة عمدًا ============
+    // ============ Properties: تصحيح تدقيق ============
+    // تصحيح: التقرير السابق ادّعى عدم وجود PATCH وعدم وجود delivery_grouping.
+    // كلاهما خطأ. الاختبار القديم "أثبت" 404 على '/api/admin/properties' بلا
+    // :id -- أي أنه اختبر مسارًا غير موجود أصلًا ولم يُثبت شيئًا عن PATCH.
+    // ما يلي يفحص الواقع كما هو.
     const propsRead = await api('GET', '/api/admin/properties', null, SA);
-    assertEqual(propsRead.status, 200, 'R3 قراءة العقارات متاحة لـSuperAdmin كما كانت');
-    for (const m of ['POST', 'PATCH']) {
-      const r = await api(m, '/api/admin/properties', { name_en: 'X' }, SA);
-      assertEqual(r.status, 404,
-        `R3 **لم يُبنَ ${m} للعقارات** — مؤجَّل بقرار موثَّق، لا مخطط delivery_grouping ولا عزل مُثبَت`);
+    assertEqual(propsRead.status, 200, 'Properties: القراءة متاحة لـSuperAdmin');
+
+    const propId = db.prepare('SELECT id FROM properties LIMIT 1').get().id;
+    const patchReal = await api('PATCH', `/api/admin/properties/${propId}`, { deliveryGrouping: 'separate' }, SA);
+    assertEqual(patchReal.status, 200,
+      'Properties: **PATCH /api/admin/properties/:id موجودة وتعمل** — التقرير السابق كان خاطئًا');
+    const grouping = db.prepare('SELECT delivery_grouping FROM properties WHERE id=?').get(propId).delivery_grouping;
+    assertEqual(grouping, 'separate',
+      'Properties: **delivery_grouping موجود في المخطط ويُحرَّر فعليًا** (migrations/002)');
+    await api('PATCH', `/api/admin/properties/${propId}`, { deliveryGrouping: 'grouped' }, SA);
+
+    // العزل قائم على مسار الكتابة الموجود
+    const otherProp = db.prepare(`SELECT id FROM properties WHERE partner_id != 'pt_nova' LIMIT 1`).get();
+    if (otherProp) {
+      const crossPatch = await api('PATCH', `/api/admin/properties/${otherProp.id}`, { deliveryGrouping: 'separate' }, PA);
+      assertEqual(crossPatch.status, 403,
+        'Properties: PartnerAdmin لا يُعدّل عقار شريك آخر — العزل مُطبَّق على مسار الكتابة القائم');
     }
+
+    // ما هو غير موجود فعلًا: الإنشاء
+    const createProp = await api('POST', '/api/admin/properties', { name_en: 'X', partnerId: 'pt_nova' }, SA);
+    assertEqual(createProp.status, 404,
+      'Properties: **لا يوجد POST لإنشاء عقار** — هذا وحده ما هو مؤجَّل، لا PATCH');
+
     const smProps = await api('GET', '/api/admin/properties', null, SM);
-    assertEqual(smProps.status, 403, 'R3 والعقارات ليست ضمن صلاحيات SiteManager');
+    assertEqual(smProps.status, 403, 'Properties: ليست ضمن صلاحيات SiteManager');
 
   } finally {
     stopServer();
