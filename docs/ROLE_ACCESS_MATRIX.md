@@ -1,4 +1,4 @@
-> **Version:** v2.9.1-role-engage-gov · **Status:** Round 1 + Round 2 (§1/§2/§6) · **Last Updated:** 2026-08-17
+> **Version:** v2.10.0-role-engage · **Status:** R1 + R2 (البنود 1-2 و6) · **Last Updated:** 2026-08-17
 
 # ROLE ACCESS MATRIX
 
