@@ -96,10 +96,9 @@ async function main() {
     ['GET', '/api/admin/products', null, 'المنتجات'],
     ['GET', '/api/admin/merchants', null, 'التجار'],
     ['GET', '/api/admin/settlements', null, 'التسويات'],
-    ['GET', '/api/admin/refunds', null, 'الاسترجاعات'],
     ['GET', '/api/admin/revenue-ledger', null, 'دفتر الإيراد'],
     ['GET', '/api/admin/wallets', null, 'محافظ الشركات'],
-    ['GET', '/api/admin/branding', null, 'العلامة التجارية'],
+    ['GET', '/api/admin/branding?partnerId=pt_nova', null, 'العلامة التجارية'],
     ['GET', '/api/audit', null, 'سجل التدقيق'],
     ['GET', '/api/admin/notifications', null, 'التنبيهات'],
     ['GET', '/api/ops/queue', null, 'طابور التشغيل'],
@@ -117,6 +116,20 @@ async function main() {
     ['GET', '/api/admin/partners/pt_nova/status', null, 'حالة الشريك'],
     ['GET', '/api/admin/subscription?partnerId=pt_nova', null, 'الاشتراك'],
   ];
+  /* تصحيح: كان التدقيق يفحص قدرة الاسترجاع عبر '/api/admin/refunds' وهو
+     **مسار غير موجود أصلًا** -- فـ404 كانت عن خطأ كتابة لا عن غياب صلاحية.
+     المسار الحقيقي هو GET /api/orders/:id/refunds ويحتاج طلبًا فعليًا،
+     فيُهيّأ هنا ويُضاف للمصفوفة بمُعرّفه الصحيح. */
+  const probeOrder = await call('POST', '/api/orders',
+    { pointId: 'PT-021', customerPhone: '0500222333', items: [{ productId: 'p_latte', qty: 1 }] });
+  if (probeOrder.status === 201) {
+    await call('POST', `/api/orders/${probeOrder.data.id}/pay`, { method: 'card' });
+    for (const to of ['Accepted', 'Preparing', 'Ready', 'Out for Delivery', 'Delivered']) {
+      await call('POST', `/api/orders/${probeOrder.data.id}/transition`, { to }, SA);
+    }
+    PROBES.push(['GET', `/api/orders/${probeOrder.data.id}/refunds`, null, 'سجل استرجاعات الطلب']);
+  }
+
   const matrix = {};
   for (const [m, p, b, label] of PROBES) {
     matrix[label] = {};
@@ -278,12 +291,28 @@ async function main() {
 
   stop();
 
-  const report = { generatedAt: new Date().toISOString(), roles: ROLES, matrix, routes, lifecycle,
+  /* حارس نزاهة التدقيق: أي 500 في المصفوفة يعني خللًا حقيقيًا أو مسبارًا
+     ناقصًا -- لا يُصنَّف كصلاحية. وأي 404 يجب أن يكون على مسار **قُصد**
+     إثبات غيابه، لا على مسار مكتوب خطأً. */
+  const anomalies = [];
+  for (const [cap, byRole] of Object.entries(matrix)) {
+    for (const [role, code] of Object.entries(byRole)) {
+      if (code === 500) anomalies.push({ kind: 'SERVER_ERROR', cap, role });
+      if (code === 404) anomalies.push({ kind: 'NOT_FOUND', cap, role });
+    }
+  }
+
+  const report = { generatedAt: new Date().toISOString(), roles: ROLES, matrix, routes, lifecycle, anomalies,
     closeWithOpenOrders: { status: closeWithOpen.status, code: closeWithOpen.data && closeWithOpen.data.code },
     openOrderCompletedWhileSuspended: completed,
     subscriptionCross: { engageBlockedBy: subSuspended.data && subSuspended.data.blockedBy, orderStatus: orderWithSubSuspended.status },
     isolation, iam, fin };
   fs.writeFileSync(path.join(__dirname, '..', 'audit-findings.json'), JSON.stringify(report, null, 2));
+  if (anomalies.length) {
+    console.log('ANOMALIES IN ACCESS MATRIX:', JSON.stringify(anomalies));
+  } else {
+    console.log('access matrix clean: no 500, no unintended 404');
+  }
   console.log('audit complete -> audit-findings.json');
 }
 

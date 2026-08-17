@@ -2511,6 +2511,11 @@ function getBranding(partnerId) {
 }
 on('GET', '/api/admin/branding', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, query, session) => {
   const partnerId = session.role === 'PartnerAdmin' ? session.scope : query.partnerId;
+  // كشفه التدقيق: SuperAdmin بلا partnerId كان يُمرّر undefined إلى ربط
+  // SQLite فيرمي TypeError ويظهر كـ500 -- نفس صنف الخطأ الذي أنتج رسالة
+  // "Server error" الميدانية. مُدخل ناقص ليس عطل خادم، فهو 400 برسالة
+  // تقول للمشغّل ما الناقص.
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
   sendJSON(res, 200, getBranding(partnerId));
 });
 on('POST', '/api/admin/branding', ['SuperAdmin'], async (req, res, p, q, session) => {
