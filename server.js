@@ -2913,9 +2913,28 @@ server.listen(PORT, () => {
   // §3.9: an in-memory limiter across several instances multiplies the
   // effective limit by the instance count. Warn loudly rather than let a
   // multi-instance production deployment believe it is protected.
-  if (process.env.NODE_ENV === 'production' && process.env.APP_INSTANCES && Number(process.env.APP_INSTANCES) > 1) {
-    console.warn(JSON.stringify({ level: 'warn', event: 'rate_limit_store_unsafe',
-      detail: 'in-memory rate limiting with APP_INSTANCES>1 multiplies the effective limit; use a shared store' }));
+  /* R4-B / PB-3 — قيد نشر صريح، لا مجرد تحذير.
+     التحذير وحده يُتجاهَل: يمرّ في السجل ويستمر النشر، فيصبح تعدد النسخ
+     "يعمل" ظاهريًا بينما كل حد معدل مضروب في عدد النسخ. حتى يتوفر مخزن
+     مشترك، تعدد النسخ **غير مدعوم إنتاجيًا** ويُرفض الإقلاع صراحةً.
+
+     الرفض قابل للتجاوز الواعي بـ ACCEPT_MULTI_INSTANCE_RISK=1 لمن يريد
+     بيئة اختبار متعددة النسخ -- لكنه قرار يُكتب صراحة ويُسجَّل، لا سلوك
+     افتراضي صامت. */
+  const instances = Number(process.env.APP_INSTANCES || '1');
+  if (process.env.NODE_ENV === 'production' && instances > 1) {
+    const accepted = process.env.ACCEPT_MULTI_INSTANCE_RISK === '1';
+    if (!accepted) {
+      console.error('\n❌ FATAL: APP_INSTANCES=' + instances + ' is not production-supported.');
+      console.error('   Rate limiting and login-attempt counters are per-process (in-memory),');
+      console.error('   so N instances multiply every configured limit by N.');
+      console.error('   A shared store (PB-3) is required before multi-instance deployment.');
+      console.error('   Deploy a SINGLE instance, or set ACCEPT_MULTI_INSTANCE_RISK=1 to');
+      console.error('   proceed deliberately in a non-production environment.\n');
+      process.exit(1);
+    }
+    console.warn(JSON.stringify({ level: 'warn', event: 'multi_instance_risk_accepted',
+      instances, detail: 'per-process rate limiting; effective limits are multiplied by instance count' }));
   }
   // Q06 (2nd round): the hard NODE_ENV=production check now happens at
   // lib/auth.js module load time (resolveSessionSecret()), before the

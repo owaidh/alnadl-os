@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-17T23:43:15.870Z",
+  "timestamp": "2026-08-17T23:53:58.427Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -119,6 +119,14 @@
     },
     {
       "suite": "./white-label.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./trusted-proxy.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./production-deployment.js",
       "status": "PASS"
     }
   ],

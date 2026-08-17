@@ -1,4 +1,4 @@
-> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
+> **Version:** v2.13.0-r4b-closure · **Last Updated:** 2026-08-18
 
 # Alnadl Hospitality OS — Deployment Guide
 
@@ -192,3 +192,47 @@ https://<your-host>/diagnose.html
 **حدود القدرة**: لا تملك الصفحة أي صلاحية بذاتها، ولا تُنفّذ أي عملية كتابة. كل استدعاء يجري **برمز دخول المشغّل نفسه**، ولا تكشف شيئًا لزائر مجهول لا يستطيع الحصول عليه أصلًا.
 
 > **تمييز مقصود**: `/diagnose.html` أداة **تشغيل (Ops)** — تُخدَم في الإنتاج مثل `/health` و`/ready`. وهي تختلف عن `dev-tools.js` وهي أداة **تطوير** تُحجب بـ404 في الإنتاج. الفصل مُتحقَّق منه آليًا.
+
+
+---
+
+## R4-B — متطلبات النشر الإنتاجي المُحدَّثة
+
+### متغيرات جديدة إلزامية
+
+| المتغير | الغرض |
+|---|---|
+| `TRUSTED_PROXY_IPS` | **بدونه لا تُقبل `X-Forwarded-For` إطلاقًا.** أدرج عنوان الوكيل العكسي المباشر — وإلا شارك كل الزوار حزمة معدل واحدة |
+| `APP_INSTANCES` | **أكثر من 1 في الإنتاج يرفض الإقلاع** حتى يتوفر مخزن مشترك |
+| `BACKUP_DIR` | مكان النسخ — **يجب أن يكون على وحدة تخزين منفصلة** |
+| `BACKUP_RETENTION_DAYS` | افتراضيًا 14 |
+
+### النسخ الاحتياطي والاستعادة
+
+```bash
+# نسخة (آمنة أثناء الكتابة — VACUUM INTO ذرّية)
+node scripts/backup-restore.js backup
+
+# تحقق من نسخة
+node scripts/backup-restore.js verify --file backups/alnadl-<ts>.sqlite
+
+# استعادة (تُزيح القاعدة القائمة ولا تحذفها)
+node scripts/backup-restore.js restore --file <bk> --db /path/live.sqlite
+
+# تمرين كامل: نسخ + استعادة + مقارنة
+node scripts/backup-restore.js drill --db /path/live.sqlite
+```
+
+**جدولة**: `0 2 * * *  node /app/scripts/backup-restore.js backup`
+**تمرين استعادة**: شهريًا كحد أدنى — خطة تعافٍ غير مُختبَرة ليست خطة.
+
+**لا تستخدم `cp` على قاعدة عاملة**: مع WAL قد لا يحمل الملف الرئيس آخر المعاملات المُثبتة، فتبدو النسخة سليمة وهي ناقصة بصمت.
+
+### التحقق من الصورة قبل النشر
+
+```bash
+node scripts/verify-container-image.js            # يجب أن يمرّ
+node scripts/verify-container-image.js --negative # يجب أن يمرّ أيضًا
+```
+
+الأداة تقرأ تعليمات `COPY` من `Dockerfile` نفسه، فلا تنحرف عنه.
