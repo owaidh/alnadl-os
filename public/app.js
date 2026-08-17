@@ -122,7 +122,7 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, partnerProfile:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
@@ -601,6 +601,26 @@ const App = {
   // §3.3 — محمّلات الأدوار الجديدة. كل استدعاء هنا يقابل نقطة يسمح بها
   // الخادم لهذا الدور تحديدًا؛ لم تُوسَّع أي صلاحية لتسهيل الواجهة.
   // R2 §1/§2 — الحالة الفعّالة: طبقة واحدة تشرح لماذا Engage مفعّل أو لا.
+  // R2 §3 — Partner Control Center: يجمع ما هو موجود فعلًا في نداء واحد.
+  // لا نقاط جديدة: كلها قائمة ومصرّحة لـSuperAdmin بالفعل. كل استدعاء
+  // يفشل بصمت على حدة فلا تُسقط لوحة كاملة بسبب وحدة واحدة (§13).
+  async loadPartnerProfile(partnerId){
+    if(!partnerId) return;
+    S.partnerProfile = { partnerId, loading:true }; render();
+    const one = async (fn) => { try{ return await fn(); }catch(e){ return { __error: e.message }; } };
+    const [overview, subscription, users, zones, outlets, settlements, engage] = await Promise.all([
+      one(()=>api('GET',`/api/partner/overview?partnerId=${encodeURIComponent(partnerId)}`,null,true)),
+      one(()=>api('GET',`/api/admin/subscription?partnerId=${encodeURIComponent(partnerId)}`,null,true)),
+      one(()=>api('GET','/api/admin/users',null,true)),
+      one(()=>api('GET','/api/admin/zones',null,true)),
+      one(()=>api('GET','/api/admin/outlets',null,true)),
+      one(()=>api('GET','/api/admin/settlements',null,true)),
+      one(()=>api('GET',`/api/engage/effective-state?partnerId=${encodeURIComponent(partnerId)}`,null,true)),
+    ]);
+    S.partnerProfile = { partnerId, loading:false, overview, subscription, users, zones, outlets, settlements, engage };
+    render();
+  },
+  openPartnerProfile(partnerId){ S.screen='partnerprofile'; App.loadPartnerProfile(partnerId); },
   async loadEngageState(partnerId){
     const q = partnerId ? `?partnerId=${encodeURIComponent(partnerId)}` : '';
     try{ S.engageState = await api('GET', '/api/engage/effective-state'+q, null, true); }
@@ -1450,6 +1470,7 @@ function renderStaffShell(){
   let inner = '';
   if(S.screen==='kds') inner = renderKds();
   else if(S.screen==='runnerq') inner = renderRunner();
+  else if(S.screen==='partnerprofile') inner = renderPartnerProfile();
   else if(S.screen==='engagecontrol') inner = renderEngageControl();
   else if(S.screen==='partnerengage') inner = renderPartnerEngage();
   else if(S.screen==='revledger') inner = renderRevenueLedger();
@@ -1694,7 +1715,8 @@ function renderTenants(){
         return `<div class="pointrow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div style="display:flex;justify-content:space-between;width:100%;align-items:center"><b style="color:var(--cream-050)">${S.lang==='ar'?pt.name_ar:pt.name_en}</b>
           <span class="badge paid">${pt.subscription? pt.subscription.plan_code : '—'}</span>
-          <button class="togglepill active" onclick="App.selectTenantForAdmin('${pt.id}')">${S.lang==='ar'?'إدارة':'Manage'}</button></div>
+          <button class="togglepill active" onclick="App.selectTenantForAdmin('${pt.id}')">${S.lang==='ar'?'تبديل السياق':'Switch context'}</button>
+          <button class="togglepill" onclick="App.openPartnerProfile('${pt.id}')">${S.lang==='ar'?'ملف الشريك':'Partner profile'}</button></div>
           <div style="display:flex;gap:8px;align-items:center;width:100%">
             <select id="planSelect_${pt.id}" style="flex:1;background:var(--ink-800);color:var(--cream-050);border:1px solid var(--ink-700);border-radius:7px;padding:6px 8px;font-size:11.5px;">
               ${plans.map(p=>`<option value="${p.code}">${p.code} — ${p.monthly_fee} SAR/mo</option>`).join('')}
@@ -1873,6 +1895,128 @@ function engageEffectiveCard(st, isPartnerView){
 }
 
 // §1 — مركز تحكم Engage لـSuperAdmin
+/* R2 §3 — Partner Control Center.
+   صفحة واحدة تجمع كل ما يخصّ شريكًا بعينه من نقاط قائمة أصلًا. لم تُبنَ
+   أي واجهة برمجية جديدة؛ ولا يُخترع أي حقل غير موجود في المخطط -- ما لا
+   تُرجعه البيانات يظهر كشرطة، لا كصفر مضلِّل. */
+function renderPartnerProfile(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const pf = S.partnerProfile;
+  if(!pf) return `<div class="statepanel on-dark"><div class="glyph">—</div><h4>${L('لم يُختَر شريك','No partner selected')}</h4><p>${L('افتح ملف شريك من شاشة الشركاء والباقات.','Open a partner profile from the Tenants & Plans screen.')}</p></div>`;
+  if(pf.loading) return kpiDashboardSkeleton(4) + '<div class="panel"><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div></div>';
+
+  const partner = (S.tenants||[]).find(x=>x.id===pf.partnerId) || {};
+  const err = o => o && o.__error;
+  const ov = err(pf.overview) ? null : pf.overview;
+  const sub = err(pf.subscription) ? null : pf.subscription;
+  const eng = err(pf.engage) ? null : pf.engage;
+
+  // كل قائمة تُصفّى لهذا الشريك — لا تسريب بيانات شريك آخر في الصفحة
+  const users = err(pf.users) ? [] : (pf.users||[]).filter(u=>u.partner_scope===pf.partnerId);
+  const zones = err(pf.zones) ? [] : (pf.zones||[]);
+  const outlets = err(pf.outlets) ? [] : (pf.outlets||[]);
+  const settlements = err(pf.settlements) ? [] : (pf.settlements||[]).filter(x=>x.partner_id===pf.partnerId);
+
+  // وحدة فشلت؟ تُعلَن باسمها بدل رسالة خطأ عامة تُسقط الصفحة (§13)
+  const failed = [
+    err(pf.overview) && L('الأداء','Performance'), err(pf.subscription) && L('الاشتراك','Subscription'),
+    err(pf.users) && L('المستخدمون','Users'), err(pf.zones) && L('المناطق','Zones'),
+    err(pf.outlets) && L('المنافذ','Outlets'), err(pf.settlements) && L('التسويات','Settlements'),
+    err(pf.engage) && 'Engage',
+  ].filter(Boolean);
+
+  const money2s = v => v==null ? '—' : money(v);
+  const line = (k,v) => `<div class="totalline" style="color:var(--ink-200)"><span>${k}</span><span>${v}</span></div>`;
+
+  return `
+  <div class="panel" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="flex:1;min-width:180px">
+      <h3 style="margin:0">${esc(S.lang==='ar'?partner.name_ar:partner.name_en)||pf.partnerId}</h3>
+      <p class="ph" style="margin:2px 0 0">${esc(pf.partnerId)}</p>
+    </div>
+    <button class="btn-small" onclick="App.setStaffScreen('tenants')">${L('عودة للشركاء','Back to partners')}</button>
+  </div>
+
+  ${failed.length ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500)">
+    <b>${L('تعذّر تحميل بعض الوحدات','Some modules could not load')}:</b> ${failed.join(' · ')}
+    — ${L('بقية الصفحة سليمة.','the rest of the page is intact.')}
+  </div>`:''}
+
+  <!-- Overview -->
+  <div class="kpirow">
+    <div class="kpi"><div class="lbl">${L('مبيعات اليوم','Sales today')}</div><div class="val">${ov&&ov.today?money2s(ov.today.grossSales):'—'}</div><div class="sub">SAR</div></div>
+    <div class="kpi"><div class="lbl">${L('طلبات اليوم','Orders today')}</div><div class="val">${ov&&ov.today?ov.today.orders:'—'}</div></div>
+    <div class="kpi"><div class="lbl">${L('منافذ نشطة','Active outlets')}</div><div class="val">${ov&&ov.today?ov.today.activeOutlets:'—'}</div></div>
+    <div class="kpi"><div class="lbl">${L('تنبيهات','Attention')}</div><div class="val" style="color:${ov&&ov.attention&&ov.attention.length?'var(--red-500)':'inherit'}">${ov&&ov.attention?ov.attention.length:'—'}</div></div>
+  </div>
+
+  <div class="grid2">
+    <!-- Plan / Subscription -->
+    <div class="panel"><h3>${L('الباقة والاشتراك','Plan & Subscription')}</h3>
+      ${sub ? `
+        ${line(L('الباقة','Plan'), esc(sub.planCode||sub.code||'—'))}
+        ${line(L('الحالة','Status'), `<span class="badge ${sub.status==='Active'?'ok':'cancel'}">${esc(sub.status||'—')}</span>`)}
+        ${line(L('الرسم الشهري','Monthly fee'), money2s(sub.monthlyFee||sub.monthly_fee))}
+        <div style="margin-top:12px">
+          <label style="display:block;font-size:12px;font-weight:700;color:var(--ink-300);margin-bottom:6px">${L('المزايا المُفعّلة','Active entitlements')}</label>
+          <div style="display:flex;flex-wrap:wrap;gap:5px">
+            ${Object.entries(sub.features||{}).filter(([,v])=>v===true).map(([k])=>`<span class="badge ok">${esc(k)}</span>`).join('') || `<span class="ph">${L('لا مزايا مُفعّلة','none active')}</span>`}
+          </div>
+        </div>`
+      : `<p class="ph">${L('لا اشتراك','No subscription')}</p>`}
+    </div>
+
+    <!-- Engage -->
+    <div class="panel"><h3>Engage</h3>
+      ${eng ? `
+        ${line(L('الحالة الفعّالة','Effective'), `<span class="badge ${eng.effective?'ok':'cancel'}">${eng.effective?L('مُفعّل','Active'):L('غير مُفعّل','Not active')}</span>`)}
+        ${!eng.effective && eng.blockedBy ? `<p class="ph" style="margin-top:8px">${L('السبب','Reason')}: ${esc(eng.blockedBy)}</p>`:''}
+        <div class="actrow"><button class="btn-small" onclick="App.setStaffScreen('engagecontrol')">${L('فتح تحكّم Engage','Open Engage Control')}</button></div>`
+      : `<p class="ph">${L('غير متاح','Unavailable')}</p>`}
+    </div>
+  </div>
+
+  <div class="grid2">
+    <!-- Users -->
+    <div class="panel"><h3>${L('المستخدمون','Users')} <span class="cnt">${users.length}</span></h3>
+      ${users.length ? `<table class="datatable"><tr><th>${L('المستخدم','User')}</th><th>${L('الدور','Role')}</th><th>${L('الحالة','Status')}</th></tr>
+        ${users.map(u=>`<tr><td>${esc(u.username)}</td><td>${esc(u.role)}</td>
+          <td><span class="badge ${u.status==='active'?'ok':u.status==='pending_activation'?'pending':'cancel'}">${esc(u.status||(u.active?'active':'suspended'))}</span></td></tr>`).join('')}</table>`
+      : `<p class="ph">${L('لا مستخدمون لهذا الشريك','No users for this partner')}</p>`}
+      <div class="actrow"><button class="btn-small" onclick="App.setStaffScreen('users')">${L('إدارة المستخدمين','Manage users')}</button></div>
+    </div>
+
+    <!-- Operations -->
+    <div class="panel"><h3>${L('العمليات','Operations')}</h3>
+      ${line(L('المنافذ','Outlets'), outlets.length)}
+      ${line(L('المناطق','Zones'), zones.length)}
+      <div class="actrow" style="flex-wrap:wrap">
+        <button class="btn-small" onclick="App.setStaffScreen('outlets')">${L('المنافذ','Outlets')}</button>
+        <button class="btn-small" onclick="App.setStaffScreen('zones')">${L('المناطق ورموز QR','Zones & QR')}</button>
+        <button class="btn-small" onclick="App.setStaffScreen('catalog')">${L('القائمة','Catalog')}</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <!-- Finance -->
+    <div class="panel"><h3>${L('ملخّص مالي','Finance Summary')}</h3>
+      ${line(L('تسويات','Settlements'), settlements.length)}
+      ${line(L('حصة الشريك (إجمالي)','Partner share (total)'), money2s(settlements.reduce((a,x)=>a+(x.partner_share||0),0)))}
+      ${settlements.some(x=>x.status==='Disputed') ? `<div class="attentionrow high" style="margin-top:10px"><span class="dot"></span><span class="txt">${L('توجد تسوية متنازع عليها','A disputed settlement exists')}</span><span class="sev">${L('عالٍ','High')}</span></div>`:''}
+      <div class="actrow"><button class="btn-small" onclick="App.setStaffScreen('settlements')">${L('التسويات','Settlements')}</button>
+        <button class="btn-small" onclick="App.setStaffScreen('revledger')">${L('دفتر الإيراد','Revenue Ledger')}</button></div>
+    </div>
+
+    <!-- Branding & Audit -->
+    <div class="panel"><h3>${L('العلامة والتدقيق','Branding & Audit')}</h3>
+      <p class="ph">${L('العلامة البيضاء تُطبَّق على واجهة الضيف فقط ولا تمسّ الشاشات الإدارية.','White label applies to the guest surface only and never to admin screens.')}</p>
+      <div class="actrow"><button class="btn-small" onclick="App.setStaffScreen('branding')">${L('العلامة التجارية','Branding')}</button>
+        <button class="btn-small" onclick="App.setStaffScreen('audit')">${L('سجل التدقيق','Audit log')}</button></div>
+    </div>
+  </div>`;
+}
+
 function renderEngageControl(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const ks = S.killSwitch;
