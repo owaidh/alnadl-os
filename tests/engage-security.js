@@ -6,7 +6,17 @@
 //   2. An Engage capability token must not be obtainable from a
 //      guessable order id alone
 'use strict';
-const { chromium } = require('/home/claude/.npm-global/lib/node_modules/playwright');
+// قابلية إعادة التشغيل: تُحلّ playwright من resolution القياسي أولًا، ثم من
+// NODE_PATH إن كانت مثبّتة عالميًا. لا مسار مطلق -- الحزمة المستخرجة يجب أن
+// تُشغّل نفسها دون الاعتماد على بيئة الجهاز الذي بُنيت عليه.
+function loadPlaywright() {
+  try { return require('playwright'); } catch (e) {}
+  for (const base of (process.env.NODE_PATH || '').split(require('path').delimiter).filter(Boolean)) {
+    try { return require(require('path').join(base, 'playwright')); } catch (e) {}
+  }
+  throw new Error('playwright is not resolvable — install it or set NODE_PATH to a directory containing it');
+}
+const { chromium } = loadPlaywright();
 const { startServer, stopServer, api, loginAs, assert, assertEqual, summary, resetCounts, getDataPath, BASE } = require('./helpers.js');
 
 function openDb() {

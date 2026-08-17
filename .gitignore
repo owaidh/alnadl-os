@@ -19,3 +19,7 @@ node_modules/
 # markdown sources are the tracked truth, and the PDFs are still built
 # and shipped in every package.
 docs/pdf/
+-e 
+# ناتج تشغيل أداة التدقيق — يُعاد توليده بـscripts/cross-system-audit.js
+audit-findings.json
+audit-run.sqlite*
