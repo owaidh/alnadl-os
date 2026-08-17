@@ -117,6 +117,32 @@ function getOrderWithContext(id) {
 
 /* ------------------------------- routing --------------------------------- */
 const routes = [];
+/* ---------------------------------------------------------------------------
+   حاجز ربط المعلمات (Root-cause fix, F04 diagnostics)
+   السبب الجذري لرسالة "Server error" في شاشة الشركاء والباقات: حقل مفقود
+   في جسم الطلب (planCode حين تكون قائمة الباقات فارغة) كان يصل مباشرة إلى
+   db.prepare(...).get(undefined)، فيرمي السائق TypeError -- وهو خطأ 500
+   يظهر للمستخدم كرسالة مبهمة، بينما هو في حقيقته **مُدخل ناقص** أي 400.
+
+   القاعدة: أي حقل مطلوب يُتحقَّق منه صراحةً قبل أي لمسة لقاعدة البيانات،
+   ويُعاد 400 برسالة تقول للمشغّل ما الناقص بالضبط. هذا يُصلح السبب لا العرض:
+   الخطأ يبقى خطأ، لكنه يُصنَّف ويُشرح بصدق بدل أن يتنكّر بزيّ عطل خادم.
+
+   لماذا حارس صريح بدل مُعالجة عامة للاستثناء: المعالجة العامة كانت ستُخفي
+   الخلل، أما هذا فيمنع وصول القيمة غير الصالحة إلى السائق أصلًا. */
+function requireFields(body, fields) {
+  const missing = [];
+  for (const f of fields) {
+    const v = body ? body[f] : undefined;
+    if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) missing.push(f);
+  }
+  if (missing.length) {
+    const e = new Error(`Missing required field(s): ${missing.join(', ')}`);
+    e.status = 400;
+    throw e;
+  }
+}
+
 function on(method, pattern, roles, handler, opts) {
   // pattern like '/api/orders/:id/pay' -> regex with named groups
   const names = [];
@@ -1296,8 +1322,20 @@ on('POST', '/api/admin/partners', ['SuperAdmin'], async (req, res, p, q, session
 /* ---- SaaS onboarding: create Partner + Property + Subscription in one call ---- */
 on('POST', '/api/admin/onboard', ['SuperAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
+  // مُثبَت بإعادة إنتاج: بدون هذا التحقق، planCode المفقود يصل إلى الربط
+  // فيرمي TypeError ويظهر كـ500 "Server error" بدل 400 مفهوم.
+  requireFields(b, ['partnerNameAr', 'partnerNameEn', 'planCode']);
   const plan = db.prepare('SELECT * FROM plans WHERE code = ?').get(b.planCode);
-  if (!plan) return sendJSON(res, 400, { error: 'Unknown plan code' });
+  if (!plan) {
+    // رسالة تُرشد المشغّل للسبب الحقيقي حين لا توجد باقات إطلاقًا -- وهي
+    // الحالة الفعلية على البيئة المرفوعة (/api/plans رجعت [] فارغة).
+    const total = db.prepare('SELECT COUNT(*) c FROM plans').get().c;
+    return sendJSON(res, 400, {
+      error: total === 0
+        ? 'No plans exist yet — create a plan first (Plans screen), then onboard a partner'
+        : 'Unknown plan code',
+    });
+  }
   const partnerId = uid('pt');
   db.prepare('INSERT INTO partners (id,name_ar,name_en,legal_name,contract_ref,status) VALUES (?,?,?,?,?,?)')
     .run(partnerId, b.partnerNameAr, b.partnerNameEn, b.legalName || b.partnerNameEn, b.contractRef || ('CNT-' + Date.now()), 'Active');

@@ -122,6 +122,7 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
+  adminPlans:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
@@ -404,7 +405,7 @@ const App = {
     if(role==='Operator') return App.loadOpsQueue();
     if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive()]);
     if(role==='Runner') return App.loadRunnerQueue();
-    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans()]);
+    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans()]);
     if(role==='AlnadlFinance') return Promise.all([App.loadSettlements(), App.loadAudit()]);
     if(role==='PartnerViewer') return Promise.all([App.loadPartnerOverview(), App.loadSettlements(), App.loadSubscription()]);
     if(role==='PartnerAdmin'){ S.PARTNER_ID = S.session.user.scope; return Promise.all([App.loadOwnProperty(), App.loadAdminAll(), App.loadSubscription()]); }
@@ -582,6 +583,36 @@ const App = {
   /* ---- SaaS: tenants & plans (SuperAdmin) ---- */
   async loadTenants(){ S.tenants = await api('GET','/api/admin/partners',null,true); render(); },
   async loadPlans(){ S.plans = await api('GET','/api/plans'); render(); },
+  // F04: إدارة الباقات كانت متاحة عبر الـAPI منذ v2.8.0 لكن بلا شاشة —
+  // فكان المشغّل الحقيقي عاجزًا عن إنشاء أول باقة من الواجهة، وهو ما يُبطل
+  // فعليًا شرط "أول عميل مدفوع بدون SQL يدوي".
+  async loadAdminPlans(){
+    try{ S.adminPlans = await api('GET','/api/admin/plans',null,true); }catch(e){ S.adminPlans = []; }
+    render();
+  },
+  async createPlan(){
+    const ent = {};
+    document.querySelectorAll('[data-ent]').forEach(el => { ent[el.dataset.ent] = el.checked; });
+    const b = {
+      code: document.getElementById('plCode').value.trim().toUpperCase(),
+      name_ar: document.getElementById('plNameAr').value.trim(),
+      name_en: document.getElementById('plNameEn').value.trim(),
+      monthlyFee: parseFloat(document.getElementById('plFee').value) || 0,
+      techFeeRate: (parseFloat(document.getElementById('plRate').value) || 0) / 100,
+      entitlements: ent,
+    };
+    if(!b.code){ showErr(S.lang==='ar'?'رمز الباقة مطلوب':'Plan code is required'); return; }
+    try{
+      await api('POST','/api/admin/plans', b, true);
+      showToast(t('toast_saved'));
+      await Promise.all([App.loadAdminPlans(), App.loadPlans()]);
+    }catch(e){ showErr(e.message); }
+  },
+  async deletePlan(id){
+    try{ await api('DELETE','/api/admin/plans/'+id, null, true); showToast(t('toast_saved'));
+      await Promise.all([App.loadAdminPlans(), App.loadPlans()]);
+    }catch(e){ showErr(e.message); }
+  },
   async loadSubscription(){
     try{ S.subscription = await api('GET',`/api/admin/subscription?partnerId=${S.PARTNER_ID}`,null,true); }catch(e){ S.subscription=null; }
     render();
@@ -1252,6 +1283,7 @@ function navGroupsFor(role){
   const groups = {
     SuperAdmin: [
       { id:'SA02', label:L('الشركاء','Partners'), items:[
+        ['plans', L('الباقات','Plans')],
         ['tenants', L('الشركاء والباقات','Tenants & Plans')],
         ['portfolio', L('محفظة المواقع','Portfolio')],
         ['users', L('المستخدمون','Users')],
@@ -1309,6 +1341,7 @@ function renderStaffShell(){
   let inner = '';
   if(S.screen==='kds') inner = renderKds();
   else if(S.screen==='runnerq') inner = renderRunner();
+  else if(S.screen==='plans') inner = renderPlansAdmin();
   else if(S.screen==='tenants') inner = renderTenants();
   else if(S.screen==='portfolio') inner = renderPortfolio();
   else if(S.screen==='live') inner = renderLiveManager();
@@ -1662,6 +1695,64 @@ function renderAudit(){
   return `<div class="panel"><table class="datatable"><tr><th>Actor</th><th>Role</th><th>Action</th><th>Entity</th><th>When</th></tr>
     ${S.audit.map(a=>`<tr><td>${a.actor}</td><td>${a.role}</td><td>${a.action}</td><td style="font-family:var(--mono)">${a.entity}</td><td>${new Date(a.ts).toLocaleString(S.lang==='ar'?'ar-SA':'en-US')}</td></tr>`).join('')}
   </table></div>`;
+}
+
+// F04: شاشة إدارة الباقات (SuperAdmin) — تُغلق الفجوة التي جعلت إنشاء أول
+// باقة مستحيلًا من الواجهة رغم وجود الـAPI.
+function renderPlansAdmin(){
+  const L = (ar,en) => S.lang==='ar'?ar:en;
+  const plans = S.adminPlans;
+  const ENT = [
+    ['qrOrdering', L('الطلب عبر QR','QR Ordering')],
+    ['digitalPayment', L('الدفع الرقمي','Digital Payment')],
+    ['partnerDashboard', L('لوحة الشريك','Partner Dashboard')],
+    ['analytics', L('التحليلات','Analytics')],
+    ['multiOutlet', L('تعدد المنافذ','Multi-Outlet')],
+    ['unifiedCart', L('السلة الموحّدة','Unified Cart')],
+    ['corporateWallet', L('محافظ الشركات','Corporate Wallets')],
+    ['whiteLabel', L('العلامة البيضاء','White Label')],
+    ['multiProperty', L('تعدد العقارات','Multi-Property')],
+    ['loyalty_enabled', L('الولاء — الكسب','Loyalty — Earn')],
+    ['loyalty_redeem_enabled', L('الولاء — الاستبدال','Loyalty — Redeem')],
+    ['engage_enabled', L('Engage','Engage')],
+  ];
+
+  return `
+  ${(plans && plans.length===0) ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500)">
+    <b>${L('لا توجد باقات بعد','No plans exist yet')}</b> — ${L('أنشئ باقة أولًا، فبدونها لا يمكن إنشاء أي شريك.','create a plan first — no partner can be onboarded without one.')}
+  </div>`:''}
+  <div class="grid2">
+    <div class="panel">
+      <h3>${L('باقة جديدة','New Plan')}</h3>
+      <p class="ph">${L('الرمز غير قابل للتغيير بعد الإنشاء','The code cannot be changed after creation')}</p>
+      <div class="formgrid">
+        <div class="formfield"><label>${L('الرمز','Code')}</label><input id="plCode" placeholder="LAUNCH"></div>
+        <div class="formfield"><label>${L('الرسم الشهري','Monthly Fee')}</label><input id="plFee" type="number" placeholder="3000"></div>
+        <div class="formfield"><label>${L('الاسم (AR)','Name (AR)')}</label><input id="plNameAr" placeholder="${L('باقة الإطلاق','')}"></div>
+        <div class="formfield"><label>${L('الاسم (EN)','Name (EN)')}</label><input id="plNameEn" placeholder="Launch Plan"></div>
+        <div class="formfield"><label>${L('الرسم التقني %','Tech Fee %')}</label><input id="plRate" type="number" step="0.1" placeholder="2.2"></div>
+      </div>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--ink-300);margin:14px 0 6px">${L('المزايا','Entitlements')}</label>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${ENT.map(([k,lbl])=>`<label class="optrow" style="flex:0 0 auto;padding:7px 10px;cursor:pointer"><input type="checkbox" data-ent="${k}"> <span style="font-size:11.5px">${lbl}</span></label>`).join('')}
+      </div>
+      <div class="actrow"><button class="btn-small brass" onclick="App.createPlan()">+ ${L('إنشاء الباقة','Create Plan')}</button></div>
+    </div>
+
+    <div class="panel">
+      <h3>${L('الباقات الحالية','Existing Plans')}</h3>
+      ${plans===null ? '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>'
+        : plans.length===0 ? `<div class="statepanel on-dark"><div class="glyph">—</div><p>${L('لا توجد باقات','No plans')}</p></div>`
+        : `<table class="datatable"><tr><th>${L('الرمز','Code')}</th><th>${L('الرسم','Fee')}</th><th>${L('تقني','Tech')}</th><th>${L('مشتركون','Subs')}</th><th></th></tr>
+          ${plans.map(p=>`<tr>
+            <td><b>${p.code}</b></td>
+            <td>${money(p.monthlyFee)}</td>
+            <td>${(p.techFeeRate*100).toFixed(1)}%</td>
+            <td>${p.subscribers}</td>
+            <td>${p.subscribers===0 ? `<button class="btn-small" style="color:var(--red-500);border-color:var(--red-500)" onclick="App.deletePlan('${p.id}')">${L('حذف','Delete')}</button>` : `<span class="ph">${L('مستخدمة','in use')}</span>`}</td>
+          </tr>`).join('')}</table>`}
+    </div>
+  </div>`;
 }
 
 function renderPartnerOverview(){

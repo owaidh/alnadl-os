@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-17T08:00:14.490Z",
+  "timestamp": "2026-08-17T10:07:17.409Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -79,6 +79,10 @@
     },
     {
       "suite": "./golive-p1.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./golive-input-validation.js",
       "status": "PASS"
     }
   ],

@@ -26,6 +26,7 @@ const suites = [
   './golive-ops.js',
   './golive-onboarding.js',
   './golive-p1.js',
+  './golive-input-validation.js',
 ];
 
 (async () => {
