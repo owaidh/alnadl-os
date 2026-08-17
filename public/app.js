@@ -1057,12 +1057,72 @@ function elapsedStr(ts){ const d=Date.now()-ts; const m=Math.floor(d/60000), s=M
 // does not touch this bar's contents at all in this corrective design
 // (unlike the QR-picker/login overrides below) — there is nothing
 // demo-specific left in it to override.
+/* White Label — هوية الشريط العلوي.
+   الأسطح الإدارية تُبقي ALNADL عمدًا: النظام يُدار بواسطة النادل وإخفاء
+   ذلك يُربك المشغّل. أما الضيف فيرى الهوية الفعّالة المحلولة على الخادم.
+   لا منطق وراثة هنا -- القيمة تصل جاهزة من resolveBranding. */
+/* دعوة Engage: كانت «لحظة من النادل» ثابتة فتكسر الهوية البيضاء.
+   تُستبدل بالهوية الفعّالة حين تكون مُفعّلة، وبصياغة محايدة خلاف ذلك.
+   تصميم الشخصيات الخمس ومنطق Engage لم يُمسّا. */
+function engageInviteLabel(){
+  const b = S.qrContext && S.qrContext.branding;
+  if (b && b.whiteLabelActive && b.logo_text) {
+    return S.lang === 'ar' ? `لحظة من ${esc(b.logo_text)}` : `A moment from ${esc(b.logo_text)}`;
+  }
+  return S.lang === 'ar' ? 'لحظة من النادل' : 'A moment from Alnadl';
+}
+
+/* تسمية مُشغّل المنفذ.
+   كانت «مُشغَّل من النادل» ثابتة وتظهر للضيف في شاشة اختيار المنفذ --
+   تسمية تشغيلية داخلية تكسر الهوية البيضاء. تُستبدل بالهوية الفعّالة حين
+   تكون مُفعّلة، وتبقى كما هي خلاف ذلك. اكتشفه التحقق البصري لا المراجعة. */
+function outletOperatorLabel(operator){
+  if (operator === 'partner') return S.lang === 'ar' ? 'شريك' : 'Partner';
+  const b = S.qrContext && S.qrContext.branding;
+  if (b && b.whiteLabelActive && b.logo_text) {
+    return S.lang === 'ar' ? `مُشغَّل من ${esc(b.logo_text)}` : `Operated by ${esc(b.logo_text)}`;
+  }
+  return S.lang === 'ar' ? 'مُشغَّل من النادل' : 'Alnadl-operated';
+}
+
+function guestBrandMark(){
+  const staff = !!(S.session && S.session.user);
+  if (staff) return '<span class="mark">ن</span> ALNADL';
+  const b = S.qrContext && S.qrContext.branding;
+  if (!b || !b.whiteLabelActive) return '<span class="mark">ن</span> ALNADL';
+  const label = esc(b.logo_text || '');
+  const markChar = label ? esc(label.charAt(0).toUpperCase()) : 'ن';
+  const mark = b.logo_url
+    ? `<img src="${esc(b.logo_url)}" alt="${label}" class="mark" style="object-fit:contain;background:transparent" onerror="this.outerHTML='<span class=&quot;mark&quot;>${markChar}</span>'">`
+    : `<span class="mark">${markChar}</span>`;
+  return `${mark} ${label}`;
+}
+
+/* عنوان الصفحة والأيقونة — يتبعان الهوية الفعّالة.
+   يُستدعى من render()، ويُعيد قيم المنصة حين لا تكون الهوية فعّالة، فلا
+   يبقى أثر من جلسة سابقة. */
+function applyGuestBrandChrome(){
+  const staff = !!(S.session && S.session.user);
+  const b = S.qrContext && S.qrContext.branding;
+  const active = !staff && b && b.whiteLabelActive;
+  const title = active
+    ? (S.lang === 'ar' ? (b.page_title_ar || b.logo_text) : (b.page_title_en || b.logo_text))
+    : 'Alnadl Hospitality OS';
+  if (document.title !== title) document.title = title;
+
+  const icon = document.querySelector('link[rel="icon"]');
+  if (icon) {
+    const href = active && b.logo_url ? b.logo_url : '/icons/icon-192.png';
+    if (icon.getAttribute('href') !== href) icon.setAttribute('href', href);
+  }
+}
+
 function renderTopBar(){
   const bar = document.getElementById('appbar');
   if(!bar) return;
   const loggedIn = !!S.session;
   bar.innerHTML = `
-    <div class="brand"><span class="mark">ن</span> ALNADL</div>
+    <div class="brand">${guestBrandMark()}</div>
     <div class="spacer"></div>
     ${loggedIn ? `
       <div class="sessionpill">${S.session.user.username} <span class="rl">· ${S.session.user.role}</span></div>
@@ -1078,6 +1138,7 @@ function renderTopBar(){
 }
 
 function render(){
+  applyGuestBrandChrome();
   renderTopBar();
   const app = document.getElementById('app');
   if(S.screen==='login'){ app.innerHTML = renderLogin(); return; }
@@ -1130,7 +1191,7 @@ function renderCustomerShell(){
   // admin/staff top bar (renderTopBar), and an Outlet's own branding_json
   // (Increment 1) is completely independent of this and never overridden.
   const branding = S.qrContext.branding;
-  const themeStyle = (branding && branding.mode !== 'alnadl' && branding.primary_color)
+  const themeStyle = (branding && branding.whiteLabelActive && branding.primary_color)
     ? `style="--brass-300:color-mix(in srgb, ${branding.primary_color} 55%, white);--brass-500:${branding.primary_color};--brass-600:${branding.primary_color};--brass-700:color-mix(in srgb, ${branding.primary_color} 80%, black);"` : '';
   return `<div class="fohshell"><div class="phone" ${themeStyle}>${inner}${S.activeProduct?renderProductModal():''}</div></div>`;
 }
@@ -1183,7 +1244,7 @@ function scrHub(){
             <span style="display:block;font-weight:800;font-size:14px">${S.lang==='ar'?o.name_ar:o.name_en}</span>
             <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-400);font-weight:400;margin-top:2px">
               <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--sage-500);display:inline-block"></span>${S.lang==='ar'?'متاح الآن':'Available now'}
-              <span>· ${o.operator==='partner'?(S.lang==='ar'?'شريك':'Partner'):(S.lang==='ar'?'مُشغَّل من النادل':'Alnadl-operated')}</span>
+              <span>· ${outletOperatorLabel(o.operator)}</span>
             </span>
           </span>
           <span style="color:var(--ink-300)">${S.lang==='ar'?'←':'→'}</span>
@@ -1198,7 +1259,9 @@ function scrWelcome(){
   const nm = S.lang==='ar'?c.partner.name_ar:c.partner.name_en;
   const zn = S.lang==='ar'?c.zone.name_ar:c.zone.name_en;
   const branding = c.branding;
-  const isWhiteLabel = branding && branding.mode !== 'alnadl';
+  // White Label: يُقرأ من نتيجة المُحلِّل بدل استنتاجه من mode محليًا --
+  // المُحلِّل هو من يعرف بوابة الميزة والوراثة معًا.
+  const isWhiteLabel = !!(branding && branding.whiteLabelActive);
   const crestLetter = isWhiteLabel && branding.logo_text ? branding.logo_text.charAt(0).toUpperCase() : 'ن';
   const welcomeTitle = isWhiteLabel && (S.lang==='ar'?branding.welcome_text_ar:branding.welcome_text_en) || nm;
   const showPoweredBy = !branding || branding.show_powered_by !== 0;
@@ -1462,7 +1525,7 @@ function engageInvite(){
   return `<div class="engage-invite">
     <div class="engage-mark">✦</div>
     <div class="t">
-      <b>${S.lang==='ar'?'لحظة من النادل':'A moment from Alnadl'}</b>
+      <b>${engageInviteLabel()}</b>
       <span>${S.lang==='ar'?'شيء صغير بينما تنتظر — اختياري تمامًا':'Something small while you wait — entirely optional'}</span>
     </div>
     <button onclick="App.startEngage()">${S.lang==='ar'?'ابدأ':'Start'}</button>

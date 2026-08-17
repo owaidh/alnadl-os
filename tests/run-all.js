@@ -35,6 +35,7 @@ const suites = [
   './sitemanager-surfaces.js',
   './corrective-closure.js',
   './r3-gap-closure.js',
+  './white-label.js',
 ];
 
 (async () => {

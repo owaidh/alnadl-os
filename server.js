@@ -21,6 +21,7 @@ const { log, correlationId } = require('./lib/logger.js');
 const { assertCanManageUser, assertNotLastSuperAdmin, assignableRoles, issueActivationToken, peekActivation, consumeActivation, ROLE_SUMMARY } = require('./lib/iam.js');
 const { resolveEngageEnabled, getGlobalKillSwitchState, getAIGenerationGlobalKillSwitchState } = require('./lib/engage-flags.js');
 const partnerStatus = require('./lib/partner-status.js');
+const { resolveBranding, hasWhiteLabelEntitlement, validateOverridePayload, getOverride } = require('./lib/branding.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
@@ -272,7 +273,11 @@ on('GET', '/api/qr/:token', null, async (req, res, p) => {
   const partner = db.prepare('SELECT * FROM partners WHERE id = ?').get(property.partner_id);
   const sub = getSubscription(property.partner_id);
   const features = sub ? sub.features : {};
-  const branding = features.whiteLabel ? getBranding(property.partner_id) : { partner_id: property.partner_id, mode: 'alnadl', show_powered_by: 1 };
+  // White Label: الهوية تُحلّ عبر lib/branding.js لا بقراءة جدول واحد.
+  // بلا outletId هنا عمدًا -- رمز QR يُحدّد منطقة لا منفذًا، والمنفذ يُعرف
+  // بعد اختيار الضيف، فالوراثة في هذه اللحظة Property -> Partner -> default.
+  // بوابة الميزة داخل المُحلِّل نفسه، فلا حاجة لفحصها هنا.
+  const branding = resolveBranding({ partnerId: property.partner_id, propertyId: property.id });
   sendJSON(res, 200, { partner, property, zone, point, token: p.token, features, branding });
 });
 
@@ -2489,7 +2494,11 @@ on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
     });
   });
 
-  const branding = features.whiteLabel ? getBranding(property.partner_id) : { partner_id: property.partner_id, mode: 'alnadl', show_powered_by: 1 };
+  // White Label: الهوية تُحلّ عبر lib/branding.js لا بقراءة جدول واحد.
+  // بلا outletId هنا عمدًا -- رمز QR يُحدّد منطقة لا منفذًا، والمنفذ يُعرف
+  // بعد اختيار الضيف، فالوراثة في هذه اللحظة Property -> Partner -> default.
+  // بوابة الميزة داخل المُحلِّل نفسه، فلا حاجة لفحصها هنا.
+  const branding = resolveBranding({ partnerId: property.partner_id, propertyId: property.id });
   const base = { partner, property, zone, point, token: p.token, features, branding };
   if (outlets.length <= 1) {
     // Single (or zero, defensively — falls back to base context) outlet: skip the hub entirely.
@@ -2518,6 +2527,113 @@ on('GET', '/api/admin/branding', ['SuperAdmin', 'PartnerAdmin'], async (req, res
   if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
   sendJSON(res, 200, getBranding(partnerId));
 });
+/* --------- BRANDING OVERRIDES (White Label) --------------------------------
+   الوراثة تُحسب في lib/branding.js وحده. هذه النقاط تقرأ وتكتب فقط.
+
+   الصلاحيات المعتمدة:
+     * تفعيل White Label و mode و fee_model  -> SuperAdmin وحده (POST أدناه)
+       لأنها قرار تجاري مرتبط بنموذج رسوم يعتمده النادل.
+     * تجاوزات العقار/المنفذ -> SuperAdmin و PartnerAdmin، بشرطين يُفرضان
+       على الخادم: أن تكون الميزة مُفعّلة للشريك، وأن يكون النطاق ضمن
+       نطاق الفاعل. */
+function brandingScopePartner(scopeType, scopeId) {
+  if (scopeType === 'property') return propertyPartnerId(scopeId);
+  if (scopeType === 'outlet') {
+    const row = db.prepare(`SELECT property_id FROM outlets WHERE id = ?`).get(scopeId);
+    return row ? propertyPartnerId(row.property_id) : null;
+  }
+  return null;
+}
+
+function assertBrandingScope(session, scopeType, scopeId) {
+  if (!['property', 'outlet'].includes(scopeType)) {
+    const e = new Error('scopeType must be property or outlet'); e.status = 400; throw e;
+  }
+  const partnerId = brandingScopePartner(scopeType, scopeId);
+  if (!partnerId) { const e = new Error('Scope not found'); e.status = 404; throw e; }
+  assertTenantWrite(session, partnerId);
+  return partnerId;
+}
+
+on('GET', '/api/admin/branding/effective', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  // كشفه الاختبار: تجاهل partnerId المخالف صامتًا كان يُرجع 200 ببيانات
+  // الشريك الصحيح، فتبدو محاولة العبور ناجحة بدل أن تُرفض وتُرصد. نفس
+  // الثغرة التي أُغلقت في سطح الولاء -- الرفض الصريح هو السلوك الصحيح.
+  if (session.role !== 'SuperAdmin' && query.partnerId && query.partnerId !== session.scope) {
+    return sendJSON(res, 403, { error: 'Forbidden: cannot read another partner\'s branding' });
+  }
+  const partnerId = session.role === 'SuperAdmin' ? query.partnerId : session.scope;
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
+  assertPartnerScope(session, partnerId);
+  // تمرير propertyId/outletId اختياري -- يعكس توقيت رحلة الضيف نفسها.
+  sendJSON(res, 200, resolveBranding({
+    partnerId,
+    propertyId: query.propertyId || null,
+    outletId: query.outletId || null,
+  }));
+});
+
+on('GET', '/api/admin/branding/overrides', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  if (session.role !== 'SuperAdmin' && query.partnerId && query.partnerId !== session.scope) {
+    return sendJSON(res, 403, { error: 'Forbidden: cannot read another partner\'s branding' });
+  }
+  const partnerId = session.role === 'SuperAdmin' ? query.partnerId : session.scope;
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
+  assertPartnerScope(session, partnerId);
+  const rows = db.prepare(`SELECT * FROM branding_overrides`).all()
+    .filter(r => brandingScopePartner(r.scope_type, r.scope_id) === partnerId);
+  sendJSON(res, 200, rows);
+});
+
+on('PUT', '/api/admin/branding/:scopeType/:scopeId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const partnerId = assertBrandingScope(session, p.scopeType, p.scopeId);
+  // شرط الاستحقاق: لا معنى لتجاوز هوية لشريك لا يملك الميزة أصلًا، ويُفرض
+  // على الخادم فلا يكفي إخفاء الزر.
+  if (!hasWhiteLabelEntitlement(partnerId)) {
+    return sendJSON(res, 403, { error: 'White label is not enabled for this partner' });
+  }
+  const v = validateOverridePayload(b);
+  if (!v.ok) return sendJSON(res, 400, { error: v.reason });
+  if (!Object.keys(v.clean).length) return sendJSON(res, 400, { error: 'No branding fields supplied' });
+
+  const before = getOverride(p.scopeType, p.scopeId);
+  const merged = { ...(before || {}), ...v.clean };
+  const cols = ['logo_url', 'logo_text', 'primary_color', 'secondary_color',
+    'welcome_text_ar', 'welcome_text_en', 'show_powered_by', 'page_title_ar', 'page_title_en'];
+  const vals = cols.map(c => (merged[c] === undefined ? null : merged[c]));
+
+  if (before) {
+    db.prepare(`UPDATE branding_overrides SET ${cols.map(c => c + '=?').join(',')}, updated_at=?, updated_by=?
+                WHERE scope_type=? AND scope_id=?`)
+      .run(...vals, Date.now(), session.username, p.scopeType, p.scopeId);
+  } else {
+    db.prepare(`INSERT INTO branding_overrides (id,scope_type,scope_id,${cols.join(',')},updated_at,updated_by)
+                VALUES (?,?,?,${cols.map(() => '?').join(',')},?,?)`)
+      .run(uid('bro'), p.scopeType, p.scopeId, ...vals, Date.now(), session.username);
+  }
+  audit(session.username, session.role, 'branding_override_set', `${p.scopeType}:${p.scopeId}`,
+    before || null, merged, null);
+  sendJSON(res, 200, { scopeType: p.scopeType, scopeId: p.scopeId,
+    effective: resolveBranding({ partnerId,
+      propertyId: p.scopeType === 'property' ? p.scopeId : null,
+      outletId: p.scopeType === 'outlet' ? p.scopeId : null }) });
+});
+
+on('DELETE', '/api/admin/branding/:scopeType/:scopeId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const partnerId = assertBrandingScope(session, p.scopeType, p.scopeId);
+  const before = getOverride(p.scopeType, p.scopeId);
+  if (!before) return sendJSON(res, 404, { error: 'No override at this scope' });
+  // حذف الصف = عودة الوراثة. لا تُخزَّن قيم فارغة تُحاكي الوراثة، لأن
+  // "فارغ" و"ورِث" يصبحان غير قابلين للتمييز عندها.
+  db.prepare('DELETE FROM branding_overrides WHERE scope_type=? AND scope_id=?').run(p.scopeType, p.scopeId);
+  audit(session.username, session.role, 'branding_override_cleared', `${p.scopeType}:${p.scopeId}`, before, null, null);
+  sendJSON(res, 200, { cleared: true,
+    effective: resolveBranding({ partnerId,
+      propertyId: p.scopeType === 'property' ? p.scopeId : null,
+      outletId: p.scopeType === 'outlet' ? p.scopeId : null }) });
+});
+
 on('POST', '/api/admin/branding', ['SuperAdmin'], async (req, res, p, q, session) => {
   // White Label mode/domain changes are Admin-only by design (§19 Security) —
   // a PartnerAdmin can request a look via support, but cannot self-service
