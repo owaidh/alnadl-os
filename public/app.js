@@ -122,7 +122,7 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null,
+  adminPlans:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
@@ -399,16 +399,28 @@ const App = {
   },
   logout(){ S.session=null; S.mode='customer'; S.screen='welcome'; render(); },
   roleHome(role){ return { Operator:'ops', SiteManager:'ops', Runner:'runner', SuperAdmin:'admin', AlnadlFinance:'finance', PartnerViewer:'partner', PartnerAdmin:'partneradmin' }[role] || 'customer'; },
-  roleDefaultScreen(role){ return { Operator:'kds', SiteManager:'live', Runner:'runnerq', SuperAdmin:'tenants', AlnadlFinance:'settlements', PartnerViewer:'overview', PartnerAdmin:'zones' }[role] || 'welcome'; },
+  roleDefaultScreen(role){
+    // §7: PartnerAdmin كان يبدأ على 'zones' — شاشة إعداد، لا نظرة عامة.
+    // الآن يبدأ على Overview كما نصّ المطلب.
+    // §3.3: ProductAdmin و SafetyReviewer لم يكن لهما شاشة بداية إطلاقًا،
+    // فكانا يدخلان إلى واجهة فارغة رغم امتلاكهما صلاحيات خلفية حقيقية.
+    return { Operator:'kds', SiteManager:'live', Runner:'runnerq', SuperAdmin:'tenants',
+             AlnadlFinance:'settlements', PartnerViewer:'overview', PartnerAdmin:'overview',
+             ProductAdmin:'mechanics', SafetyReviewer:'safety' }[role] || 'welcome';
+  },
   async loadForRole(){
     const role = S.session.user.role;
     if(role==='Operator') return App.loadOpsQueue();
     if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive()]);
     if(role==='Runner') return App.loadRunnerQueue();
     if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans()]);
+    if(role==='ProductAdmin') return Promise.all([App.loadMechanics(), App.loadEngageOverview()]);
+    if(role==='SafetyReviewer') return Promise.all([App.loadSafety(), App.loadLedger()]);
     if(role==='AlnadlFinance') return Promise.all([App.loadSettlements(), App.loadAudit()]);
     if(role==='PartnerViewer') return Promise.all([App.loadPartnerOverview(), App.loadSettlements(), App.loadSubscription()]);
-    if(role==='PartnerAdmin'){ S.PARTNER_ID = S.session.user.scope; return Promise.all([App.loadOwnProperty(), App.loadAdminAll(), App.loadSubscription()]); }
+    // §7: PartnerAdmin يبدأ الآن على Overview، فوجب تحميل بياناتها معه —
+    // بدونها تعلق الشاشة الأولى على هيكل تحميل أبدي. اكتشفه التحقق البصري.
+    if(role==='PartnerAdmin'){ S.PARTNER_ID = S.session.user.scope; return Promise.all([App.loadPartnerOverview(), App.loadOwnProperty(), App.loadAdminAll(), App.loadSubscription()]); }
   },
   async loadOwnProperty(){
     const props = await api('GET','/api/admin/properties',null,true);
@@ -586,6 +598,37 @@ const App = {
   // F04: إدارة الباقات كانت متاحة عبر الـAPI منذ v2.8.0 لكن بلا شاشة —
   // فكان المشغّل الحقيقي عاجزًا عن إنشاء أول باقة من الواجهة، وهو ما يُبطل
   // فعليًا شرط "أول عميل مدفوع بدون SQL يدوي".
+  // §3.3 — محمّلات الأدوار الجديدة. كل استدعاء هنا يقابل نقطة يسمح بها
+  // الخادم لهذا الدور تحديدًا؛ لم تُوسَّع أي صلاحية لتسهيل الواجهة.
+  async loadMechanics(){
+    try{ S.mechanics = await api('GET','/api/admin/mechanics',null,true); }catch(e){ S.mechanics=[]; S.mechErr=e.message; }
+    render();
+  },
+  async loadEngageOverview(){
+    try{ S.engageOverview = await api('GET','/api/admin/engage/overview',null,true); }catch(e){ S.engageOverview={}; }
+    render();
+  },
+  async loadSafety(){
+    try{
+      const mechs = await api('GET','/api/admin/mechanics',null,true);
+      const all = [];
+      for(const m of mechs){
+        try{ const inc = await api('GET',`/api/admin/mechanics/${m.id}/safety-incidents`,null,true);
+             (inc||[]).forEach(i=>all.push({...i, mechanicName:m.name})); }catch(e){}
+      }
+      S.safetyIncidents = all;
+    }catch(e){ S.safetyIncidents=[]; }
+    render();
+  },
+  async loadLedger(){
+    try{ S.engageLedger = await api('GET','/api/admin/engage/ledger?limit=50',null,true); }catch(e){ S.engageLedger=[]; }
+    render();
+  },
+  async resolveIncident(id){
+    try{ await api('POST',`/api/admin/mechanics/safety-incidents/${id}/resolve`,{ note:'reviewed' },true);
+         showToast(t('toast_saved')); await App.loadSafety(); }
+    catch(e){ showErr(e.message); }
+  },
   async loadAdminPlans(){
     try{ S.adminPlans = await api('GET','/api/admin/plans',null,true); }catch(e){ S.adminPlans = []; }
     render();
@@ -1307,7 +1350,25 @@ function navGroupsFor(role){
         ['audit', t('auditLog')],
       ]},
     ],
+    // §3.3 — سطح ProductAdmin: مختبر الآليات ونظرة Engage فقط.
+    // لا مفتاح إيقاف عام: الخادم يحصره بـSuperAdmin، والواجهة لا تتجاوز RBAC.
+    ProductAdmin: [
+      { id:'PA-ENG', label:L('التجربة','Experience'), items:[
+        ['mechanics', L('مختبر الآليات','Mechanic Lab')],
+        ['engageoverview', L('نظرة Engage','Engage Overview')],
+      ]},
+    ],
+    // §3.3 — سطح SafetyReviewer: الحوادث والسجل فقط، والمعالجة حيث يسمح الخادم.
+    SafetyReviewer: [
+      { id:'SR-SAF', label:L('السلامة','Safety'), items:[
+        ['safety', L('حوادث السلامة','Safety Incidents')],
+        ['ledger', L('سجل التجارب','Experience Ledger')],
+      ]},
+    ],
     PartnerAdmin: [
+      { id:'P-OVW', label:L('نظرة عامة','Overview'), items:[
+        ['overview', L('أداء الشريك','Partner Performance')],
+      ]},
       { id:'P-OPS', label:L('العمليات','Operations'), items:[
         ['outlets', L('المنافذ','Outlets')],
         ['zones', t('adminZones')],
@@ -1335,12 +1396,18 @@ function renderStaffShell(){
     SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
     AlnadlFinance:[['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
     PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
-    PartnerAdmin:[['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    ProductAdmin:[['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['engageoverview', S.lang==='ar'?'نظرة Engage':'Engage Overview']],
+    SafetyReviewer:[['safety', S.lang==='ar'?'حوادث السلامة':'Safety Incidents'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
+    PartnerAdmin:[['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
   const nav = navByRole[role] || [];
   let inner = '';
   if(S.screen==='kds') inner = renderKds();
   else if(S.screen==='runnerq') inner = renderRunner();
+  else if(S.screen==='mechanics') inner = renderMechanicLab();
+  else if(S.screen==='engageoverview') inner = renderEngageOverviewAdmin();
+  else if(S.screen==='safety') inner = renderSafetyIncidents();
+  else if(S.screen==='ledger') inner = renderEngageLedger();
   else if(S.screen==='plans') inner = renderPlansAdmin();
   else if(S.screen==='tenants') inner = renderTenants();
   else if(S.screen==='portfolio') inner = renderPortfolio();
@@ -1699,6 +1766,75 @@ function renderAudit(){
 
 // F04: شاشة إدارة الباقات (SuperAdmin) — تُغلق الفجوة التي جعلت إنشاء أول
 // باقة مستحيلًا من الواجهة رغم وجود الـAPI.
+// §3.3 — شاشات ProductAdmin و SafetyReviewer.
+// مبدأ حاكم: لا يظهر أي إجراء لا تسمح به APIs الحالية لهذا الدور. الإخفاء
+// ليس حماية (الخادم يفرض RBAC)، لكن إظهار زر يفشل حتمًا تجربة سيئة وتضليل.
+function renderMechanicLab(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const m = S.mechanics;
+  const STATES = { draft:L('مسودة','Draft'), simulated:L('محاكاة','Simulated'), canary:L('تجريبي','Canary'),
+                   emerging:L('صاعد','Emerging'), promoted:L('معتمد','Promoted'), retired:L('متقاعد','Retired'),
+                   held:L('موقوف','Held'), rejected:L('مرفوض','Rejected') };
+  return `
+  <div class="panel">
+    <h3>${L('مختبر الآليات','Mechanic Lab')}</h3>
+    <p class="ph">${L('دورة حياة من ثماني حالات · التجريبي مسقوف بـ5% · الترقية تتطلب حدًّا أدنى من العيّنة','Eight-state lifecycle · Canary capped at 5% · Promotion requires a minimum sample')}</p>
+    ${m===null ? '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>'
+      : m.length===0 ? `<div class="statepanel on-dark"><div class="glyph">—</div><h4>${L('لا توجد آليات','No mechanics')}</h4><p>${L('لم تُقترح أي آلية تجربة بعد.','No experience mechanic has been proposed yet.')}</p></div>`
+      : `<table class="datatable"><tr><th>${L('الاسم','Name')}</th><th>${L('الشخصية','Personality')}</th><th>${L('الحالة','State')}</th><th>${L('الفئة','Category')}</th></tr>
+        ${m.map(x=>`<tr><td>${esc(x.name||'')}</td><td>${esc(x.personality||'—')}</td>
+          <td><span class="badge ${x.lifecycle_state==='promoted'?'ok':x.lifecycle_state==='rejected'||x.lifecycle_state==='held'?'cancel':'pending'}">${STATES[x.lifecycle_state]||esc(x.lifecycle_state||'')}</span></td>
+          <td>${esc(x.category||'')}</td></tr>`).join('')}</table>`}
+  </div>`;
+}
+
+function renderEngageOverviewAdmin(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const o = S.engageOverview;
+  if(o===null) return kpiDashboardSkeleton(4);
+  const n = v => (v==null?'—':v);
+  return `
+  <div class="kpirow">
+    <div class="kpi"><div class="lbl">${L('جلسات','Sessions')}</div><div class="val">${n(o.sessions)}</div></div>
+    <div class="kpi"><div class="lbl">${L('لحظات مُقدَّمة','Moments served')}</div><div class="val">${n(o.moments)}</div></div>
+    <div class="kpi"><div class="lbl">${L('تصاريح','Passes')}</div><div class="val">${n(o.passes)}</div></div>
+    <div class="kpi"><div class="lbl">${L('حوادث سلامة','Safety incidents')}</div><div class="val" style="color:${o.safetyIncidents?'var(--red-500)':'inherit'}">${n(o.safetyIncidents)}</div></div>
+  </div>
+  <div class="panel"><h3>${L('ملاحظة الصلاحية','Permission note')}</h3>
+    <p class="ph">${L('مفتاح الإيقاف العام وتقييدات السياسة محصورة بـSuperAdmin — لا تظهر هنا لأن الخادم لا يسمح بها لهذا الدور.','The global kill switch and policy overrides are restricted to SuperAdmin — they are not shown here because the server does not permit them for this role.')}</p>
+  </div>`;
+}
+
+function renderSafetyIncidents(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const inc = S.safetyIncidents;
+  return `
+  <div class="panel">
+    <h3>${L('حوادث السلامة','Safety Incidents')}</h3>
+    ${inc===null ? '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>'
+      : inc.length===0 ? `<div class="statepanel on-dark"><div class="glyph" style="color:var(--sage-500)">✓</div><h4>${L('لا حوادث','No incidents')}</h4><p>${L('لم تُسجَّل أي حادثة سلامة على أي آلية.','No safety incident has been recorded against any mechanic.')}</p></div>`
+      : `<table class="datatable"><tr><th>${L('الآلية','Mechanic')}</th><th>${L('النوع','Kind')}</th><th>${L('الحالة','Status')}</th><th></th></tr>
+        ${inc.map(i=>`<tr><td>${esc(i.mechanicName||'')}</td><td>${esc(i.kind||i.reason||'')}</td>
+          <td><span class="badge ${i.resolved_at?'ok':'cancel'}">${i.resolved_at?L('مُعالَجة','Resolved'):L('مفتوحة','Open')}</span></td>
+          <td>${i.resolved_at?'':`<button class="btn-small brass" onclick="App.resolveIncident('${esc(i.id)}')">${L('معالجة','Resolve')}</button>`}</td></tr>`).join('')}</table>`}
+  </div>`;
+}
+
+function renderEngageLedger(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const led = S.engageLedger;
+  return `
+  <div class="panel">
+    <h3>${L('سجل التجارب','Experience Ledger')}</h3>
+    <p class="ph">${L('آخر 50 قيدًا · بلا أي رموز قدرة أو داخليات ذكاء اصطناعي','Last 50 entries · no capability tokens or AI internals')}</p>
+    ${led===null ? '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>'
+      : led.length===0 ? `<div class="statepanel on-dark"><div class="glyph">—</div><h4>${L('السجل فارغ','Ledger is empty')}</h4><p>${L('لم تُقدَّم أي تجربة بعد.','No experience has been served yet.')}</p></div>`
+      : `<table class="datatable"><tr><th>${L('الحدث','Event')}</th><th>${L('الشخصية','Personality')}</th><th>${L('الوقت','When')}</th></tr>
+        ${led.slice(0,50).map(e=>`<tr><td>${esc(e.event_type||e.outcome||'')}</td><td>${esc(e.personality||'—')}</td>
+          <td>${e.created_at?new Date(e.created_at).toLocaleString(S.lang==='ar'?'ar':'en'):'—'}</td></tr>`).join('')}</table>`}
+  </div>`;
+}
+
 function renderPlansAdmin(){
   const L = (ar,en) => S.lang==='ar'?ar:en;
   const plans = S.adminPlans;

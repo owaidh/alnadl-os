@@ -18,6 +18,7 @@ const { getOrCreateAccount, findAccount, getHistory, earnPoints, quoteRedemption
 const { sendChallenge, verifyChallenge, isVerificationAvailable } = require('./lib/verification.js');
 const { checkLimit, storeName: rateLimitStore, sweep: sweepRateLimits } = require('./lib/rate-limit.js');
 const { log, correlationId } = require('./lib/logger.js');
+const { assertCanManageUser, assertNotLastSuperAdmin, assignableRoles, issueActivationToken, peekActivation, consumeActivation, ROLE_SUMMARY } = require('./lib/iam.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
@@ -1869,23 +1870,118 @@ on('GET', '/api/admin/users', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p
   if (session.role === 'PartnerAdmin') rows = rows.filter(u => u.partner_scope === session.scope);
   sendJSON(res, 200, rows);
 });
+/* --------- IDENTITY & ACCESS MANAGEMENT (Role Corrective §3.1/§3.2) --------
+   ما تغيّر ولماذا: كان الإنشاء ينفّذ hashPbkdf2(b.username) ويُعيد ملاحظة
+   بأن كلمة المرور هي اسم المستخدم. عمليًا ذلك يعني أن كلمة مرور كل حساب
+   معروفة لأي شخص يعرف اسمه -- ثغرة إنتاج، لا عيب تجربة.
+
+   الآن: يُنشأ الحساب بلا كلمة مرور إطلاقًا (password_hash = NULL) وبحالة
+   pending_activation، فلا يستطيع الدخول. يُصدَر رمز تفعيل لمرة واحدة
+   يُعاد **مرة واحدة فقط** لينسخه المسؤول (§3.1: لا مزوّد خارجي في هذه
+   الجولة)، والمستخدم وحده يعيّن كلمة مروره. لا يعرف المسؤول كلمة المرور
+   النهائية في أي لحظة. */
 on('POST', '/api/admin/users', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
-  if (session.role === 'PartnerAdmin') { b.partner_scope = session.scope; if (!['Operator', 'Runner', 'SiteManager', 'PartnerViewer'].includes(b.role)) { const e = new Error('PartnerAdmin can only create site-level roles'); e.status = 403; throw e; } }
+  requireFields(b, ['username', 'role']);
+  const username = String(b.username).trim();
+  if (!/^[a-zA-Z0-9._-]{3,32}$/.test(username)) return sendJSON(res, 400, { error: 'username must be 3-32 chars: letters, digits, . _ -' });
+  if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) return sendJSON(res, 409, { error: 'Username already exists' });
+
+  // النطاق يُفرض من الخادم: PartnerAdmin لا يستطيع إنشاء مستخدم خارج شريكه
+  // مهما أرسل في الجسم (§3.2: الواجهة ليست مصدر ثقة).
+  const partnerScope = session.role === 'PartnerAdmin' ? session.scope : (b.partner_scope || null);
+  assertCanManageUser(session, null, { role: b.role, partner_scope: partnerScope });
+
   const id = uid('u');
-  db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)
-    .run(id, b.username, hashPbkdf2(b.username), b.role, b.partner_scope || null, Date.now());
-  audit(session.username, session.role, 'user_create', id, null, { username: b.username, role: b.role }, null);
-  sendJSON(res, 201, { id, note: 'Password defaults to the username in this sandbox demo' });
+  db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at,status)
+              VALUES (?,?,NULL,?,?,1,?,'pending_activation')`)
+    .run(id, username, b.role, partnerScope, Date.now());
+  const { token, expiresAt } = issueActivationToken(id, session.username);
+  audit(session.username, session.role, 'user_create', id, null,
+    { username, role: b.role, partner_scope: partnerScope, status: 'pending_activation' }, null);
+  // الرمز الصريح يُعاد هنا فقط، ولا يُخزَّن ولا يُسجَّل ولا يمكن استرجاعه.
+  sendJSON(res, 201, { id, username, status: 'pending_activation', activationToken: token, expiresAt });
 });
+
+/* إعادة إصدار رمز تفعيل / استعادة وصول دون كشف كلمة مرور (§3.1). */
+on('POST', '/api/admin/users/:id/activation', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const target = db.prepare('SELECT * FROM users WHERE id=?').get(p.id);
+  if (!target) return sendJSON(res, 404, { error: 'Not found' });
+  assertCanManageUser(session, target, null);
+  const { token, expiresAt } = issueActivationToken(target.id, session.username);
+  // إعادة التعيين تُعيد الحساب لحالة الانتظار وتُبطل كلمة المرور الحالية،
+  // فلا يبقى وصول قديم صالحًا بعد طلب الاستعادة.
+  db.prepare(`UPDATE users SET status='pending_activation', password_hash=NULL WHERE id=?`).run(target.id);
+  audit(session.username, session.role, 'user_activation_reissued', target.id,
+    { status: target.status }, { status: 'pending_activation' }, null);
+  sendJSON(res, 200, { activationToken: token, expiresAt });
+});
+
+/* التفعيل نفسه: عامّ عمدًا -- المستخدم لا يملك حسابًا يسجّل به بعد.
+   الرمز هو الإثبات الوحيد، وهو لمرة واحدة ومنتهي الصلاحية. */
+on('GET', '/api/activate/:token', null, async (req, res, p) => {
+  const found = peekActivation(p.token);
+  // لا يُكشف سبب الرفض: رمز خاطئ ومنتهٍ ومستهلَك كلها استجابة واحدة.
+  if (!found) return sendJSON(res, 200, { valid: false });
+  sendJSON(res, 200, { valid: true, username: found.user.username, role: found.user.role });
+});
+
+on('POST', '/api/activate/:token', null, async (req, res, p) => {
+  const b = await readBody(req);
+  const result = consumeActivation(p.token, b.password, hashPbkdf2);
+  if (!result.ok) {
+    return sendJSON(res, 400, {
+      error: result.reason === 'weak_password'
+        ? `Password must be at least ${result.minLength} characters`
+        : 'This activation link is invalid, expired, or already used',
+    });
+  }
+  audit(result.username, 'System', 'user_activated', result.userId, { status: 'pending_activation' }, { status: 'active' }, null);
+  sendJSON(res, 200, { ok: true, username: result.username });
+});
+/* تعديل مستخدم: الدور والنطاق والحالة -- كان يغيّر active فقط (§3.1).
+   كل مسار هنا يمرّ بفحص عدم التصعيد وحماية آخر SuperAdmin. */
 on('PATCH', '/api/admin/users/:id', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
   const target = db.prepare('SELECT * FROM users WHERE id=?').get(p.id);
   if (!target) return sendJSON(res, 404, { error: 'Not found' });
-  if (session.role === 'PartnerAdmin' && target.partner_scope !== session.scope) { const e = new Error('Forbidden'); e.status = 403; throw e; }
-  db.prepare('UPDATE users SET active=? WHERE id=?').run(b.active ? 1 : 0, p.id);
-  audit(session.username, session.role, 'user_toggle', p.id, { active: target.active }, { active: b.active }, null);
-  sendJSON(res, 200, { ok: true });
+
+  const intended = {};
+  if (b.role !== undefined) intended.role = b.role;
+  if (b.partner_scope !== undefined) intended.partner_scope = b.partner_scope;
+  assertCanManageUser(session, target, intended);
+
+  const nextRole  = b.role !== undefined ? b.role : target.role;
+  const nextScope = b.partner_scope !== undefined ? b.partner_scope : target.partner_scope;
+  let nextStatus = target.status;
+  let nextActive = target.active;
+  if (b.status !== undefined) {
+    if (!['active', 'suspended'].includes(b.status)) return sendJSON(res, 400, { error: 'status must be active or suspended' });
+    // لا يُقفز على التفعيل: حساب لم يُفعّل بعد لا يصبح active بضغطة إدارية.
+    if (b.status === 'active' && target.status === 'pending_activation') {
+      return sendJSON(res, 409, { error: 'User has not activated yet — reissue an activation link instead' });
+    }
+    nextStatus = b.status;
+    nextActive = b.status === 'active' ? 1 : 0;
+  } else if (b.active !== undefined) {
+    nextActive = b.active ? 1 : 0;
+    if (target.status !== 'pending_activation') nextStatus = b.active ? 'active' : 'suspended';
+  }
+
+  assertNotLastSuperAdmin(target, { role: nextRole, status: nextStatus, active: nextActive });
+
+  db.prepare('UPDATE users SET role=?, partner_scope=?, status=?, active=? WHERE id=?')
+    .run(nextRole, nextScope, nextStatus, nextActive, p.id);
+  audit(session.username, session.role, 'user_update', p.id,
+    { role: target.role, partner_scope: target.partner_scope, status: target.status, active: target.active },
+    { role: nextRole, partner_scope: nextScope, status: nextStatus, active: nextActive }, null);
+  sendJSON(res, 200, { ok: true, role: nextRole, partner_scope: nextScope, status: nextStatus });
+});
+
+/* ملخص الصلاحيات بلغة أعمال (§3.2 / §13) -- قراءة فقط، بلا Permission Builder. */
+on('GET', '/api/admin/roles', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const allowed = assignableRoles(session.role);
+  sendJSON(res, 200, allowed.map(r => ({ role: r, ...(ROLE_SUMMARY[r] || { scope: 'site', ar: [], en: [] }) })));
 });
 
 /* ------------------------------ A06: SETTLEMENT CENTER (full workflow) --------------------------------- */

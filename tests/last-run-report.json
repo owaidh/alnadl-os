@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-17T10:07:17.409Z",
+  "timestamp": "2026-08-17T12:46:15.337Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -83,6 +83,14 @@
     },
     {
       "suite": "./golive-input-validation.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./iam-lifecycle.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./role-surfaces.js",
       "status": "PASS"
     }
   ],

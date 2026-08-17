@@ -1,4 +1,4 @@
-> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
+> **Version:** v2.9.0-role-iam · **Last Updated:** 2026-08-17
 
 # Alnadl Hospitality OS — Gap Register (Final Quality & Completion Requirements Response)
 
@@ -101,3 +101,26 @@ Phase 5 لها سجل تتبّع خاص بها، منفصل عمدًا عن Q01-
 | **GL-P0-3** | **مزوّد دفع حقيقي** | اختيار المزود · وثائق توقيع Webhook · مفاتيح Sandbox · شبكة |
 | GL-VER | مزوّد تحقق | قرارك: **عدم الربط الآن** — البنية جاهزة |
 | GL-AI | مزوّد AI لـEngage | قرارك: **عدم الربط** — المحتوى الثابت يعمل |
+
+
+---
+
+## Role & Control Completeness Corrective — Round 1
+
+### مُغلق
+
+| المعرّف | الفجوة | الإغلاق |
+|---|---|---|
+| RC-3.1a | **`Password = Username`** — كلمة مرور كل حساب معروفة لمن يعرف اسمه | إنشاء بلا كلمة مرور + رمز تفعيل لمرة واحدة · 48 اختبارًا |
+| RC-3.1b | `PATCH /users/:id` يغيّر `active` فقط | تغيير الدور والنطاق والحالة مع تدقيق قبل/بعد |
+| RC-3.1c | لا مسار استعادة وصول | إعادة إصدار رمز تُبطل كلمة المرور القائمة |
+| RC-3.2a | لا منع تصعيد صلاحية موثَّق | `lib/iam.js` — مصدر واحد تفرضه كل نقطة |
+| RC-3.2b | إمكانية إقفال المنصة بتعطيل آخر SuperAdmin | رفض `409` |
+| RC-3.3a | ProductAdmin بلا واجهة رغم 8 مراجع RBAC | شاشتان بحدود صلاحيته |
+| RC-3.3b | SafetyReviewer بلا واجهة رغم 5 مراجع RBAC | شاشتان بحدود صلاحيته |
+| RC-7a | PartnerAdmin يبدأ على `zones` | يبدأ على Overview |
+| RC-7b | **Overview لا تُحمَّل بياناتها لـPartnerAdmin** ⇒ هيكل تحميل أبدي | أُضيف `loadPartnerOverview` — **كشفه التحقق البصري لا المراجعة** |
+
+### قائم — Round 2/3
+
+§5 Engage Governance UI · §5 Partner Engage Overview · §4 Partner Control Center · §6 Loyalty Administration · §9 Finance completeness · §4 Partner status management

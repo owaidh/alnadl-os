@@ -1,4 +1,4 @@
-> **Version:** v2.8.0-golive-p0p1 · **Last Updated:** 2026-08-14
+> **Version:** v2.9.0-role-iam · **Last Updated:** 2026-08-17
 
 # Alnadl Hospitality OS — API Documentation
 
@@ -533,3 +533,30 @@ Authorization: Bearer <token>
 قابلة للضبط بـ`RATE_LIMIT_<BUCKET>_LIMIT` و`_WINDOW_MS`. التجاوز ⇒ **429** مع `Retry-After`. **Webhook الدفع مُستثنى عمدًا** (إسقاط إعادة محاولات المزوّد يكسر المطابقة المالية)، وتسجيل دخول الموظفين له محدّده الخاص.
 
 > ⚠️ المحدّد في الذاكرة: آمن لنسخة واحدة. **عند تعدد النسخ** يتضاعف الحد الفعلي — يلزم مخزن مشترك (Redis) وهو غير مُنفَّذ.
+
+
+---
+
+## Role & Control Corrective — دورة حياة المستخدم (§3.1/§3.2)
+
+### تغيير جوهري في الأمان
+`POST /api/admin/users` **لم يعد يُنشئ كلمة مرور**. كان ينفّذ `hashPbkdf2(username)` — أي أن كلمة مرور كل حساب معروفة لمن يعرف اسمه. الآن يُنشأ الحساب بـ`password_hash = NULL` وحالة `pending_activation`، **ولا يستطيع الدخول** حتى يُفعّله المستخدم بنفسه.
+
+| Method | Path | الدور | الوصف |
+|---|---|---|---|
+| POST | `/api/admin/users` | SuperAdmin · PartnerAdmin | إنشاء — يُعيد `activationToken` **مرة واحدة فقط** |
+| POST | `/api/admin/users/:id/activation` | SuperAdmin · PartnerAdmin | إعادة إصدار رابط — **تُبطل كلمة المرور القائمة فورًا** |
+| PATCH | `/api/admin/users/:id` | SuperAdmin · PartnerAdmin | تغيير `role` / `partner_scope` / `status` |
+| GET | `/api/admin/roles` | SuperAdmin · PartnerAdmin | ملخص صلاحيات بلغة أعمال، مُصفّى حسب الفاعل |
+| GET | `/api/activate/:token` | **عام** | تحقق من الرمز دون استهلاكه |
+| POST | `/api/activate/:token` | **عام** | تعيين كلمة المرور واستهلاك الرمز |
+
+**لماذا نقطتا التفعيل عامتان**: المستخدم لا يملك حسابًا يسجّل به بعد. الرمز هو الإثبات الوحيد، وهو **لمرة واحدة، منتهي الصلاحية (72 ساعة)، ومُخزَّن مُجزَّأً فقط**.
+
+**الرفض موحّد**: رمز خاطئ ومنتهٍ ومستهلَك ⇒ استجابة واحدة، فلا يصلح المسار لتعداد الحسابات.
+
+### قواعد التفويض
+- `partner_scope` **يُفرض من الجلسة** — المُرسَل في الجسم يُتجاهل
+- PartnerAdmin يمنح `Operator` · `Runner` · `SiteManager` · `PartnerViewer` فقط
+- تعطيل/خفض **آخر SuperAdmin فعّال** ⇒ `409`
+- كل تغيير دور/نطاق/حالة يدخل سجل التدقيق **بقبل/بعد**

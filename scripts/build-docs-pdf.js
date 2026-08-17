@@ -19,6 +19,7 @@ const DOCS = [
   { file: 'README.md', category: 'دليل المشروع · Project Guide' },
   { file: 'docs/SYSTEM_GUIDE.md', category: 'المرجع الشامل ودليل الاستخدام · Complete System Guide' },
   { file: 'docs/GOLIVE_STATUS_MATRIX.md', category: 'جاهزية الإطلاق · Go-Live Readiness', landscape: true },
+  { file: 'docs/ROLE_ACCESS_MATRIX.md', category: 'الأدوار والصلاحيات · Roles & Access', landscape: true },
   { file: 'docs/POSTGRESQL_MIGRATION_PLAN.md', category: 'جاهزية الإطلاق · Go-Live Readiness' },
   { file: 'HANDOVER.md', category: 'التسليم الفني النهائي · Final Handover' },
   { file: 'docs/MASTER_REQUIREMENTS.md', category: 'المتطلبات · Requirements' },
