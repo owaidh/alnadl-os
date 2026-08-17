@@ -14,12 +14,13 @@ const { canTransition, actorAllowed, TRANSITIONS } = require('./lib/statemachine
 const { computeSettlement, saveSettlement } = require('./lib/settlement.js');
 const { getSubscription, requireFeature } = require('./lib/plan.js');
 const { getGateway } = require('./lib/payment.js');
-const { getOrCreateAccount, findAccount, getHistory, earnPoints, quoteRedemption, commitRedemption, isLoyaltyEnabled } = require('./lib/loyalty.js');
+const { getOrCreateAccount, findAccount, getHistory, earnPoints, quoteRedemption, commitRedemption, isLoyaltyEnabled, isRedeemEnabled, redeemPolicy } = require('./lib/loyalty.js');
 const { sendChallenge, verifyChallenge, isVerificationAvailable } = require('./lib/verification.js');
 const { checkLimit, storeName: rateLimitStore, sweep: sweepRateLimits } = require('./lib/rate-limit.js');
 const { log, correlationId } = require('./lib/logger.js');
 const { assertCanManageUser, assertNotLastSuperAdmin, assignableRoles, issueActivationToken, peekActivation, consumeActivation, ROLE_SUMMARY } = require('./lib/iam.js');
 const { resolveEngageEnabled, getGlobalKillSwitchState, getAIGenerationGlobalKillSwitchState } = require('./lib/engage-flags.js');
+const partnerStatus = require('./lib/partner-status.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
@@ -246,6 +247,13 @@ on('GET', '/api/env', null, async (req, res) => {
 
 /* ------------------------------ QR / CONTEXT --------------------------------- */
 on('GET', '/api/qr/:token', null, async (req, res, p) => {
+  // §4 — الإنفاذ عبر المُحلِّل المركزي، لا شرط منثور. رسالة محايدة عمدًا:
+  // الضيف لا يُخبَر أن السبب تجاري أو أن الشريك موقوف.
+  const qrPartner = db.prepare(`
+    SELECT pr.partner_id FROM qr_tokens q JOIN points pt ON pt.id = q.point_id
+    JOIN zones z ON z.id = pt.zone_id JOIN properties pr ON pr.id = z.property_id
+    WHERE q.token = ?`).get(p.token);
+  if (qrPartner) partnerStatus.assertCan(qrPartner.partner_id, 'qrResolves', { guestFacing: true });
   const row = db.prepare('SELECT * FROM qr_tokens WHERE token = ?').get(p.token);
   if (!row || !row.active) return sendJSON(res, 404, { error: 'QR غير صالح / Invalid QR' });
   logQrEvent(p.token, 'scan', null);
@@ -354,6 +362,9 @@ on('POST', '/api/orders', null, async (req, res) => {
   const zone = db.prepare('SELECT * FROM zones WHERE id = ?').get(point.zone_id);
   const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(zone.property_id);
   requireFeature(property.partner_id, 'qrOrdering'); // SaaS plan gate — OPERATE-tier partners have no QR ordering
+  // §4 — منع الالتزامات الجديدة. يُفحص عبر المُحلِّل المركزي وليس بشرط
+  // منثور، ورسالته محايدة للضيف. الطلبات المفتوحة لا تتأثر إطلاقًا.
+  partnerStatus.assertCan(property.partner_id, 'createOrder', { guestFacing: true });
 
   if (!Array.isArray(items) || items.length === 0) return sendJSON(res, 400, { error: 'Empty cart' });
 
@@ -392,7 +403,11 @@ on('POST', '/api/orders', null, async (req, res) => {
     // Entitlement is checked inside quoteRedemption via feature flags now
     // (§3.7), so a plan rename can never silently disable loyalty. The
     // partner comes from the resolved property, never from the request.
-    const q = quoteRedemption(property.partner_id, customerPhone, parseInt(body.redeemPoints) || 0, subtotal - discountAmount);
+    // §4: الاستبدال يقع داخل رحلة طلب؛ فإن منعت الحالة الطلب فلا مسار
+    // تشغيلي صالح له. الأرصدة تُحفظ ولا تُلغى -- لا يُفتح استبدال جديد فقط.
+    const q = partnerStatus.can(property.partner_id, 'loyaltyRedeem')
+      ? quoteRedemption(property.partner_id, customerPhone, parseInt(body.redeemPoints) || 0, subtotal - discountAmount)
+      : { discount: 0, pointsUsed: 0, blockedReason: 'partner_status' };
     loyaltyDiscount = q.discount; loyaltyPointsUsed = q.pointsUsed; loyaltyAccountId = q.accountId || null;
   }
 
@@ -1132,7 +1147,10 @@ on('POST', '/api/orders/:id/transition', ['Operator', 'SiteManager', 'Runner', '
   // name here, and the account is scoped to this order's own partner (§3.4).
   let loyaltyEarned = null;
   if (to === 'Delivered' && order.customer_phone) {
-    loyaltyEarned = earnPoints(order.partner_id, order.customer_phone, order.id, order.total);
+    // §4: التراكم الجديد يتوقف مع التوقف التجاري -- لكن الطلب نفسه يُكمل.
+    if (partnerStatus.can(order.partner_id, 'loyaltyEarn')) {
+      loyaltyEarned = earnPoints(order.partner_id, order.customer_phone, order.id, order.total);
+    }
   }
   sendJSON(res, 200, { id: order.id, status: to, loyaltyEarned: loyaltyEarned ? loyaltyEarned.points_balance : undefined });
 });
@@ -1270,6 +1288,144 @@ function assertTenantWrite(session, ownerPartnerId) {
   }
 }
 
+/* ------------- LOYALTY ADMINISTRATION (Role Corrective §5) -----------------
+   سطح إداري فقط -- لا تغيير في قواعد الولاء المعتمدة، ولا Campaigns ولا
+   Tiers ولا Network Rewards.
+
+   العزل: partnerId يُشتق من الجلسة للأدوار المرتبطة بشريك ولا يُقرأ من
+   الطلب أبدًا؛ وSuperAdmin وحده يُمرّره صراحةً. كل استعلام أدناه مُقيَّد
+   بـpartner_id، فحساب شريك آخر غير قابل للوصول بأي معامل.
+
+   الخصوصية (§6 من الوثيقة): أرقام الجوال **مُخفاة جزئيًا** في كل قائمة
+   إدارية. الرقم الكامل ليس لازمًا لقرار إداري، وقائمة إدارية تعرض آلاف
+   الأرقام الكاملة هي قاعدة بيانات تواصل، لا أداة تشغيل. */
+function maskPhoneAdmin(v) {
+  const d = String(v || '').replace(/\D/g, '');
+  return d.length >= 4 ? `••••${d.slice(-4)}` : '••••';
+}
+
+function resolveLoyaltyScope(session, query) {
+  if (session.role === 'SuperAdmin') {
+    if (!query.partnerId) { const e = new Error('partnerId is required'); e.status = 400; throw e; }
+    return query.partnerId;
+  }
+  // النطاق يأتي من الجلسة حصرًا. لكن **تجاهل** معامل مخالف صامتًا خطأ:
+  // كشفه الاختبار -- طلب يحمل partnerId لشريك آخر كان يُرجع 200 ببيانات
+  // الشريك الصحيح، فيبدو للمهاجم أن المحاولة "نجحت" بينما هي انزلقت. الرفض
+  // الصريح يجعل محاولة العبور مرئية وقابلة للرصد بدل أن تُبتلع بهدوء.
+  if (query.partnerId && query.partnerId !== session.scope) {
+    const e = new Error('Forbidden: cannot read another partner\'s loyalty data');
+    e.status = 403;
+    throw e;
+  }
+  return session.scope;
+}
+
+on('GET', '/api/admin/loyalty/summary', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  const partnerId = resolveLoyaltyScope(session, query);
+  assertPartnerScope(session, partnerId);
+
+  const accounts = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(points_balance),0) bal FROM loyalty_accounts WHERE partner_id = ?`).get(partnerId);
+  const verified = db.prepare(`SELECT COUNT(*) c FROM loyalty_accounts WHERE partner_id = ? AND verification_status = 'verified'`).get(partnerId).c;
+  const quarantined = db.prepare(`SELECT COUNT(*) c FROM loyalty_accounts WHERE partner_id IS NULL AND migration_status != 'active'`).get().c;
+
+  const ids = db.prepare(`SELECT id FROM loyalty_accounts WHERE partner_id = ?`).all(partnerId).map(r => r.id);
+  let earned = 0, redeemed = 0, txns = 0;
+  if (ids.length) {
+    const ph = ids.map(() => '?').join(',');
+    const e = db.prepare(`SELECT COALESCE(SUM(points_delta),0) v, COUNT(*) c FROM loyalty_transactions WHERE account_id IN (${ph}) AND points_delta > 0`).get(...ids);
+    const r = db.prepare(`SELECT COALESCE(SUM(points_delta),0) v, COUNT(*) c FROM loyalty_transactions WHERE account_id IN (${ph}) AND points_delta < 0`).get(...ids);
+    earned = e.v; redeemed = Math.abs(r.v); txns = e.c + r.c;
+  }
+
+  sendJSON(res, 200, {
+    partnerId,
+    entitlements: {
+      loyaltyEnabled: isLoyaltyEnabled(partnerId),
+      redeemEnabled: isRedeemEnabled(partnerId),
+      redeemPolicy: redeemPolicy(),
+      // §4: حالة الشريك قد تُغلق الاستبدال حتى لو سمحت الباقة -- تُعرض
+      // صراحةً حتى لا يبدو الأمر تناقضًا غير مفسَّر.
+      blockedByPartnerStatus: !partnerStatus.can(partnerId, 'loyaltyRedeem'),
+      partnerStatus: partnerStatus.getPartnerStatus(partnerId),
+    },
+    accounts: { total: accounts.c, verified, unverified: accounts.c - verified, totalBalance: accounts.bal },
+    activity: { pointsEarned: earned, pointsRedeemed: redeemed, transactions: txns },
+    // معلومة تشغيلية لـSuperAdmin فقط: حسابات قديمة لم تُنسب لشريك (مهاجرة 015)
+    ...(session.role === 'SuperAdmin' ? { quarantinedLegacyAccounts: quarantined } : {}),
+  });
+});
+
+on('GET', '/api/admin/loyalty/accounts', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  const partnerId = resolveLoyaltyScope(session, query);
+  assertPartnerScope(session, partnerId);
+  const limit = Math.min(parseInt(query.limit, 10) || 50, 200);
+  const rows = db.prepare(`SELECT id, customer_key, points_balance, verification_status, created_at
+                           FROM loyalty_accounts WHERE partner_id = ? ORDER BY points_balance DESC LIMIT ?`).all(partnerId, limit);
+  sendJSON(res, 200, rows.map(r => ({
+    id: r.id,
+    customerMasked: maskPhoneAdmin(r.customer_key), // الرقم الكامل لا يُعاد أبدًا في قائمة
+    pointsBalance: r.points_balance,
+    verificationStatus: r.verification_status,
+    createdAt: r.created_at,
+  })));
+});
+
+on('GET', '/api/admin/loyalty/accounts/:id/history', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  const acct = db.prepare('SELECT * FROM loyalty_accounts WHERE id = ?').get(p.id);
+  if (!acct) return sendJSON(res, 404, { error: 'Account not found' });
+  // العزل يُفحص على الحساب نفسه: تمرير مُعرّف حساب شريك آخر يُرفض.
+  assertPartnerScope(session, acct.partner_id);
+  sendJSON(res, 200, {
+    account: {
+      id: acct.id, customerMasked: maskPhoneAdmin(acct.customer_key),
+      pointsBalance: acct.points_balance, verificationStatus: acct.verification_status,
+    },
+    history: getHistory(acct.id, 100).map(t => ({
+      orderId: t.order_id, pointsDelta: t.points_delta, reason: t.reason, at: t.created_at,
+    })),
+  });
+});
+
+/* ------------- PARTNER LIFECYCLE (Role Corrective §4) ----------------------
+   Partner Status مستقل عن Subscription Status: الأول قرار تعاقدي/تشغيلي
+   من النادل، والثاني حالة اشتراك. كلاهما يُفحص ولا يُشتق أحدهما من الآخر.
+
+   القرار محصور بـSuperAdmin: تغيير حالة شريك يوقف أعماله الجديدة، وهذا
+   ليس قرارًا يملكه الشريك على نفسه. والسبب إلزامي لأن الحالة تُقرأ لاحقًا
+   في التدقيق والنزاعات المالية، فبلا سبب تصبح سجلًا بلا معنى. */
+on('GET', '/api/admin/partners/:id/status', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, q, session) => {
+  assertPartnerScope(session, p.id);
+  const summary = partnerStatus.statusSummary(p.id);
+  if (!summary) return sendJSON(res, 404, { error: 'Partner not found' });
+  // الشريك يرى حالته وقدراته، ولا يُعرض له مسار تغيير لا يملكه.
+  if (session.role !== 'SuperAdmin') return sendJSON(res, 200, { status: summary.status, capabilities: summary.capabilities });
+  sendJSON(res, 200, summary);
+});
+
+on('POST', '/api/admin/partners/:id/status', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  requireFields(b, ['status', 'reason']);
+  const current = partnerStatus.getPartnerStatus(p.id);
+  if (!current) return sendJSON(res, 404, { error: 'Partner not found' });
+  if (!partnerStatus.STATUSES.includes(b.status)) {
+    return sendJSON(res, 400, { error: `status must be one of ${partnerStatus.STATUSES.join(', ')}` });
+  }
+  if (b.status === current) return sendJSON(res, 200, { status: current, unchanged: true });
+  if (!partnerStatus.canTransition(current, b.status)) {
+    return sendJSON(res, 409, { error: `Cannot move a partner from ${current} to ${b.status}` });
+  }
+  const reason = String(b.reason).trim();
+  if (reason.length < 4) return sendJSON(res, 400, { error: 'reason must be at least 4 characters' });
+
+  db.prepare('UPDATE partners SET status = ? WHERE id = ?').run(b.status, p.id);
+  audit(session.username, session.role, 'partner_status_change', p.id,
+    { status: current }, { status: b.status }, reason);
+  // لا حذف ولا مساس بأي بيانات: الطلبات والتسويات والاسترجاعات والأرصدة
+  // والتدقيق تبقى كاملة. Closed ليس Delete.
+  sendJSON(res, 200, { status: b.status, previous: current, reason });
+});
+
 /* ------------- ADMIN: PLANS & ENTITLEMENTS (Go-Live P0-2) ------------------
    THE BLOCKER THIS CLOSES
    A fresh production database seeds a SuperAdmin account and nothing else --
@@ -1390,7 +1546,11 @@ on('POST', '/api/admin/partners', ['SuperAdmin'], async (req, res, p, q, session
   const b = await readBody(req);
   const id = uid('pt');
   db.prepare('INSERT INTO partners (id,name_ar,name_en,legal_name,contract_ref,status) VALUES (?,?,?,?,?,?)')
-    .run(id, b.name_ar, b.name_en, b.legal_name, b.contract_ref, 'Active');
+    // §4: يبدأ Draft لا Active — الشريك لا يصبح Live بمجرد إنشائه.
+    // مرحلة الإعداد (الباقة، العقار، المنافذ، المناطق، QR، المنتجات،
+    // المستخدمون، Branding، Loyalty، Engage) تسبق التفعيل، والتفعيل قرار
+    // صريح من SuperAdmin عبر نقطة تغيير الحالة.
+    .run(id, b.name_ar, b.name_en, b.legal_name, b.contract_ref, 'Draft');
   audit(session.username, session.role, 'create', id, null, b, null);
   sendJSON(res, 201, { id });
 });
@@ -1414,7 +1574,7 @@ on('POST', '/api/admin/onboard', ['SuperAdmin'], async (req, res, p, q, session)
   }
   const partnerId = uid('pt');
   db.prepare('INSERT INTO partners (id,name_ar,name_en,legal_name,contract_ref,status) VALUES (?,?,?,?,?,?)')
-    .run(partnerId, b.partnerNameAr, b.partnerNameEn, b.legalName || b.partnerNameEn, b.contractRef || ('CNT-' + Date.now()), 'Active');
+    .run(partnerId, b.partnerNameAr, b.partnerNameEn, b.legalName || b.partnerNameEn, b.contractRef || ('CNT-' + Date.now()), 'Draft');
   const propertyId = uid('prop');
   db.prepare(`INSERT INTO properties (id,partner_id,name_ar,name_en,timezone,address,status) VALUES (?,?,?,?,?,?,?)`)
     .run(propertyId, partnerId, b.propertyNameAr || b.partnerNameAr, b.propertyNameEn || b.partnerNameEn, 'Asia/Riyadh', b.address || '', 'Active');

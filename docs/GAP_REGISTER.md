@@ -1,4 +1,4 @@
-> **Version:** v2.9.1-role-engage-gov · **Last Updated:** 2026-08-17
+> **Version:** v2.9.3-r2-final · **Last Updated:** 2026-08-17
 
 # Alnadl Hospitality OS — Gap Register (Final Quality & Completion Requirements Response)
 
@@ -121,9 +121,32 @@ Phase 5 لها سجل تتبّع خاص بها، منفصل عمدًا عن Q01-
 | RC-7a | PartnerAdmin يبدأ على `zones` | يبدأ على Overview |
 | RC-7b | **Overview لا تُحمَّل بياناتها لـPartnerAdmin** ⇒ هيكل تحميل أبدي | أُضيف `loadPartnerOverview` — **كشفه التحقق البصري لا المراجعة** |
 
-### قائم — Round 2/3
+## Role & Control Completeness Corrective — Round 2
 
-§5 Engage Governance UI · §5 Partner Engage Overview · §4 Partner Control Center · §6 Loyalty Administration · §9 Finance completeness · §4 Partner status management
+### مُغلق
+
+| المعرّف | الفجوة | الإغلاق |
+|---|---|---|
+| RC-5a | منطق `resolveEngageEnabled` قائم منذ Inc-6 **بلا نقطة تكشفه** — المشغّل يرى Engage معطّلًا ولا يعرف أي طبقة عطّلته | `GET /api/engage/effective-state` تستدعي **نفس دالة العامل** وتُفكّك الطبقات الأربع · `v2.9.1` |
+| RC-5b | لا واجهة حوكمة Engage لـSuperAdmin | مركز تحكم: مفتاح إيقاف · تقييدات · حالة شريك · 37 اختبارًا · `v2.9.1` |
+| RC-5c | نقطة Engage للشريك موجودة بلا واجهة | شاشة نطاقه فقط · تقييد باتجاه واحد لـPartnerAdmin · قراءة لـPartnerViewer · `v2.9.1` |
+| RC-9 | دفتر الإيراد بلا سطح مالي | `revledger` — **بلا توسيع دور المالية للتشغيل** (مُختبَر) · `v2.9.1` |
+| **RC-4** | **Partner Control Center** — البيانات موجودة والصفحة الموحّدة لا | **تسعة أقسام من نقاط قائمة، صفر API جديدة** · وحدات تفشل مستقلة · لا تسريب متقاطع · `v2.9.2-r2-partner-center` |
+
+| **RC-4b** | **Partner Status Management** — العمود موجود بلا أي أثر في الكود (وسم فقط) | مُحلِّل مركزي + 5 نقاط إنفاذ + سبب إلزامي وتدقيق · 38 اختبارًا · `v2.9.3` |
+| **RC-6** | **Loyalty Administration** — صفر نقطة إدارية | ملخص + حسابات + سجل، بعزل كامل وإخفاء جوال · 32 اختبارًا · `v2.9.3` |
+
+### أخطاء حقيقية كشفتها اختبارات R2
+
+| الخلل | كيف اكتُشف |
+|---|---|
+| **مسار الدخول لا يستشير مُحلِّل الحالة** — مستخدمو شريك مُغلق كانوا يدخلون | اختبار دورة الحياة: المُحلِّل يقول `userLogin:false` والكود لا يسأله |
+| **تجاهل صامت لمعامل شريك آخر** في الولاء ⇒ `200` ببيانات الشريك الصحيح، فتبدو محاولة العبور ناجحة | اختبار العزل — الآن **رفض صريح** يجعل المحاولة مرئية |
+| **عزل الاختبار**: `lib/loyalty.js` يحتفظ بمقبض قاعدة مجموعة سابقة في تشغيل متسلسل | نجاح منفرد وفشل متسلسل — أُبطلت ذاكرة الوحدة |
+
+### قائم — Round 3
+
+§4 Properties CRUD الموسّع · SiteManager surfaces إضافية · P2 (بحث شامل، فلاتر محفوظة، إجراءات مجمّعة)
 
 
 ---

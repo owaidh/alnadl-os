@@ -30,6 +30,8 @@ const suites = [
   './iam-lifecycle.js',
   './role-surfaces.js',
   './engage-governance.js',
+  './partner-lifecycle.js',
+  './loyalty-admin.js',
 ];
 
 (async () => {

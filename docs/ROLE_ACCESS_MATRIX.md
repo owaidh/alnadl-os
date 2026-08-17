@@ -1,4 +1,4 @@
-> **Version:** v2.10.0-role-engage · **Status:** R1 + R2 (البنود 1-2 و6) · **Last Updated:** 2026-08-17
+> **Version:** v2.9.3-r2-final · **Status:** Round 1 و Round 2 مكتملتان · **Last Updated:** 2026-08-17
 
 # ROLE ACCESS MATRIX
 
@@ -19,6 +19,62 @@
 | **ProductAdmin** | مختبر الآليات + نظرة Engage | شاشتان | `mechanics` · `engage/overview` | لا Kill Switch (محصور بـSuperAdmin) | 28 | ✅ |
 | **SafetyReviewer** | حوادث السلامة + السجل + المعالجة | شاشتان | `safety-incidents` · `ledger` · `resolve` | لا اقتراح آليات | 28 | ✅ |
 | **PartnerAdmin** | Overview كشاشة أولى | ✅ | `partner/overview` | نطاق الشريك | 28 | ✅ |
+
+## Round 2 — المُنفَّذ (`v2.9.1` · `v2.9.2`)
+
+| Role | Required Capability | UI | API | Authorization | Tests | Status |
+|---|---|---|---|---|---|---|
+| **SuperAdmin** | مركز تحكم Engage | `engagecontrol` | `engage/kill-switch` · `policy-overrides` · `effective-state` | مفتاح الإيقاف له وحده | 37 | ✅ **Implemented & Verified** `v2.9.1` |
+| **SuperAdmin** | الحالة الفعّالة بأسبابها | بطاقة الطبقات الأربع | `GET /api/engage/effective-state` | نطاق أي شريك | 37 | ✅ `v2.9.1` |
+| **PartnerAdmin** | Engage نطاقه + تقييد باتجاه واحد | `partnerengage` | `partner/engage/overview` · `policy-overrides` | تقييد فقط · لا توسيع · لا عبور مستأجر | 37 | ✅ `v2.9.1` |
+| **PartnerViewer** | Engage قراءة فقط | `partnerengage` | `partner/engage/overview` | صفر mutation | 37 | ✅ `v2.9.1` |
+| **AlnadlFinance** | دفتر الإيراد | `revledger` | `GET /api/admin/revenue-ledger` | بلا توسيع للتشغيل | 37 | ✅ `v2.9.1` |
+| **SuperAdmin** | **§4 Partner Control Center** | `partnerprofile` | نقاط قائمة فقط — **صفر API جديدة** | تصفية لكل شريك · لا تسريب متقاطع | 37 | ✅ **Implemented & Verified** `v2.9.2-r2-partner-center` |
+
+**§4 Partner Control Center** — تسعة أقسام في صفحة موحّدة: Overview · Plan/Subscription · Properties · Users · Outlets · Loyalty · Engage · Branding · Finance summary · Audit. كل وحدة تُحمَّل وتفشل **مستقلة** (وحدة واحدة تفشل ⇒ تُعلن باسمها وبقية الصفحة تعمل)، ولا يُخترع أي حقل غير موجود في المخطط. **مُتحقَّق في متصفح حقيقي**: كل الأقسام حاضرة، صفر تسريب لشريك آخر، صفر أخطاء صفحة.
+
+### R2 — البندان الأخيران (`v2.9.3`)
+
+| Role | Required Capability | UI | API | Authorization | Tests | Status |
+|---|---|---|---|---|---|---|
+| **SuperAdmin** | **§4 دورة حياة الشريك** | ملف الشريك | `GET/POST /api/admin/partners/:id/status` | SuperAdmin وحده · سبب إلزامي · تدقيق قبل/بعد | 38 | ✅ **Implemented & Verified** |
+| **PartnerAdmin/Viewer** | رؤية حالتهم وقدراتها | ملف الشريك | `GET .../status` | نطاقهم فقط · بلا مسار تغيير | 38 | ✅ |
+| **SuperAdmin** | **§5 إدارة الولاء** | لوحة الولاء | `loyalty/summary` · `accounts` · `history` | يُحدّد الشريك صراحةً | 32 | ✅ |
+| **PartnerAdmin** | ولاء شريكه | لوحة الولاء | نفس النقاط | النطاق من الجلسة · معامل مخالف **يُرفض** | 32 | ✅ |
+| **PartnerViewer** | ولاء شريكه قراءة | لوحة الولاء | نفس النقاط | صفر mutation | 32 | ✅ |
+
+### §4 — نموذج دورة حياة الشريك (معتمد)
+
+**المبدأ**: الإيقاف إجراء تجاري ضد الشريك، **لا عقوبة على ضيف يقف بطلبه في يده، ولا إسقاط لحق مالي**. لذا تُفصل ثلاث قدرات: قبول التزامات جديدة (يتوقف) · إتمام التزامات قائمة (**يستمر**) · الحقوق المالية (**لا تُمسّ**).
+
+| القدرة | Draft | Active | Suspended | Closed |
+|---|---|---|---|---|
+| دخول مستخدمي الشريك | ✅ | ✅ | ✅ | ❌ |
+| رمز QR يُحلّ | ❌ | ✅ | ❌ | ❌ |
+| طلب جديد | ❌ | ✅ | ❌ | ❌ |
+| **الطلبات المفتوحة** | — | ✅ | ✅ **تُكمل** | ✅ **تُكمل** |
+| KDS / Runner | ✅ | ✅ | ✅ | ✅ |
+| Engage | ❌ | حسب الباقة | ❌ | ❌ |
+| Loyalty Earn | ❌ | ✅ | ❌ | ❌ |
+| Loyalty Redeem | ❌ | ✅ | ❌ | ❌ |
+| التسويات والاسترجاعات | ✅ | ✅ | ✅ | ✅ |
+| إدارة PartnerAdmin | ✅ | ✅ | 👁 قراءة | ❌ |
+
+**الأثر Server-side عبر مُحلِّل مركزي** (`lib/partner-status.js`) — لا شروط منثورة. نقاط الإنفاذ: الدخول · حلّ QR · إنشاء الطلب · كسب الولاء · استبدال الولاء.
+
+**Partner Status مستقل عن Subscription Status** — كلاهما يُفحص ولا يُشتق أحدهما من الآخر.
+
+**الشريك يبدأ `Draft`**: لا يصبح Live بمجرد إنشائه؛ التفعيل قرار صريح مُدقَّق.
+
+**Closed ليس Delete**: الطلبات والتسويات والاسترجاعات والولاء والتدقيق تبقى كاملة.
+
+**رسالة الضيف محايدة**: «الطلب غير متاح حاليًا في هذا المكان» — بلا كشف أن السبب تجاري.
+
+**السيناريوهان المطلوبان مُثبتان**: طلب مفتوح ← إيقاف ← **وصل Delivered** بينما QR يُرفض · و`Suspended → Active` ← الطلبات تعود **بلا فقد أي إعداد أو رصيد**.
+
+### §5 — حدود إدارة الولاء
+
+سطح إداري فقط: **لا Campaigns ولا Tiers ولا Network Rewards** (مُختبَر: النقاط الثلاث تُرجع 404). أرقام الجوال **مُخفاة جزئيًا** في كل قائمة إدارية. تمرير مُعرّف شريك آخر **يُرفض صراحةً** بدل تجاهله بصمت — كشفه الاختبار.
 
 ## قواعد عدم التصعيد المفروضة (§3.2)
 
@@ -58,9 +114,6 @@
 
 | Requirement | التصنيف | ملاحظة |
 |---|---|---|
-| §4 Partner Control Center | **Backend partial** | البيانات موجودة، الصفحة الموحّدة لا |
-| §6 Loyalty Administration | **Backend partial** | تلزم نقاط إدارية آمنة بعزل مستأجر |
-| §4 Partner status management | **Truly missing** | لم تُعرَّف الحالات وأثرها بعد |
 
 ## خارج النطاق (§10)
 

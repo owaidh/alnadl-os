@@ -119,7 +119,22 @@ async function run() {
     }, T);
     assertEqual(prod.status, 201, 'P0-2 a product is created through the API');
 
-    // --- 6. THE PROOF: a real guest journey on this brand-new tenant ---
+    // --- 6. §4 activation: a partner is NOT live on creation ---
+    // Role Corrective §4 made onboarding create a partner in Draft, so the
+    // setup above (plan, property, outlet, zone, point, QR, catalog) happens
+    // BEFORE the tenant is reachable by any guest. Going live is a separate,
+    // audited SuperAdmin decision -- which this test now performs explicitly
+    // rather than assuming, because that is the real production sequence.
+    const beforeActivation = await call('GET', `/api/qr/${point.data.token}`);
+    assertEqual(beforeActivation.status, 409,
+      '§4 a Draft partner is not reachable by a guest — the QR does not resolve before go-live');
+
+    const activate = await call('POST', `/api/admin/partners/${partnerId}/status`,
+      { status: 'Active', reason: 'Setup complete — going live' }, T);
+    assertEqual(activate.status, 200, '§4 SuperAdmin activates the partner explicitly');
+    assertEqual(activate.data.previous, 'Draft', '§4 and the transition records where it came from');
+
+    // --- 7. THE PROOF: a real guest journey on this brand-new tenant ---
     const qr = await call('GET', `/api/qr/${point.data.token}`);
     assertEqual(qr.status, 200, 'P0-2 a guest scanning the new QR resolves real context');
     assertEqual(qr.data.partner.name_en, 'Launch Hotel', 'P0-2 the QR resolves to the newly onboarded partner');
