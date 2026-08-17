@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-17T14:10:29.110Z",
+  "timestamp": "2026-08-17T14:37:36.994Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -103,6 +103,10 @@
     },
     {
       "suite": "./loyalty-admin.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./sitemanager-surfaces.js",
       "status": "PASS"
     }
   ],

@@ -122,12 +122,12 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, partnerProfile:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, partnerProfile:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
   // token the server handed us plus eligibility — never any policy,
   // personality reasoning, or AI internals. `moment.payload` is the
@@ -411,7 +411,7 @@ const App = {
   async loadForRole(){
     const role = S.session.user.role;
     if(role==='Operator') return App.loadOpsQueue();
-    if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive()]);
+    if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive(), App.loadSiteExceptions()]);
     if(role==='Runner') return App.loadRunnerQueue();
     if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans(), App.loadKillSwitch(), App.loadPolicyOverrides()]);
     if(role==='ProductAdmin') return Promise.all([App.loadMechanics(), App.loadEngageOverview()]);
@@ -604,6 +604,56 @@ const App = {
   // R2 §3 — Partner Control Center: يجمع ما هو موجود فعلًا في نداء واحد.
   // لا نقاط جديدة: كلها قائمة ومصرّحة لـSuperAdmin بالفعل. كل استدعاء
   // يفشل بصمت على حدة فلا تُسقط لوحة كاملة بسبب وحدة واحدة (§13).
+  /* ===== R3 — SiteManager: كشف قدرات خلفية مسموحة له اليوم بلا أي توسيع.
+     كل نداء أدناه يقابل نقطة يسمح بها الخادم لـSiteManager تحديدًا. ===== */
+  async loadSiteExceptions(){
+    S.siteExceptions = { loading:true }; render();
+    const one = async (fn) => { try{ return await fn(); }catch(e){ return { __error:e.message }; } };
+    // الطابور يحمل الطلبات النشطة؛ ومنه نستخرج ما يحتاج إجراءً.
+    const [queue, notifications] = await Promise.all([
+      one(()=>api('GET','/api/ops/queue',null,true)),
+      one(()=>api('GET','/api/admin/notifications?limit=100',null,true)),
+    ]);
+    S.siteExceptions = { loading:false, queue, notifications };
+    render();
+  },
+  async loadOrderRefunds(orderId){
+    try{ S.orderRefunds = { orderId, rows: await api('GET',`/api/orders/${orderId}/refunds`,null,true) }; }
+    catch(e){ S.orderRefunds = { orderId, rows: [], error: e.message }; }
+    render();
+  },
+  openRefund(orderId){
+    if(!orderId){ showErr(S.lang==='ar'?'أدخل رقم الطلب':'Enter an order number'); return; }
+    // مفتاح تعطيل مزدوج الإرسال يُولَّد مرة واحدة عند فتح النافذة، فإعادة
+    // الضغط تُرسل نفس المفتاح والخادم يُرجع النتيجة الأصلية بدل استرجاع ثانٍ.
+    S.ui.refundFor = { orderId, idempotencyKey: 'rf-' + orderId + '-' + Date.now(), submitting:false, error:null };
+    App.loadOrderRefunds(orderId);
+    render();
+  },
+  dismissRefund(){ S.ui.refundFor = null; S.orderRefunds = null; render(); },
+  async submitRefund(){
+    const r = S.ui.refundFor; if(!r || r.submitting) return;
+    const amountRaw = document.getElementById('rfAmount')?.value;
+    const reason = document.getElementById('rfReason')?.value?.trim();
+    if(!reason){ S.ui.refundFor.error = S.lang==='ar'?'السبب مطلوب':'A reason is required'; render(); return; }
+    const amount = amountRaw ? parseFloat(amountRaw) : undefined;
+    if(amountRaw && (!Number.isFinite(amount) || amount <= 0)){
+      S.ui.refundFor.error = S.lang==='ar'?'المبلغ غير صالح':'Invalid amount'; render(); return;
+    }
+    S.ui.refundFor.submitting = true; S.ui.refundFor.error = null; render();
+    try{
+      const payload = { reason, idempotencyKey: r.idempotencyKey };
+      if(amount !== undefined) payload.amount = amount;
+      await api('POST', `/api/orders/${r.orderId}/refund`, payload, true);
+      showToast(t('toast_saved'));
+      S.ui.refundFor = null;
+      await Promise.all([App.loadSiteExceptions(), App.loadOpsQueue()]);
+    }catch(e){
+      S.ui.refundFor.submitting = false;
+      S.ui.refundFor.error = e.message;
+      render();
+    }
+  },
   async loadPartnerProfile(partnerId){
     if(!partnerId) return;
     S.partnerProfile = { partnerId, loading:true }; render();
@@ -1457,7 +1507,7 @@ function navGroupsFor(role){
 function renderStaffShell(){
   const role = S.session.user.role;
   const navByRole = {
-    Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
+    Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')],['exceptions', S.lang==='ar'?'الاستثناءات':'Exceptions']],
     Runner:[['runnerq', t('runnerQ')]],
     SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')],['engagecontrol', S.lang==='ar'?'تحكّم Engage':'Engage Control'],['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
     AlnadlFinance:[['revledger', S.lang==='ar'?'دفتر الإيراد':'Revenue Ledger'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
@@ -1470,6 +1520,7 @@ function renderStaffShell(){
   let inner = '';
   if(S.screen==='kds') inner = renderKds();
   else if(S.screen==='runnerq') inner = renderRunner();
+  else if(S.screen==='exceptions') inner = renderSiteExceptions();
   else if(S.screen==='partnerprofile') inner = renderPartnerProfile();
   else if(S.screen==='engagecontrol') inner = renderEngageControl();
   else if(S.screen==='partnerengage') inner = renderPartnerEngage();
@@ -1534,7 +1585,8 @@ function renderStaffShell(){
 
   return `${body}
   ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}
-  ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}`;
+  ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}
+  ${S.ui.refundFor? renderRefundModal():''}`;
 }
 
 // UX-2 (spec R03 "Delivery exception — Destination + order + reason
@@ -1899,6 +1951,115 @@ function engageEffectiveCard(st, isPartnerView){
    صفحة واحدة تجمع كل ما يخصّ شريكًا بعينه من نقاط قائمة أصلًا. لم تُبنَ
    أي واجهة برمجية جديدة؛ ولا يُخترع أي حقل غير موجود في المخطط -- ما لا
    تُرجعه البيانات يظهر كشرطة، لا كصفر مضلِّل. */
+/* R3 §1/§2 — استثناءات الموقع لـSiteManager.
+   المبدأ: كشف قدرة خلفية مسموحة له اليوم، بلا أي توسيع صلاحية ودون
+   تحويله إلى PartnerAdmin. كل عنصر هنا **يحتاج إجراءً** -- الشاشة ليست
+   عرض بيانات إضافيًا، فاللوحة الحية تغطي ذلك أصلًا. */
+function renderSiteExceptions(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const ex = S.siteExceptions;
+  if(!ex || ex.loading) return '<div class="panel"><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div></div>';
+
+  const err = o => o && o.__error;
+  const queue = err(ex.queue) ? [] : (ex.queue || []);
+  const notifs = err(ex.notifications) ? [] : (ex.notifications || []);
+
+  // ما يحتاج إجراءً فعلًا: طلبات تجاوزت مهلة منفذها، وطلبات تعذّر تسليمها.
+  const now = Date.now();
+  const breached = queue.filter(o => {
+    const budget = o.slaPrepMin || 8;
+    return ['Paid','Accepted','Preparing'].includes(o.status) && (now - o.created_at)/60000 > budget;
+  });
+  const failedDelivery = queue.filter(o => o.status === 'Delivery Failed');
+  // ملاحظة تصميم: لا يوجد قسم "قابل للاسترجاع" مبني على الطابور.
+  // /api/ops/queue يستثني Delivered بحكم تعريفه، فقائمة كهذه لا يمكن أن
+  // تمتلئ أبدًا -- زر معطّل بنيويًا. كشفه التحقق البصري، واستُبدل ببحث
+  // برقم الطلب وهو المسار الواقعي: الاسترجاع يبدأ من شكوى تحمل رقمًا.
+
+  const failedModules = [err(ex.queue) && L('الطابور','Queue'), err(ex.notifications) && L('التنبيهات','Notifications')].filter(Boolean);
+
+  const card = (title, items, body) => `
+    <div class="panel">
+      <h3>${title} <span class="cnt">${items.length}</span></h3>
+      ${items.length ? body : `<div class="statepanel on-dark" style="padding:16px 8px"><div class="glyph" style="color:var(--sage-500)">✓</div><p>${L('لا شيء يحتاج إجراءً','Nothing needs action')}</p></div>`}
+    </div>`;
+
+  return `
+  ${failedModules.length ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500)">
+    <b>${L('تعذّر تحميل','Could not load')}:</b> ${failedModules.join(' · ')} — ${L('بقية الشاشة سليمة.','the rest of the screen is intact.')}
+  </div>`:''}
+
+  ${card(L('تجاوز المهلة الآن','Past SLA right now'), breached,
+    `<table class="datatable"><tr><th>${L('الطلب','Order')}</th><th>${L('الموقع','Location')}</th><th>${L('منذ','Elapsed')}</th><th>${L('الحالة','Status')}</th></tr>
+      ${breached.map(o=>`<tr><td>${esc(o.id)}</td>
+        <td>${esc((S.lang==='ar'?o.zone_name_ar:o.zone_name_en)||'')} · ${esc(o.point_label||'—')}</td>
+        <td><span class="badge cancel">${elapsedStr(o.created_at)}</span></td>
+        <td>${esc(o.status)}</td></tr>`).join('')}</table>`)}
+
+  ${card(L('تعذّر التسليم','Failed deliveries'), failedDelivery,
+    `<table class="datatable"><tr><th>${L('الطلب','Order')}</th><th>${L('الموقع','Location')}</th><th></th></tr>
+      ${failedDelivery.map(o=>`<tr><td>${esc(o.id)}</td>
+        <td>${esc(o.point_label||'—')}</td>
+        <td><button class="btn-small" onclick="App.openRefund('${esc(o.id)}')">${L('استرجاع','Refund')}</button></td></tr>`).join('')}</table>`)}
+
+  <div class="panel">
+    <h3>${L('استرجاع طلب','Refund an order')}</h3>
+    <p class="ph">${L('الاسترجاع يخصّ طلبًا مكتملًا، وهو بطبيعته خارج طابور التشغيل — لذا يُفتح برقم الطلب لا من قائمة.','A refund concerns a completed order, which by definition has already left the operations queue — so it is opened by order number rather than from a list.')}</p>
+    <div class="formfield"><label>${L('رقم الطلب','Order number')}</label>
+      <input id="rfLookup" placeholder="ORD-1801" onkeydown="if(event.key==='Enter') App.openRefund(this.value.trim())"></div>
+    <div class="actrow"><button class="btn-small brass" onclick="App.openRefund(document.getElementById('rfLookup').value.trim())">${L('فتح الاسترجاع','Open refund')}</button></div>
+  </div>
+
+  <div class="panel">
+    <h3>${L('تنبيهات الموقع','Site Notifications')}</h3>
+    <p class="ph">${L('آخر ما أرسله النظام — للاطلاع، لا يحتاج إجراءً بذاته','Latest system notifications — informational, no action required by themselves')}</p>
+    ${notifs.length ? `<table class="datatable"><tr><th>${L('الحدث','Event')}</th><th>${L('الطلب','Order')}</th><th>${L('الوقت','When')}</th></tr>
+      ${notifs.slice(0,25).map(n=>`<tr><td>${esc(n.event||n.type||'')}</td><td>${esc(n.order_id||'—')}</td>
+        <td>${n.created_at?new Date(n.created_at).toLocaleString(S.lang==='ar'?'ar':'en'):'—'}</td></tr>`).join('')}</table>`
+      : `<div class="statepanel on-dark" style="padding:16px 8px"><div class="glyph">—</div><p>${L('لا تنبيهات','No notifications')}</p></div>`}
+  </div>`;
+}
+
+/* نافذة الاسترجاع — عملية مالية، فتأكيد صريح ومنع إرسال مزدوج.
+   مفتاح idempotency يُولَّد عند الفتح ويُرسل مع الطلب: إعادة الضغط تُعيد
+   النتيجة الأصلية من الخادم بدل تنفيذ استرجاع ثانٍ. */
+function renderRefundModal(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const r = S.ui.refundFor; if(!r) return '';
+  const hist = S.orderRefunds && S.orderRefunds.orderId === r.orderId ? S.orderRefunds.rows : null;
+  const already = (hist||[]).reduce((a,x)=>a+(x.amount||0),0);
+
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissRefund()"><div class="ordsheet">
+    <h3>${L('استرجاع','Refund')} — ${esc(r.orderId)}</h3>
+    <div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('عملية مالية لا تُلغى تلقائيًا. تأكّد من المبلغ والسبب قبل التنفيذ.','A financial operation that is not automatically reversible. Confirm the amount and reason before proceeding.')}
+    </div>
+
+    ${hist===null ? '<div class="skeleton skeleton-row"></div>'
+      : hist.length ? `<div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;font-weight:700;color:var(--ink-300);margin-bottom:6px">${L('استرجاعات سابقة','Previous refunds')}</label>
+          <table class="datatable"><tr><th>${L('المبلغ','Amount')}</th><th>${L('النوع','Type')}</th><th>${L('بواسطة','By')}</th></tr>
+          ${hist.map(x=>`<tr><td>${money(x.amount||0)}</td><td>${esc(x.type||'')}</td><td>${esc(x.actor||'')}</td></tr>`).join('')}</table>
+          <p class="ph" style="margin-top:6px">${L('إجمالي ما استُرجع','Already refunded')}: ${money(already)}</p>
+        </div>`
+      : `<p class="ph" style="margin-bottom:12px">${L('لا استرجاعات سابقة على هذا الطلب','No previous refunds on this order')}</p>`}
+
+    <div class="formfield"><label>${L('المبلغ (اتركه فارغًا لاسترجاع كامل)','Amount (leave empty for a full refund)')}</label>
+      <input id="rfAmount" type="number" step="0.01" placeholder="${L('كامل','Full')}"></div>
+    <div class="formfield"><label>${L('السبب (مطلوب)','Reason (required)')}</label>
+      <input id="rfReason" placeholder="${L('سبب الاسترجاع','Reason for the refund')}"></div>
+
+    ${r.error ? `<div class="errbox" style="margin-top:10px">${esc(r.error)}</div>`:''}
+
+    <div class="actrow">
+      <button class="btn-danger-line" onclick="App.submitRefund()" ${r.submitting?'disabled':''}>
+        ${r.submitting ? L('جارٍ التنفيذ…','Processing…') : L('تأكيد الاسترجاع','Confirm refund')}
+      </button>
+      <button class="ghostbtn" onclick="App.dismissRefund()" ${r.submitting?'disabled':''}>${t('close')}</button>
+    </div>
+  </div></div>`;
+}
+
 function renderPartnerProfile(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const pf = S.partnerProfile;

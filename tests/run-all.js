@@ -32,6 +32,7 @@ const suites = [
   './engage-governance.js',
   './partner-lifecycle.js',
   './loyalty-admin.js',
+  './sitemanager-surfaces.js',
 ];
 
 (async () => {
