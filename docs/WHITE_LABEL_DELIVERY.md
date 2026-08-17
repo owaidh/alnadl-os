@@ -1,4 +1,4 @@
-> **Release:** `v2.11.0-white-label` · **Status:** **Delivered — Awaiting Final Review & Acceptance** · **Date:** 2026-08-17 · **Baseline:** `v2.10.0-r3-closed`
+> **Release:** `v2.11.1-white-label-delivery` · **Status:** ✅ **Accepted — White Label Closed** · **Accepted:** 2026-08-18 · **Baseline:** `v2.10.0-r3-closed` · **Code tag:** `v2.11.0-white-label`
 
 # White Label — Final Delivery Record
 
@@ -125,4 +125,23 @@ close guard: Active+open=409(PASS) Suspended+open=409(PASS) drained=0(PASS) clos
 | **نسخة مُستخرَجة نظيفة** | **1116/1116** ✅ |
 | مسارات مطلقة | **صفر** |
 
-**الحالة: Delivered — Awaiting Final Review & Acceptance.**
+**الحالة: ✅ Accepted — White Label Closed.**
+
+## 7. سجل الاعتماد
+
+| البند | الحالة |
+|---|---|
+| اعتُمد في | **2026-08-18** |
+| وسم التسليم | **`v2.11.1-white-label-delivery`** |
+| وسم الكود | `v2.11.0-white-label` |
+| الأساس | `v2.10.0-r3-closed` |
+
+**ما تحقّق منه المراجع على الحزمة الفعلية**: 53/53 اختبار White Label · الوراثة `Partner → Property → Outlet` · بوابة الميزة · RBAC وعزل المستأجر · رحلة الضيف بلا ظهور ALNADL عند `show_powered_by=0` · Cross-System Audit نظيف · وعدم كسر Partner Lifecycle أو IAM أو Finance أو Engage أو Loyalty.
+
+**ملاحظة على هذا التصحيح**: كان السجل يذكر `v2.11.0-white-label` وهو **وسم الكود لا وسم التسليم**. سجل التسليم يُوسم بعد كتابته، فيقع بعد وسم الكود بالضرورة — والوسمان مذكوران الآن معًا لأن كلًّا منهما يُشير لشيء مختلف. **لم يُغيَّر أي كود منتج بسبب هذا التصحيح.**
+
+### البنود المؤجَّلة — تبقى كما اعتُمدت
+`Logo Upload / Storage abstraction` · `Custom Domain` · `Typography customization` · `Dedicated Loading Screen`
+
+### لم تُبدأ — بانتظار تحديد المرحلة التالية
+`products.image_url` · `Redis` · `PostgreSQL`
