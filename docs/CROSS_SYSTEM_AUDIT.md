@@ -1,4 +1,4 @@
-> **Version:** v2.9.9-audit-integrity · **Type:** Cross-System Audit — مُعاد بعد تصحيح المسبارات · **Last Updated:** 2026-08-17
+> **Version:** v2.10.0-r3-closed · **Type:** Cross-System Audit — كل ادعاء بدليل مباشر من الأداة · **Last Updated:** 2026-08-17
 
 # Cross-System Audit — v2.9.6
 
@@ -75,9 +75,27 @@
 | **Active** | ALLOW | ALLOW | ALLOW | ALLOW | تستمر |
 | **Suspended** | ALLOW | **DENY 409** | **DENY 409** | ALLOW | **أُكملت حتى Delivered ✅** |
 | **Active (عودة)** | ALLOW | ALLOW | ALLOW | ALLOW | تستمر |
-| **Closed مع طلب مفتوح** | — | — | — | — | **`409 PARTNER_HAS_OPEN_ORDERS` (3 طلبات) ✅** |
+| **Closed مع طلب مفتوح** | — | — | — | — | راجع §3-ب أدناه |
 
 **PASS** — الأثر حقيقي على الرحلات، لا وسم. والحارس يمنع الإغلاق فعليًا.
+
+### 3-ب. حارس الإغلاق — أربعة سيناريوهات، كل واحد بدليله
+
+> **تصحيح نزاهة (`v2.10.0`)**: كانت الأداة تُكمل الطلب إلى `Delivered` **قبل** محاولة الإغلاق، فتُرجع `200` بطبيعة الحال — أي أنها **لم تكن تُثبت الشرط إطلاقًا** رغم أن هذا التقرير كان يوثّقه كأنه فُحص. الترتيب صُحِّح، والنتائج تُسجَّل الآن **منفصلة** في `audit-findings.json` بدل قيمة واحدة مبهمة.
+
+| # | السيناريو | المتوقَّع | الفعلي | الرمز | طلبات مفتوحة | النتيجة |
+|---|---|---|---|---|---|---|
+| 1 | `Active` + طلب مفتوح ⟶ `Closed` | 409 | **409** | `PARTNER_HAS_OPEN_ORDERS` | 1 | **PASS** |
+| 2 | `Suspended` + طلب مفتوح ⟶ `Closed` | 409 | **409** | `PARTNER_HAS_OPEN_ORDERS` | 1 | **PASS** |
+| 3 | تصريف كل الطلبات حتى حالات نهائية | 0 متبقٍ | **0** | — | 0 | **PASS** |
+| 4 | `Closed` بعد التصريف | 200 | **200** | — | 0 | **PASS** |
+
+**مخرج الأداة الحرفي**:
+```
+close guard: Active+open=409(PASS) Suspended+open=409(PASS) drained=0(PASS) closeAfter=200(PASS)
+```
+
+كل قيمة أعلاه مقروءة مباشرة من `audit-findings.json` الذي تُنتجه `scripts/cross-system-audit.js` المُسلَّمة في الحزمة — **لا ادعاء بلا دليل من الأداة نفسها**.
 
 ## 4. Subscription × Partner Status — مستقلان ومُتحقَّق
 

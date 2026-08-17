@@ -199,8 +199,22 @@ async function main() {
   await call('POST', `/api/admin/partners/${AP}/status`, { status: 'Active', reason: 'audit activation' }, SA);
   const liveOrder = await probeState('Active');
   if (liveOrder) await call('POST', `/api/orders/${liveOrder}/pay`, { method: 'card' });
+
+  /* ---- حارس الإغلاق: يُفحص **بينما الطلب ما زال مفتوحًا** ----
+     تصحيح نزاهة: كان هذا الفحص يجري **بعد** إكمال الطلب إلى Delivered،
+     فيُرجع 200 بطبيعة الحال -- أي أن الأداة لم تكن تُثبت الشرط إطلاقًا
+     رغم أن التقرير كان يوثّقه كأنه فُحص. الترتيب الآن يفحص الحالتين
+     أولًا، ثم يُصرّف الطلب، ثم يُغلق. */
+  const closeGuard = {};
+  closeGuard.activeWithOpenOrder = (await call('POST', `/api/admin/partners/${AP}/status`,
+    { status: 'Closed', reason: 'audit: close attempt while Active with an open order' }, SA));
+
   await call('POST', `/api/admin/partners/${AP}/status`, { status: 'Suspended', reason: 'audit suspension' }, SA);
   await probeState('Suspended');
+
+  closeGuard.suspendedWithOpenOrder = (await call('POST', `/api/admin/partners/${AP}/status`,
+    { status: 'Closed', reason: 'audit: close attempt while Suspended with an open order' }, SA));
+
   // الطلب المفتوح يُكمل أثناء الإيقاف؟
   let completed = null;
   if (liveOrder) {
@@ -211,7 +225,26 @@ async function main() {
     }
     completed = ok;
   }
-  const closeWithOpen = await call('POST', `/api/admin/partners/${AP}/status`, { status: 'Closed', reason: 'audit close attempt' }, SA);
+  // تُصرَّف بقية الطلبات المفتوحة لهذا الشريك حتى يصبح الإغلاق ممكنًا فعلًا
+  const NEXT = { 'Payment Pending': 'Paid', Paid: 'Accepted', Accepted: 'Preparing',
+                 Preparing: 'Ready', Ready: 'Out for Delivery', 'Out for Delivery': 'Delivered' };
+  for (let guard = 0; guard < 40; guard++) {
+    const open = db.prepare(
+      `SELECT id, status FROM orders WHERE partner_id = ? AND status NOT IN ('Delivered','Cancelled','Refunded','Delivery Failed')`
+    ).all(AP);
+    if (!open.length) break;
+    for (const o of open) {
+      const to = NEXT[o.status];
+      if (to) await call('POST', `/api/orders/${o.id}/transition`, { to }, SA);
+    }
+  }
+  closeGuard.openOrdersRemaining = db.prepare(
+    `SELECT COUNT(*) c FROM orders WHERE partner_id = ? AND status NOT IN ('Delivered','Cancelled','Refunded','Delivery Failed')`
+  ).get(AP).c;
+
+  closeGuard.afterAllOrdersClosed = (await call('POST', `/api/admin/partners/${AP}/status`,
+    { status: 'Closed', reason: 'audit: close after every order reached a terminal state' }, SA));
+
   await call('POST', `/api/admin/partners/${AP}/status`, { status: 'Active', reason: 'audit reactivate' }, SA);
   await probeState('Active (again)');
 
@@ -303,7 +336,27 @@ async function main() {
   }
 
   const report = { generatedAt: new Date().toISOString(), roles: ROLES, matrix, routes, lifecycle, anomalies,
-    closeWithOpenOrders: { status: closeWithOpen.status, code: closeWithOpen.data && closeWithOpen.data.code },
+    closeGuard: {
+      // كل سيناريو مُسجَّل منفصلًا مع رمزه وعدد الطلبات المفتوحة وقتها،
+      // فلا يبقى ادعاء في التقرير بلا دليل مباشر من هذه الأداة.
+      activeWithOpenOrder: {
+        expected: 409, status: closeGuard.activeWithOpenOrder.status,
+        code: closeGuard.activeWithOpenOrder.data && closeGuard.activeWithOpenOrder.data.code,
+        openOrders: closeGuard.activeWithOpenOrder.data && closeGuard.activeWithOpenOrder.data.openOrders,
+        pass: closeGuard.activeWithOpenOrder.status === 409,
+      },
+      suspendedWithOpenOrder: {
+        expected: 409, status: closeGuard.suspendedWithOpenOrder.status,
+        code: closeGuard.suspendedWithOpenOrder.data && closeGuard.suspendedWithOpenOrder.data.code,
+        openOrders: closeGuard.suspendedWithOpenOrder.data && closeGuard.suspendedWithOpenOrder.data.openOrders,
+        pass: closeGuard.suspendedWithOpenOrder.status === 409,
+      },
+      openOrdersDrained: { expected: 0, remaining: closeGuard.openOrdersRemaining, pass: closeGuard.openOrdersRemaining === 0 },
+      closeAfterDrain: {
+        expected: 200, status: closeGuard.afterAllOrdersClosed.status,
+        pass: closeGuard.afterAllOrdersClosed.status === 200,
+      },
+    },
     openOrderCompletedWhileSuspended: completed,
     subscriptionCross: { engageBlockedBy: subSuspended.data && subSuspended.data.blockedBy, orderStatus: orderWithSubSuspended.status },
     isolation, iam, fin };
@@ -313,6 +366,11 @@ async function main() {
   } else {
     console.log('access matrix clean: no 500, no unintended 404');
   }
+  const cg = report.closeGuard;
+  console.log('close guard: Active+open=' + cg.activeWithOpenOrder.status + '(' + (cg.activeWithOpenOrder.pass ? 'PASS' : 'FAIL') + ')'
+    + ' Suspended+open=' + cg.suspendedWithOpenOrder.status + '(' + (cg.suspendedWithOpenOrder.pass ? 'PASS' : 'FAIL') + ')'
+    + ' drained=' + cg.openOrdersDrained.remaining + '(' + (cg.openOrdersDrained.pass ? 'PASS' : 'FAIL') + ')'
+    + ' closeAfter=' + cg.closeAfterDrain.status + '(' + (cg.closeAfterDrain.pass ? 'PASS' : 'FAIL') + ')');
   console.log('audit complete -> audit-findings.json');
 }
 
