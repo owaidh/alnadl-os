@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-17T12:46:15.337Z",
+  "timestamp": "2026-08-17T13:15:46.745Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -91,6 +91,10 @@
     },
     {
       "suite": "./role-surfaces.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./engage-governance.js",
       "status": "PASS"
     }
   ],

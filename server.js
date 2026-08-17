@@ -19,6 +19,7 @@ const { sendChallenge, verifyChallenge, isVerificationAvailable } = require('./l
 const { checkLimit, storeName: rateLimitStore, sweep: sweepRateLimits } = require('./lib/rate-limit.js');
 const { log, correlationId } = require('./lib/logger.js');
 const { assertCanManageUser, assertNotLastSuperAdmin, assignableRoles, issueActivationToken, peekActivation, consumeActivation, ROLE_SUMMARY } = require('./lib/iam.js');
+const { resolveEngageEnabled, getGlobalKillSwitchState, getAIGenerationGlobalKillSwitchState } = require('./lib/engage-flags.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
@@ -907,6 +908,80 @@ on('GET', '/api/admin/engage/ledger', ['SuperAdmin', 'SafetyReviewer'], async (r
 on('GET', '/api/admin/engage/overview', ['SuperAdmin', 'ProductAdmin'], async (req, res) => {
   sendJSON(res, 200, getAdminOverview());
 });
+/* --------- ENGAGE EFFECTIVE STATE (Role Corrective R2 §1/§2) --------------
+   المنطق الذي يقرر تشغيل Engage موجود منذ Inc-6 في lib/engage-flags.js،
+   لكن **لم تكن هناك نقطة تكشفه**. النتيجة: مشغّل يرى Engage معطّلًا ولا
+   يعرف أي طبقة عطّلته -- الباقة؟ الاشتراك؟ مفتاح الإيقاف؟ تقييد منطقة؟
+
+   هذه النقطة لا تُعيد بناء أي منطق. تستدعي resolveEngageEnabled نفسها
+   التي يستدعيها العامل، وتُفكّك الطبقات الأربع بأسبابها بلغة أعمال.
+   PartnerAdmin/Viewer يُقيَّدان بشريكهما، ولا يريان حالة المفتاح العام
+   كقيمة قابلة للتعديل -- فقط أثرها عليهم. */
+on('GET', '/api/engage/effective-state', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  // عزل المستأجر: الشريك يُقيَّد بنطاقه من الجلسة. وإن مرّر مُعرّف شريك
+  // آخر صراحةً فالرفض أوضح من الاستبدال الصامت -- الاستبدال يُعيد بيانات
+  // صحيحة لكن لسؤال مختلف، وهو ما يُربك المشغّل ويُخفي محاولة التجاوز
+  // عن التدقيق. اكتشف الاختبار هذا السلوك الغامض قبل أن يصل للإنتاج.
+  let partnerId;
+  if (session.role === 'SuperAdmin') {
+    partnerId = query.partnerId || null;
+  } else {
+    if (query.partnerId && query.partnerId !== session.scope) {
+      const e = new Error('Forbidden: cannot read another partner\'s state');
+      e.status = 403; throw e;
+    }
+    partnerId = session.scope;
+  }
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
+
+  const sub = db.prepare(`
+    SELECT s.status, pl.code, pl.features_json FROM subscriptions s
+    JOIN plans pl ON pl.id = s.plan_id WHERE s.partner_id = ? ORDER BY s.started_at DESC LIMIT 1`).get(partnerId);
+  const features = sub ? (JSON.parse(sub.features_json || '{}')) : {};
+  const contractEnabled = features.engage_enabled === true;
+  const subscriptionActive = !!sub && sub.status === 'Active';
+  const killSwitchOn = getGlobalKillSwitchState(); // true = المنصة مسموحة
+
+  // التقييدات التي تخصّ هذا الشريك فقط
+  const overrides = db.prepare(`SELECT * FROM venue_policy_override WHERE policy_key = 'engage_enabled' ORDER BY created_at DESC`).all()
+    .filter(r => {
+      if (r.scope_type === 'property') return propertyPartnerId(r.scope_id) === partnerId;
+      if (r.scope_type === 'zone') return zonePartnerId(r.scope_id) === partnerId;
+      return false;
+    })
+    .map(r => ({ scopeType: r.scope_type, scopeId: r.scope_id, enabled: JSON.parse(r.policy_value_json || '{}').enabled === true, setBy: r.set_by, at: r.created_at }));
+
+  // الحالة الفعّالة على مستوى الشريك = نفس دالة العامل، لا نسخة موازية
+  const effective = subscriptionActive && resolveEngageEnabled(contractEnabled, partnerId, null, null);
+
+  // أول سبب مانع بالترتيب الحاكم — هذا ما يحتاجه المشغّل، لا قائمة أعلام
+  let blockedBy = null;
+  if (!subscriptionActive) blockedBy = 'subscription_inactive';
+  else if (!contractEnabled) blockedBy = 'not_in_plan';
+  else if (!killSwitchOn) blockedBy = 'global_kill_switch';
+  else if (!effective) blockedBy = 'scope_override';
+
+  const payload = {
+    partnerId,
+    effective,
+    blockedBy,
+    layers: {
+      plan: { code: sub ? sub.code : null, entitlement: contractEnabled },
+      subscription: { status: sub ? sub.status : null, active: subscriptionActive },
+      // الشريك يرى أثر المفتاح العام، لا يملك تعديله (§1: المفتاح لـSuperAdmin فقط)
+      globalKillSwitch: { allowed: killSwitchOn, controlledBy: 'SuperAdmin' },
+      scopeOverrides: overrides,
+    },
+  };
+  if (session.role === 'SuperAdmin') {
+    payload.layers.aiGeneration = {
+      entitlement: features.engage_ai_generation === true,
+      globalAllowed: getAIGenerationGlobalKillSwitchState(),
+    };
+  }
+  sendJSON(res, 200, payload);
+});
+
 on('GET', '/api/partner/engage/overview', ['PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
   sendJSON(res, 200, getPartnerOverview(session.scope));
 });

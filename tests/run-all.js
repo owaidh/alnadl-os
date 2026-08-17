@@ -29,6 +29,7 @@ const suites = [
   './golive-input-validation.js',
   './iam-lifecycle.js',
   './role-surfaces.js',
+  './engage-governance.js',
 ];
 
 (async () => {

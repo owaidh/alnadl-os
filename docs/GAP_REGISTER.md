@@ -1,4 +1,4 @@
-> **Version:** v2.9.0-role-iam · **Last Updated:** 2026-08-17
+> **Version:** v2.9.1-role-engage-gov · **Last Updated:** 2026-08-17
 
 # Alnadl Hospitality OS — Gap Register (Final Quality & Completion Requirements Response)
 
@@ -124,3 +124,23 @@ Phase 5 لها سجل تتبّع خاص بها، منفصل عمدًا عن Q01-
 ### قائم — Round 2/3
 
 §5 Engage Governance UI · §5 Partner Engage Overview · §4 Partner Control Center · §6 Loyalty Administration · §9 Finance completeness · §4 Partner status management
+
+
+---
+
+## Role & Control Completeness Corrective — Round 2
+
+### مُغلق
+
+| المعرّف | الفجوة | الإغلاق |
+|---|---|---|
+| RC-5a | **منطق تفعيل Engage موجود بلا نقطة تكشفه** — مشغّل يرى Engage معطّلًا ولا يعرف أي طبقة عطّلته | `GET /api/engage/effective-state` تستدعي `resolveEngageEnabled` نفسها التي يستدعيها العامل، وتُفكّك الطبقات الأربع بأسبابها |
+| RC-5b | مفتاح الإيقاف العام بلا واجهة | مركز تحكّم SuperAdmin · مُثبَت أن الأدوار الأخرى تُرفض `403` |
+| RC-5c | تقييدات السياسة بلا واجهة | جدول + تقييد نطاقي للشريك باتجاه واحد |
+| RC-5d | `partner/engage/overview` جاهزة بلا واجهة | شاشة Engage للشريك بأرقام مُجمّعة فقط |
+| RC-5e | **قراءة عابرة للمستأجر باستبدال صامت** | كان تمرير `partnerId` لشريك آخر يُعيد بيانات الشريك نفسه بصمت — **يُرفض الآن `403` صراحةً**. اكتشفه الاختبار |
+| RC-9a | دفتر الإيراد بلا واجهة | شاشة لـAlnadlFinance وSuperAdmin · مُثبَت عدم توسيع صلاحية المالية للتشغيل |
+
+### قائم — Round 3
+
+§4 Partner Control Center · §4 Partner Status Management (تلزم تعريف الحالات وأثرها Server-side أولًا) · §6 Loyalty Administration

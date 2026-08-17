@@ -1,4 +1,4 @@
-> **Version:** v2.9.0-role-iam · **Status:** Round 1 من Role & Control Completeness Corrective · **Last Updated:** 2026-08-17
+> **Version:** v2.9.1-role-engage-gov · **Status:** Round 1 + Round 2 (§1/§2/§6) · **Last Updated:** 2026-08-17
 
 # ROLE ACCESS MATRIX
 
@@ -31,15 +31,35 @@
 | لا قفز فوق التفعيل | حساب `pending_activation` لا يصبح `active` بضغطة إدارية ⇒ `409` |
 | لا دخول بحساب غير مُفعّل | `401` عادي — لا يكشف أن الحساب موجود |
 
-## Round 2 — لم يُنفَّذ بعد
+## Round 2 — المُنفَّذ (Engage Governance + Finance)
+
+| Role | Required Capability | UI | API | Authorization | Tests | Status |
+|---|---|---|---|---|---|---|
+| **SuperAdmin** | مركز تحكّم Engage | `engagecontrol` | `engage/effective-state` · `kill-switch` · `policy-overrides` | SuperAdmin فقط للمفتاح | 37 | ✅ **Implemented & Verified** |
+| **SuperAdmin** | الحالة الفعّالة بطبقاتها الأربع | ✅ | `GET /api/engage/effective-state` | نطاق أي شريك | 37 | ✅ |
+| **SuperAdmin** | مختبر الآليات + سجل التجارب | مدخلان | نقاط قائمة | — | 37 | ✅ |
+| **PartnerAdmin** | Engage نطاقه + تقييد فقط | `partnerengage` | `partner/engage/overview` · `policy-overrides` | نطاقه فقط · **لا توسيع** | 37 | ✅ |
+| **PartnerViewer** | Engage نطاقه قراءة فقط | `partnerengage` | نفس النقاط | **صفر mutation** | 37 | ✅ |
+| **AlnadlFinance** | دفتر الإيراد | `revledger` | `admin/revenue-ledger` | **بلا توسيع للتشغيل** | 37 | ✅ |
+
+### ضمانات الحوكمة المُثبَتة (R2)
+
+| القاعدة | الإثبات |
+|---|---|
+| مفتاح الإيقاف لـSuperAdmin حصرًا | `403` لـPartnerAdmin · PartnerViewer · AlnadlFinance |
+| الشريك يُقيّد ولا يوسّع | تقييد نطاقه `201` · تقييد شريك آخر `403` |
+| لا سجل تجارب كامل للشريك | `403` لكلا دوري الشريك · النظرة المُجمّعة `200` |
+| **لا قراءة عابرة للمستأجر** | تمرير `partnerId` لشريك آخر ⇒ **`403` صريح** بدل استبدال صامت |
+| سبب المنع مُفكَّك | `not_in_plan` · `subscription_inactive` · `global_kill_switch` · `scope_override` |
+| المالية لا تُوسَّع للتشغيل | `AlnadlFinance` يُرفض على `/api/ops/queue` |
+| لا تسريب أسرار | صفر `accessToken`/`prompt`/`selection_reason` في أي استجابة |
+
+## Round 3 — لم يُنفَّذ بعد
 
 | Requirement | التصنيف | ملاحظة |
 |---|---|---|
-| §5 Engage Governance UI (SuperAdmin) | **Backend exists / UI missing** | Kill Switch · Policy Overrides · Ledger |
-| §5 Partner Engage Overview | **Backend exists / UI missing** | `/api/partner/engage/overview` جاهزة |
 | §4 Partner Control Center | **Backend partial** | البيانات موجودة، الصفحة الموحّدة لا |
 | §6 Loyalty Administration | **Backend partial** | تلزم نقاط إدارية آمنة بعزل مستأجر |
-| §9 Finance completeness | **Backend partial** | Revenue Ledger Surface |
 | §4 Partner status management | **Truly missing** | لم تُعرَّف الحالات وأثرها بعد |
 
 ## خارج النطاق (§10)

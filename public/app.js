@@ -122,7 +122,7 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
@@ -413,14 +413,14 @@ const App = {
     if(role==='Operator') return App.loadOpsQueue();
     if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive()]);
     if(role==='Runner') return App.loadRunnerQueue();
-    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans()]);
+    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans(), App.loadKillSwitch(), App.loadPolicyOverrides()]);
     if(role==='ProductAdmin') return Promise.all([App.loadMechanics(), App.loadEngageOverview()]);
     if(role==='SafetyReviewer') return Promise.all([App.loadSafety(), App.loadLedger()]);
     if(role==='AlnadlFinance') return Promise.all([App.loadSettlements(), App.loadAudit()]);
-    if(role==='PartnerViewer') return Promise.all([App.loadPartnerOverview(), App.loadSettlements(), App.loadSubscription()]);
+    if(role==='PartnerViewer') return Promise.all([App.loadPartnerOverview(), App.loadSettlements(), App.loadSubscription(), App.loadEngageState(), App.loadPartnerEngage()]);
     // §7: PartnerAdmin يبدأ الآن على Overview، فوجب تحميل بياناتها معه —
     // بدونها تعلق الشاشة الأولى على هيكل تحميل أبدي. اكتشفه التحقق البصري.
-    if(role==='PartnerAdmin'){ S.PARTNER_ID = S.session.user.scope; return Promise.all([App.loadPartnerOverview(), App.loadOwnProperty(), App.loadAdminAll(), App.loadSubscription()]); }
+    if(role==='PartnerAdmin'){ S.PARTNER_ID = S.session.user.scope; return Promise.all([App.loadPartnerOverview(), App.loadEngageState(), App.loadPartnerEngage(), App.loadOwnProperty(), App.loadAdminAll(), App.loadSubscription()]); }
   },
   async loadOwnProperty(){
     const props = await api('GET','/api/admin/properties',null,true);
@@ -600,6 +600,44 @@ const App = {
   // فعليًا شرط "أول عميل مدفوع بدون SQL يدوي".
   // §3.3 — محمّلات الأدوار الجديدة. كل استدعاء هنا يقابل نقطة يسمح بها
   // الخادم لهذا الدور تحديدًا؛ لم تُوسَّع أي صلاحية لتسهيل الواجهة.
+  // R2 §1/§2 — الحالة الفعّالة: طبقة واحدة تشرح لماذا Engage مفعّل أو لا.
+  async loadEngageState(partnerId){
+    const q = partnerId ? `?partnerId=${encodeURIComponent(partnerId)}` : '';
+    try{ S.engageState = await api('GET', '/api/engage/effective-state'+q, null, true); }
+    catch(e){ S.engageState = { error: e.message }; }
+    render();
+  },
+  async loadKillSwitch(){
+    try{ S.killSwitch = await api('GET','/api/admin/engage/kill-switch',null,true); }catch(e){ S.killSwitch=null; }
+    render();
+  },
+  async toggleKillSwitch(enabled){
+    try{
+      await api('POST','/api/admin/engage/kill-switch',{ enabled },true);
+      showToast(t('toast_saved'));
+      await Promise.all([App.loadKillSwitch(), App.loadEngageState(S.engageState && S.engageState.partnerId)]);
+    }catch(e){ showErr(e.message); }
+  },
+  async loadPolicyOverrides(){
+    try{ S.policyOverrides = await api('GET','/api/admin/engage/policy-overrides',null,true); }catch(e){ S.policyOverrides=[]; }
+    render();
+  },
+  async setScopeOverride(scopeType, scopeId, enabled){
+    try{
+      await api('POST','/api/admin/engage/policy-overrides',
+        { scopeType, scopeId, flagKey:'engage_enabled', enabled }, true);
+      showToast(t('toast_saved'));
+      await Promise.all([App.loadPolicyOverrides(), App.loadEngageState(S.engageState && S.engageState.partnerId)]);
+    }catch(e){ showErr(e.message); }
+  },
+  async loadPartnerEngage(){
+    try{ S.partnerEngage = await api('GET','/api/partner/engage/overview',null,true); }catch(e){ S.partnerEngage={}; }
+    render();
+  },
+  async loadRevenueLedger(){
+    try{ S.revenueLedger = await api('GET','/api/admin/revenue-ledger?limit=100',null,true); }catch(e){ S.revenueLedger=[]; }
+    render();
+  },
   async loadMechanics(){
     try{ S.mechanics = await api('GET','/api/admin/mechanics',null,true); }catch(e){ S.mechanics=[]; S.mechErr=e.message; }
     render();
@@ -1343,6 +1381,11 @@ function navGroupsFor(role){
         ['refunds', L('الاسترجاعات','Refunds')],
         ['wallets', L('محافظ الشركات','Corporate Wallets')],
       ]},
+      { id:'SA05', label:L('التجربة','Experience'), items:[
+        ['engagecontrol', L('تحكّم Engage','Engage Control')],
+        ['mechanics', L('مختبر الآليات','Mechanic Lab')],
+        ['ledger', L('سجل التجارب','Experience Ledger')],
+      ]},
       { id:'SA06', label:L('المنصة','Platform'), items:[
         ['branding', L('العلامة التجارية','White Label')],
       ]},
@@ -1380,6 +1423,9 @@ function navGroupsFor(role){
         ['wallets', L('محافظ الشركات','Corporate Wallets')],
         ['billing', L('الباقة','Plan')],
       ]},
+      { id:'P-EXP', label:L('التجربة','Experience'), items:[
+        ['partnerengage', L('Engage','Engage')],
+      ]},
       { id:'P-ADM', label:L('الإدارة','Administration'), items:[
         ['users', L('المستخدمون','Users')],
       ]},
@@ -1393,17 +1439,20 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')]],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
-    AlnadlFinance:[['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
-    PartnerViewer:[['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')],['engagecontrol', S.lang==='ar'?'تحكّم Engage':'Engage Control'],['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
+    AlnadlFinance:[['revledger', S.lang==='ar'?'دفتر الإيراد':'Revenue Ledger'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
+    PartnerViewer:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
     ProductAdmin:[['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['engageoverview', S.lang==='ar'?'نظرة Engage':'Engage Overview']],
     SafetyReviewer:[['safety', S.lang==='ar'?'حوادث السلامة':'Safety Incidents'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
-    PartnerAdmin:[['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    PartnerAdmin:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
   const nav = navByRole[role] || [];
   let inner = '';
   if(S.screen==='kds') inner = renderKds();
   else if(S.screen==='runnerq') inner = renderRunner();
+  else if(S.screen==='engagecontrol') inner = renderEngageControl();
+  else if(S.screen==='partnerengage') inner = renderPartnerEngage();
+  else if(S.screen==='revledger') inner = renderRevenueLedger();
   else if(S.screen==='mechanics') inner = renderMechanicLab();
   else if(S.screen==='engageoverview') inner = renderEngageOverviewAdmin();
   else if(S.screen==='safety') inner = renderSafetyIncidents();
@@ -1769,6 +1818,151 @@ function renderAudit(){
 // §3.3 — شاشات ProductAdmin و SafetyReviewer.
 // مبدأ حاكم: لا يظهر أي إجراء لا تسمح به APIs الحالية لهذا الدور. الإخفاء
 // ليس حماية (الخادم يفرض RBAC)، لكن إظهار زر يفشل حتمًا تجربة سيئة وتضليل.
+/* ===================== R2 §1/§2 — Engage Governance ======================
+   مبدأ حاكم: الواجهة تعكس RBAC ولا تتجاوزه. مفتاح الإيقاف العام يظهر
+   لـSuperAdmin فقط لأن الخادم يحصره به؛ والشريك يرى **أثره** عليه بلغة
+   أعمال دون زر يفشل. */
+
+// بطاقة الحالة الفعّالة — مشتركة بين SuperAdmin والشريك، بمستوى تفصيل مختلف.
+function engageEffectiveCard(st, isPartnerView){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  if(st===null) return '<div class="panel"><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div></div>';
+  if(st.error) return `<div class="panel"><div class="statepanel on-dark"><div class="glyph">⚠</div><h4>${L('تعذّر قراءة الحالة','Could not read state')}</h4></div></div>`;
+
+  // سبب المنع بلغة أعمال — لا أسماء أعلام ولا نقاط برمجية (§13)
+  const REASON = {
+    not_in_plan:            L('غير متاح في الباقة الحالية','Not included in the current plan'),
+    subscription_inactive:  L('الاشتراك غير فعّال','Subscription is not active'),
+    global_kill_switch:     L('موقوف على مستوى المنصة من قِبل النادل','Paused platform-wide by ALNADL'),
+    scope_override:         L('مُقيَّد على مستوى العقار أو المنطقة','Restricted at property or zone level'),
+  };
+  const on = st.effective === true;
+  const lay = st.layers || {};
+  const row = (label, ok, note) => `<div class="totalline" style="color:var(--ink-200)">
+      <span>${label}</span>
+      <span style="display:flex;align-items:center;gap:7px">
+        ${note?`<span class="ph" style="font-size:11px">${note}</span>`:''}
+        <span class="badge ${ok?'ok':'cancel'}">${ok?L('نعم','Yes'):L('لا','No')}</span>
+      </span></div>`;
+
+  return `
+  <div class="panel">
+    <h3>${L('حالة Engage الفعّالة','Effective Engage State')}</h3>
+    <div class="attentionrow ${on?'':'high'}" style="background:${on?'var(--sage-100)':'var(--red-100)'};margin-bottom:14px">
+      <span class="dot" style="background:${on?'var(--sage-500)':'var(--red-500)'}"></span>
+      <span class="txt" style="color:${on?'#20452F':'#5E1F1B'}">
+        <b>${on?L('مُفعّل','Active'):L('غير مُفعّل','Not active')}</b>
+        ${!on && st.blockedBy ? ' — ' + (REASON[st.blockedBy]||st.blockedBy) : ''}
+      </span>
+    </div>
+    ${row(L('مشمول في الباقة','Included in plan'), lay.plan && lay.plan.entitlement, lay.plan && lay.plan.code)}
+    ${row(L('الاشتراك فعّال','Subscription active'), lay.subscription && lay.subscription.active, lay.subscription && lay.subscription.status)}
+    ${row(L('مسموح على مستوى المنصة','Allowed platform-wide'), lay.globalKillSwitch && lay.globalKillSwitch.allowed,
+          isPartnerView ? L('يتحكم به النادل','Controlled by ALNADL') : '')}
+    ${(lay.scopeOverrides && lay.scopeOverrides.length)
+      ? `<div style="margin-top:12px">
+          <label style="display:block;font-size:12px;font-weight:700;color:var(--ink-300);margin-bottom:6px">${L('تقييدات النطاق','Scope restrictions')}</label>
+          ${lay.scopeOverrides.map(o=>`<div class="attentionrow ${o.enabled?'medium':'high'}">
+            <span class="dot"></span>
+            <span class="txt">${o.scopeType==='property'?L('عقار','Property'):L('منطقة','Zone')}: ${esc(o.scopeId)}</span>
+            <span class="sev">${o.enabled?L('مسموح','Allowed'):L('موقوف','Paused')}</span>
+          </div>`).join('')}
+        </div>`
+      : `<p class="ph" style="margin-top:10px">${L('لا توجد تقييدات على مستوى العقار أو المنطقة','No property or zone restrictions')}</p>`}
+  </div>`;
+}
+
+// §1 — مركز تحكم Engage لـSuperAdmin
+function renderEngageControl(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const ks = S.killSwitch;
+  const allowed = ks ? (ks.enabled !== false) : null;
+  const partners = S.tenants || [];
+  const sel = S.engageState && S.engageState.partnerId;
+
+  return `
+  <div class="panel">
+    <h3>${L('مفتاح الإيقاف العام','Global Kill Switch')}</h3>
+    <p class="ph">${L('يوقف Engage فورًا على المنصة كاملة. لا يمكن لأي شريك تجاوزه — التجارب الجارية تنتهي بهدوء ولا تنكسر رحلة أي طلب.','Pauses Engage instantly across the entire platform. No partner can override it — in-flight experiences end calmly and no order journey breaks.')}</p>
+    ${ks===null ? '<div class="skeleton skeleton-row"></div>' : `
+      <div class="attentionrow ${allowed?'':'high'}" style="background:${allowed?'var(--sage-100)':'var(--red-100)'}">
+        <span class="dot" style="background:${allowed?'var(--sage-500)':'var(--red-500)'}"></span>
+        <span class="txt" style="color:${allowed?'#20452F':'#5E1F1B'}"><b>${allowed?L('Engage مسموح على المنصة','Engage allowed platform-wide'):L('Engage موقوف على المنصة','Engage paused platform-wide')}</b></span>
+      </div>
+      <div class="actrow">
+        ${allowed
+          ? `<button class="btn-small" style="color:var(--red-500);border-color:var(--red-500)" onclick="App.toggleKillSwitch(false)">${L('إيقاف Engage على المنصة','Pause Engage platform-wide')}</button>`
+          : `<button class="btn-small brass" onclick="App.toggleKillSwitch(true)">${L('استئناف Engage','Resume Engage')}</button>`}
+      </div>`}
+  </div>
+
+  <div class="panel">
+    <h3>${L('حالة شريك','Partner State')}</h3>
+    <p class="ph">${L('اختر شريكًا لعرض طبقات التفعيل الأربع وسبب المنع إن وُجد','Pick a partner to see the four activation layers and the blocking reason if any')}</p>
+    <div class="formfield">
+      <select onchange="App.loadEngageState(this.value)">
+        <option value="">${L('— اختر شريكًا —','— select a partner —')}</option>
+        ${partners.map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(S.lang==='ar'?p.name_ar:p.name_en)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  ${sel ? engageEffectiveCard(S.engageState, false) : ''}
+
+  <div class="panel">
+    <h3>${L('تقييدات السياسة','Policy Overrides')}</h3>
+    <p class="ph">${L('التقييد يعمل باتجاه واحد: يستطيع تضييق ما تسمح به الباقة، ولا يستطيع توسيعه أبدًا.','Overrides work one way only: they can narrow what the plan allows, never widen it.')}</p>
+    ${S.policyOverrides===null ? '<div class="skeleton skeleton-row"></div>'
+      : S.policyOverrides.length===0 ? `<div class="statepanel on-dark"><div class="glyph">—</div><h4>${L('لا تقييدات','No overrides')}</h4><p>${L('كل العقارات والمناطق تتبع إعداد الباقة.','Every property and zone follows the plan setting.')}</p></div>`
+      : `<table class="datatable"><tr><th>${L('النطاق','Scope')}</th><th>${L('المُعرّف','Id')}</th><th>${L('المفتاح','Key')}</th><th>${L('بواسطة','By')}</th></tr>
+        ${S.policyOverrides.map(o=>`<tr><td>${esc(o.scope_type||'')}</td><td>${esc(o.scope_id||'')}</td><td>${esc(o.policy_key||'')}</td><td>${esc(o.set_by||'')}</td></tr>`).join('')}</table>`}
+  </div>`;
+}
+
+// §2 — Engage للشريك: نظرة نطاقه فقط، بلا سجل كامل وبلا مفتاح إيقاف
+function renderPartnerEngage(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const canRestrict = S.session && S.session.user.role === 'PartnerAdmin';
+  const ov = S.partnerEngage;
+  return `
+  ${engageEffectiveCard(S.engageState, true)}
+  <div class="panel">
+    <h3>${L('نشاط التجربة','Experience Activity')}</h3>
+    ${ov===null ? '<div class="skeleton skeleton-row"></div>'
+      : `<div class="kpirow" style="margin-bottom:0">
+          <div class="kpi"><div class="lbl">${L('جلسات','Sessions')}</div><div class="val">${ov.sessions==null?'—':ov.sessions}</div></div>
+          <div class="kpi"><div class="lbl">${L('لحظات','Moments')}</div><div class="val">${ov.moments==null?'—':ov.moments}</div></div>
+          <div class="kpi"><div class="lbl">${L('تصاريح','Passes')}</div><div class="val">${ov.passes==null?'—':ov.passes}</div></div>
+        </div>`}
+    <p class="ph" style="margin-top:12px">${L('أرقام مُجمّعة لشريكك فقط. لا يُعرض محتوى أي تجربة فردية ولا أي بيانات ضيف.','Aggregates for your partner only. No individual experience content or guest data is shown.')}</p>
+  </div>
+  ${canRestrict ? `<div class="panel">
+    <h3>${L('تقييد داخل نطاقك','Restrict within your scope')}</h3>
+    <p class="ph">${L('تستطيع إيقاف Engage على عقار أو منطقة تخصّك. لا تستطيع تفعيله فوق ما تسمح به باقتك أو ما توقفه المنصة.','You can pause Engage on a property or zone you own. You cannot enable it beyond what your plan allows or what the platform has paused.')}</p>
+    ${(S.admin && S.admin.zones && S.admin.zones.length)
+      ? `<table class="datatable"><tr><th>${L('المنطقة','Zone')}</th><th></th></tr>
+          ${S.admin.zones.map(z=>`<tr><td>${esc(S.lang==='ar'?z.name_ar:z.name_en)}</td>
+            <td><button class="btn-small" style="color:var(--red-500);border-color:var(--red-500)" onclick="App.setScopeOverride('zone','${esc(z.id)}',false)">${L('إيقاف هنا','Pause here')}</button>
+                <button class="btn-small" onclick="App.setScopeOverride('zone','${esc(z.id)}',true)">${L('السماح','Allow')}</button></td></tr>`).join('')}</table>`
+      : `<p class="ph">${L('لا مناطق بعد','No zones yet')}</p>`}
+  </div>`:''}`;
+}
+
+// §6 — دفتر الإيراد
+function renderRevenueLedger(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const led = S.revenueLedger;
+  return `
+  <div class="panel">
+    <h3>${L('دفتر الإيراد','Revenue Ledger')}</h3>
+    <p class="ph">${L('آخر 100 قيد · مُقيَّد بنطاقك تلقائيًا من الخادم','Last 100 entries · automatically scoped to your permissions server-side')}</p>
+    ${led===null ? '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>'
+      : led.length===0 ? `<div class="statepanel on-dark"><div class="glyph">—</div><h4>${L('لا قيود','No entries')}</h4><p>${L('لم تُسجَّل أي حركة إيراد بعد.','No revenue movement recorded yet.')}</p></div>`
+      : `<table class="datatable"><tr><th>${L('الطلب','Order')}</th><th>${L('النوع','Type')}</th><th>${L('الأساس','Base')}</th><th>${L('حصة الشريك','Partner')}</th><th>${L('رسم تقني','Tech')}</th></tr>
+        ${led.slice(0,100).map(r=>`<tr><td>${esc(r.order_id||'')}</td><td>${esc(r.type||'sale')}</td>
+          <td>${money(r.eligible_base||0)}</td><td>${money(r.partner_amount||0)}</td><td>${money(r.tech_fee||0)}</td></tr>`).join('')}</table>`}
+  </div>`;
+}
+
 function renderMechanicLab(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const m = S.mechanics;
