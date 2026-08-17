@@ -254,6 +254,14 @@ on('GET', '/api/qr/:token', null, async (req, res, p) => {
     JOIN zones z ON z.id = pt.zone_id JOIN properties pr ON pr.id = z.property_id
     WHERE q.token = ?`).get(p.token);
   if (qrPartner) partnerStatus.assertCan(qrPartner.partner_id, 'qrResolves', { guestFacing: true });
+  // G3: منطقة معطّلة تمنع الرحلات الجديدة عبرها -- بنفس الرسالة المحايدة
+  // التي يراها الضيف عند إيقاف الشريك، فلا يُكشف سبب تشغيلي داخلي.
+  const qrZone = db.prepare(`
+    SELECT z.status FROM qr_tokens q JOIN points pt ON pt.id = q.point_id
+    JOIN zones z ON z.id = pt.zone_id WHERE q.token = ?`).get(p.token);
+  if (qrZone && qrZone.status === 'Inactive') {
+    return sendJSON(res, 409, { error: partnerStatus.GUEST_UNAVAILABLE_EN });
+  }
   const row = db.prepare('SELECT * FROM qr_tokens WHERE token = ?').get(p.token);
   if (!row || !row.active) return sendJSON(res, 404, { error: 'QR غير صالح / Invalid QR' });
   logQrEvent(p.token, 'scan', null);
@@ -365,6 +373,11 @@ on('POST', '/api/orders', null, async (req, res) => {
   // §4 — منع الالتزامات الجديدة. يُفحص عبر المُحلِّل المركزي وليس بشرط
   // منثور، ورسالته محايدة للضيف. الطلبات المفتوحة لا تتأثر إطلاقًا.
   partnerStatus.assertCan(property.partner_id, 'createOrder', { guestFacing: true });
+  // G3: لا طلب جديد من منطقة معطّلة. الطلبات القائمة لا تتأثر إطلاقًا --
+  // فهي تحمل zone_id بنفسها والطابور يقرأ عبر LEFT JOIN.
+  if (zone && zone.status === 'Inactive') {
+    return sendJSON(res, 409, { error: partnerStatus.GUEST_UNAVAILABLE_EN });
+  }
 
   if (!Array.isArray(items) || items.length === 0) return sendJSON(res, 400, { error: 'Empty cart' });
 
@@ -1659,6 +1672,48 @@ on('GET', '/api/admin/points', ['SuperAdmin', 'SiteManager', 'PartnerAdmin'], as
   for (const pt of points) pt.token = (db.prepare('SELECT token FROM qr_tokens WHERE point_id = ? AND active=1').get(pt.id) || {}).token;
   sendJSON(res, 200, points);
 });
+/* ---- G3: Zone lifecycle (Role Corrective R3) ------------------------------
+   zones.status كان موجودًا في المخطط **وغير مُنفَّذ إطلاقًا** -- نفس نمط
+   partners.status قبل R2: وسم بلا أثر.
+
+   تدقيق العلاقات قبل التصميم (كما طُلب):
+     * الطلب يحمل zone_id و point_id **بنفسه**، والطابور يقرأ عبر LEFT JOIN
+       -> تعطيل منطقة **لا يكسر أي طلب قائم** ولا يُخفيه من KDS/Runner
+     * رحلة الضيف تمرّ عبر point.active و qr.active، لا عبر zone.status
+       -> فالإنفاذ يجب أن يُضاف صراحةً عند حلّ QR وإنشاء الطلب
+     * لا Hard Delete إطلاقًا: حذف منطقة يقطع مرجع تاريخي في orders
+
+   لذلك: نموذج حالة (Active/Inactive) بأثر Server-side على **الرحلات الجديدة
+   فقط**، والتاريخ والطلبات المفتوحة تبقى سليمة تمامًا. */
+on('PATCH', '/api/admin/zones/:id', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const before = db.prepare('SELECT * FROM zones WHERE id = ?').get(p.id);
+  if (!before) return sendJSON(res, 404, { error: 'Zone not found' });
+  assertTenantWrite(session, zonePartnerId(p.id));
+
+  const nextStatus = b.status !== undefined ? b.status : before.status;
+  if (!['Active', 'Inactive'].includes(nextStatus)) {
+    return sendJSON(res, 400, { error: 'status must be Active or Inactive' });
+  }
+  const nameAr = b.name_ar !== undefined ? String(b.name_ar).trim() : before.name_ar;
+  const nameEn = b.name_en !== undefined ? String(b.name_en).trim() : before.name_en;
+  if (!nameAr || !nameEn) return sendJSON(res, 400, { error: 'name_ar and name_en cannot be empty' });
+  const type = b.type !== undefined ? b.type : before.type;
+
+  db.prepare('UPDATE zones SET name_ar=?, name_en=?, type=?, status=? WHERE id=?')
+    .run(nameAr, nameEn, type, nextStatus, p.id);
+  audit(session.username, session.role, 'zone_update', p.id,
+    { name_ar: before.name_ar, name_en: before.name_en, type: before.type, status: before.status },
+    { name_ar: nameAr, name_en: nameEn, type, status: nextStatus }, b.reason || null);
+
+  // ما لم يحدث عمدًا: لا حذف، ولا مساس بالنقاط أو الرموز أو الطلبات.
+  // النقاط تبقى كما هي -- تعطيل المنطقة يمنع الرحلات الجديدة عبرها فقط.
+  const openOrders = db.prepare(`
+    SELECT COUNT(*) c FROM orders o JOIN points pt ON pt.id = o.point_id
+    WHERE pt.zone_id = ? AND o.status NOT IN ('Delivered','Cancelled','Refunded','Delivery Failed')`).get(p.id).c;
+  sendJSON(res, 200, { id: p.id, status: nextStatus, openOrdersUnaffected: openOrders });
+});
+
 on('POST', '/api/admin/points', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
   assertTenantWrite(session, zonePartnerId(b.zoneId));
@@ -1670,6 +1725,69 @@ on('POST', '/api/admin/points', ['SuperAdmin', 'PartnerAdmin'], async (req, res,
   audit(session.username, session.role, 'create', id, null, { ...b, token }, null);
   sendJSON(res, 201, { id, token });
 });
+/* ---- G2: Bulk QR generation (Role Corrective R3) --------------------------
+   دليل النظام يَعِد صراحةً بـ«توليد بالجملة: حتى 50 رمزًا دفعة واحدة»،
+   والمسار لم يكن موجودًا -- **وعد في الوثائق بما لا يوجد**، وهو أسوأ من
+   نقص صامت لأن المشغّل يخطّط على أساسه.
+
+   يُنفَّذ بنفس منطق الإنشاء المفرد حرفيًا (نفس شكل المُعرّف، نفس الرمز،
+   نفس التدقيق) -- لا منطق موازٍ يمكن أن ينحرف عنه لاحقًا. الحد 50 من
+   التوثيق نفسه، ويُفرض على الخادم لا على الواجهة. */
+const BULK_POINTS_MAX = 50;
+
+on('POST', '/api/admin/points/bulk', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  requireFields(b, ['zoneId', 'count']);
+  const zone = db.prepare('SELECT id, status FROM zones WHERE id = ?').get(b.zoneId);
+  if (!zone) return sendJSON(res, 404, { error: 'Zone not found' });
+  assertTenantWrite(session, zonePartnerId(b.zoneId));
+
+  const count = parseInt(b.count, 10);
+  if (!Number.isFinite(count) || count < 1) return sendJSON(res, 400, { error: 'count must be at least 1' });
+  if (count > BULK_POINTS_MAX) {
+    return sendJSON(res, 400, { error: `count cannot exceed ${BULK_POINTS_MAX} per batch` });
+  }
+  // التسمية: بادئة + ترقيم متسلسل. تُنظَّف لأنها تظهر للضيف على الشاشة.
+  const prefix = String(b.labelPrefix || b.prefix || 'Table').trim().slice(0, 24);
+  if (!prefix) return sendJSON(res, 400, { error: 'labelPrefix cannot be empty' });
+  const startAt = Number.isFinite(parseInt(b.startAt, 10)) ? parseInt(b.startAt, 10) : 1;
+  const type = b.type || 'Table';
+
+  const created = [];
+  const now = Date.now();
+  // معاملة واحدة: إما تُنشأ الدفعة كاملة أو لا شيء -- دفعة نصف مكتملة
+  // تترك المشغّل يخمّن أي الرموز طُبع وأيها لم يُنشأ.
+  db.exec('BEGIN');
+  try {
+    for (let i = 0; i < count; i++) {
+      // تصادم المُعرّفات: النمط القائم 'PT-' + بايتين = 65,536 احتمالًا فقط،
+      // وهو مقبول للإنشاء المفرد لكنه يفشل حتمًا في دفعات متتابعة (اكتشفه
+      // اختبار count=50 على قاعدة تحمل نقاطًا سابقة). تُعاد المحاولة حتى
+      // يُعثر على مُعرّف حرّ بدل إسقاط الدفعة كاملة على تصادم عشوائي.
+      let id = null;
+      for (let attempt = 0; attempt < 40 && !id; attempt++) {
+        const candidate = 'PT-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+        if (!db.prepare('SELECT 1 FROM points WHERE id = ?').get(candidate)) id = candidate;
+      }
+      if (!id) throw new Error('could not allocate a unique point id');
+      const label = `${prefix} ${startAt + i}`;
+      db.prepare('INSERT INTO points (id,zone_id,code,label,type,active) VALUES (?,?,?,?,?,1)')
+        .run(id, b.zoneId, id, label, type);
+      const token = crypto.randomBytes(6).toString('hex');
+      db.prepare('INSERT INTO qr_tokens (id,point_id,token,active,created_at) VALUES (?,?,?,1,?)')
+        .run(uid('qr'), id, token, now);
+      created.push({ id, label, token });
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return sendJSON(res, 500, { error: 'Bulk generation failed and was rolled back' });
+  }
+  audit(session.username, session.role, 'points_bulk_create', b.zoneId, null,
+    { count, prefix, startAt, type, ids: created.map(c => c.id) }, null);
+  sendJSON(res, 201, { zoneId: b.zoneId, count: created.length, points: created });
+});
+
 on('PATCH', '/api/admin/points/:id', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
   assertTenantWrite(session, pointPartnerId(p.id));

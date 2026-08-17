@@ -122,12 +122,12 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, partnerProfile:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
   // token the server handed us plus eligibility — never any policy,
   // personality reasoning, or AI internals. `moment.payload` is the
@@ -413,7 +413,7 @@ const App = {
     if(role==='Operator') return App.loadOpsQueue();
     if(role==='SiteManager') return Promise.all([App.loadOpsQueue(), App.loadLive(), App.loadSiteExceptions()]);
     if(role==='Runner') return App.loadRunnerQueue();
-    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans(), App.loadKillSwitch(), App.loadPolicyOverrides()]);
+    if(role==='SuperAdmin') return Promise.all([App.loadAdminAll(), App.loadTenants(), App.loadPlans(), App.loadAdminPlans(), App.loadKillSwitch(), App.loadPolicyOverrides(), App.loadProperties()]);
     if(role==='ProductAdmin') return Promise.all([App.loadMechanics(), App.loadEngageOverview()]);
     if(role==='SafetyReviewer') return Promise.all([App.loadSafety(), App.loadLedger()]);
     if(role==='AlnadlFinance') return Promise.all([App.loadSettlements(), App.loadAudit()]);
@@ -705,7 +705,7 @@ const App = {
     S.partnerProfile = { partnerId, loading:false, overview, subscription, users, zones, outlets, settlements, engage };
     render();
   },
-  openPartnerProfile(partnerId){ S.screen='partnerprofile'; App.loadPartnerProfile(partnerId); App.loadPartnerStatus(partnerId); },
+  openPartnerProfile(partnerId){ S.screen='partnerprofile'; App.loadPartnerProfile(partnerId); App.loadPartnerStatus(partnerId); App.loadProperties(); },
   async loadEngageState(partnerId){
     const q = partnerId ? `?partnerId=${encodeURIComponent(partnerId)}` : '';
     try{ S.engageState = await api('GET', '/api/engage/effective-state'+q, null, true); }
@@ -741,6 +741,100 @@ const App = {
   },
   async loadRevenueLedger(){
     try{ S.revenueLedger = await api('GET','/api/admin/revenue-ledger?limit=100',null,true); }catch(e){ S.revenueLedger=[]; }
+    render();
+  },
+  /* ===== R3 G1 — إجراءات مختبر الآليات لـProductAdmin.
+     كل استدعاء هنا يقابل نقطة يسمح بها الخادم لهذا الدور اليوم. لم تُوسَّع
+     صلاحية واحدة -- الشاشة كانت عرضًا فقط (صفر onclick) فأصبحت رحلة. ===== */
+  openProposeMechanic(){ S.ui.proposeMechanic = { submitting:false, error:null }; render(); },
+  dismissPropose(){ S.ui.proposeMechanic = null; render(); },
+  async submitPropose(){
+    const st = S.ui.proposeMechanic; if(!st || st.submitting) return;
+    const name = document.getElementById('mkName')?.value?.trim();
+    const personality = document.getElementById('mkPersonality')?.value;
+    const titleAr = document.getElementById('mkTitleAr')?.value?.trim();
+    const bodyAr = document.getElementById('mkBodyAr')?.value?.trim();
+    const bodyEn = document.getElementById('mkBodyEn')?.value?.trim();
+    if(!name || !bodyAr || !bodyEn){
+      S.ui.proposeMechanic.error = S.lang==='ar'?'الاسم ونصّا اللحظة مطلوبة':'Name and both moment texts are required';
+      render(); return;
+    }
+    S.ui.proposeMechanic.submitting = true; S.ui.proposeMechanic.error = null; render();
+    try{
+      await api('POST','/api/admin/mechanics/propose',
+        { name, personality, category:'static_fallback',
+          pool:[{ title_ar:titleAr||'', title_en:titleAr||'', body_ar:bodyAr, body_en:bodyEn }] }, true);
+      showToast(t('toast_saved'));
+      S.ui.proposeMechanic = null;
+      await App.loadMechanics();
+    }catch(e){ S.ui.proposeMechanic.submitting=false; S.ui.proposeMechanic.error=e.message; render(); }
+  },
+  async simulateMechanic(id){
+    try{
+      const r = await api('POST',`/api/admin/mechanics/${id}/simulate`, { sampleCount: 100 }, true);
+      S.simResult = { id, ...r }; showToast(t('toast_saved')); await App.loadMechanics();
+    }catch(e){ showErr(e.message); }
+  },
+  openTransition(id, toState, currentState){
+    S.ui.mechTransition = { id, toState, currentState, submitting:false, error:null }; render();
+  },
+  dismissTransition(){ S.ui.mechTransition = null; render(); },
+  async submitTransition(){
+    const st = S.ui.mechTransition; if(!st || st.submitting) return;
+    const reason = document.getElementById('mtReason')?.value?.trim();
+    if(!reason){ S.ui.mechTransition.error = S.lang==='ar'?'السبب مطلوب':'A reason is required'; render(); return; }
+    const pct = document.getElementById('mtCanary')?.value;
+    S.ui.mechTransition.submitting = true; S.ui.mechTransition.error = null; render();
+    try{
+      const payload = { toState: st.toState, reason };
+      if(st.toState === 'canary' && pct) payload.canaryPercentage = parseFloat(pct);
+      await api('POST',`/api/admin/mechanics/${st.id}/transition`, payload, true);
+      showToast(t('toast_saved'));
+      S.ui.mechTransition = null;
+      await App.loadMechanics();
+    }catch(e){ S.ui.mechTransition.submitting=false; S.ui.mechTransition.error=e.message; render(); }
+  },
+
+  /* ===== R3 G2 — توليد QR بالجملة (وعد الدليل: حتى 50) ===== */
+  openBulkPoints(zoneId){ S.ui.bulkPoints = { zoneId, submitting:false, error:null, result:null }; render(); },
+  dismissBulkPoints(){ S.ui.bulkPoints = null; render(); },
+  async submitBulkPoints(){
+    const st = S.ui.bulkPoints; if(!st || st.submitting) return;
+    const count = parseInt(document.getElementById('bpCount')?.value, 10);
+    const prefix = document.getElementById('bpPrefix')?.value?.trim();
+    const startAt = parseInt(document.getElementById('bpStart')?.value, 10) || 1;
+    if(!Number.isFinite(count) || count < 1 || count > 50){
+      S.ui.bulkPoints.error = S.lang==='ar'?'العدد بين 1 و50':'Count must be between 1 and 50'; render(); return;
+    }
+    if(!prefix){ S.ui.bulkPoints.error = S.lang==='ar'?'البادئة مطلوبة':'A label prefix is required'; render(); return; }
+    S.ui.bulkPoints.submitting = true; S.ui.bulkPoints.error = null; render();
+    try{
+      const r = await api('POST','/api/admin/points/bulk',
+        { zoneId: st.zoneId, count, labelPrefix: prefix, startAt, type:'Table' }, true);
+      S.ui.bulkPoints = { ...st, submitting:false, result:r };
+      showToast(t('toast_saved'));
+      await App.loadAdminAll();
+    }catch(e){ S.ui.bulkPoints.submitting=false; S.ui.bulkPoints.error=e.message; render(); }
+  },
+
+  /* ===== R3 G3 — دورة حياة المنطقة ===== */
+  async setZoneStatus(zoneId, status){
+    try{
+      await api('PATCH',`/api/admin/zones/${zoneId}`, { status }, true);
+      showToast(t('toast_saved')); await App.loadAdminAll();
+    }catch(e){ showErr(e.message); }
+  },
+
+  /* ===== R3 G4 — سياسة التسليم على العقار (نفس النقطة القائمة) ===== */
+  async setDeliveryGrouping(propertyId, value){
+    try{
+      await api('PATCH',`/api/admin/properties/${propertyId}`, { deliveryGrouping: value }, true);
+      showToast(t('toast_saved')); await App.loadOwnProperty();
+      if(S.partnerProfile) await App.loadPartnerProfile(S.partnerProfile.partnerId);
+    }catch(e){ showErr(e.message); }
+  },
+  async loadProperties(){
+    try{ S.properties = await api('GET','/api/admin/properties',null,true); }catch(e){ S.properties=[]; }
     render();
   },
   async loadMechanics(){
@@ -1622,7 +1716,10 @@ function renderStaffShell(){
   ${S.ui.openOrder? renderOrderDetail(S.ui.openOrder):''}
   ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}
   ${S.ui.refundFor? renderRefundModal():''}
-  ${S.ui.statusChange? renderStatusChangeModal():''}`;
+  ${S.ui.statusChange? renderStatusChangeModal():''}
+  ${S.ui.proposeMechanic? renderProposeModal():''}
+  ${S.ui.mechTransition? renderMechTransitionModal():''}
+  ${S.ui.bulkPoints? renderBulkPointsModal():''}`;
 }
 
 // UX-2 (spec R03 "Delivery exception — Destination + order + reason
@@ -1842,7 +1939,16 @@ function renderAdminZones(){
         <div class="darkfield"><label>${t('zoneType')}</label><select id="zoneType"><option>Lounge</option><option>Leisure</option><option>Business</option><option>Guest Room</option></select></div>
       </div><button class="btn-small brass" onclick="App.addZone()">+ ${t('addZone')}</button>
       <div class="section-sm">${t('existingZones')}</div>
-      ${S.admin.zones.map(z=>`<div class="pointrow"><div class="meta"><b>${S.lang==='ar'?z.name_ar:z.name_en}</b><span>${z.type} · ${z.id}</span></div></div>`).join('')}
+      ${S.admin.zones.map(z=>`<div class="pointrow"><div class="meta">
+        <b>${S.lang==='ar'?z.name_ar:z.name_en} <span class="badge ${z.status==='Inactive'?'cancel':'ok'}">${z.status==='Inactive'?(S.lang==='ar'?'معطّلة':'Inactive'):(S.lang==='ar'?'فعّالة':'Active')}</span></b>
+        <span>${z.type} · ${z.id}</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${z.status==='Inactive'
+            ? `<button class="btn-small brass" onclick="App.setZoneStatus('${z.id}','Active')">${S.lang==='ar'?'إعادة تفعيل':'Reactivate'}</button>`
+            : `<button class="btn-small" style="color:var(--red-500);border-color:var(--red-500)" onclick="App.setZoneStatus('${z.id}','Inactive')">${S.lang==='ar'?'تعطيل':'Deactivate'}</button>`}
+          <button class="btn-small" onclick="App.openBulkPoints('${z.id}')">${S.lang==='ar'?'توليد QR بالجملة':'Bulk QR'}</button>
+        </div></div>`).join('')}
+      <p class="ph" style="margin-top:8px">${S.lang==='ar'?'تعطيل المنطقة يمنع الرحلات الجديدة عبرها فقط — الطلبات القائمة تُكمل، ولا يُحذف أي شيء.':'Deactivating a zone only blocks new journeys through it — open orders continue and nothing is deleted.'}</p>
     </div>
     <div class="panel"><h3>${t('addPoint')}</h3>
       <div class="formgrid">
@@ -2099,6 +2205,25 @@ function renderRefundModal(){
 /* Corrective — حالة الشريك وإجراءات الانتقال داخل ملف الشريك.
    لا يُعرض إلا ما تُرجعه allowedTransitions من الخادم: الخيار المحجوب
    (مثل الإغلاق مع طلبات مفتوحة) لا يظهر كزر يفشل، بل يُصرَّح بسببه. */
+/* G4 — سياسة تجميع التسليم على العقار.
+   النقطة PATCH /api/admin/properties/:id موجودة منذ Q01 وبعزل مُثبَت،
+   ولم يكن لها أي مرجع في الواجهة -- قرار تشغيلي حقيقي محجوب. تُستخدم
+   النقطة نفسها بلا منطق موازٍ. */
+function renderDeliveryGrouping(partnerId, L){
+  const props = (S.properties || []).filter(x => x.partner_id === partnerId);
+  if(!props.length) return '';
+  return `<div style="margin-top:12px">
+    <label style="display:block;font-size:12px;font-weight:700;color:var(--ink-300);margin-bottom:6px">${L('سياسة التسليم','Delivery policy')}</label>
+    ${props.map(pr=>`<div class="totalline" style="color:var(--ink-200)">
+      <span>${esc(S.lang==='ar'?pr.name_ar:pr.name_en)}</span>
+      <span style="display:flex;gap:6px">
+        <button class="btn-small ${pr.delivery_grouping!=='separate'?'brass':''}" onclick="App.setDeliveryGrouping('${esc(pr.id)}','grouped')">${L('مُجمَّع','Grouped')}</button>
+        <button class="btn-small ${pr.delivery_grouping==='separate'?'brass':''}" onclick="App.setDeliveryGrouping('${esc(pr.id)}','separate')">${L('منفصل','Separate')}</button>
+      </span></div>`).join('')}
+    <p class="ph" style="margin-top:6px">${L('المُجمَّع: الراكض يستلم كل شيء بعد جهوزية الجميع. المنفصل: كل منفذ يُسلَّم فور جهوزيته.','Grouped: the runner collects everything once all outlets are ready. Separate: each outlet is delivered as soon as it is ready.')}</p>
+  </div>`;
+}
+
 function renderPartnerStatusCard(partnerId){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const st = S.partnerStatusInfo;
@@ -2259,6 +2384,7 @@ function renderPartnerProfile(){
     <div class="panel"><h3>${L('العمليات','Operations')}</h3>
       ${line(L('المنافذ','Outlets'), outlets.length)}
       ${line(L('المناطق','Zones'), zones.length)}
+      ${renderDeliveryGrouping(pf.partnerId, L)}
       <div class="actrow" style="flex-wrap:wrap">
         <button class="btn-small" onclick="App.setStaffScreen('outlets')">${L('المنافذ','Outlets')}</button>
         <button class="btn-small" onclick="App.setStaffScreen('zones')">${L('المناطق ورموز QR','Zones & QR')}</button>
@@ -2388,12 +2514,104 @@ function renderMechanicLab(){
     <p class="ph">${L('دورة حياة من ثماني حالات · التجريبي مسقوف بـ5% · الترقية تتطلب حدًّا أدنى من العيّنة','Eight-state lifecycle · Canary capped at 5% · Promotion requires a minimum sample')}</p>
     ${m===null ? '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>'
       : m.length===0 ? `<div class="statepanel on-dark"><div class="glyph">—</div><h4>${L('لا توجد آليات','No mechanics')}</h4><p>${L('لم تُقترح أي آلية تجربة بعد.','No experience mechanic has been proposed yet.')}</p></div>`
-      : `<table class="datatable"><tr><th>${L('الاسم','Name')}</th><th>${L('الشخصية','Personality')}</th><th>${L('الحالة','State')}</th><th>${L('الفئة','Category')}</th></tr>
+      : `<table class="datatable"><tr><th>${L('الاسم','Name')}</th><th>${L('الشخصية','Personality')}</th><th>${L('الحالة','State')}</th><th>${L('الفئة','Category')}</th><th>${L('إجراءات','Actions')}</th></tr>
         ${m.map(x=>`<tr><td>${esc(x.name||'')}</td><td>${esc(x.personality||'—')}</td>
           <td><span class="badge ${x.lifecycle_state==='promoted'?'ok':x.lifecycle_state==='rejected'||x.lifecycle_state==='held'?'cancel':'pending'}">${STATES[x.lifecycle_state]||esc(x.lifecycle_state||'')}</span></td>
-          <td>${esc(x.category||'')}</td></tr>`).join('')}</table>`}
-  </div>`;
+          <td>${esc(x.category||'')}</td>
+          <td>${mechanicActions(x, L, STATES)}</td></tr>`).join('')}</table>`}
+    <div class="actrow"><button class="btn-small brass" onclick="App.openProposeMechanic()">+ ${L('اقتراح آلية','Propose mechanic')}</button></div>
+  </div>
+  ${S.simResult ? `<div class="panel"><h3>${L('نتيجة المحاكاة','Simulation result')}</h3>
+    <p class="ph">${esc(S.simResult.id)}</p>
+    <div class="body" style="font-family:var(--mono);font-size:11px;white-space:pre-wrap">${esc(JSON.stringify(S.simResult, null, 1).slice(0, 900))}</div></div>`:''}`;
 }
+
+/* G1 — الانتقالات المعروضة تتبع دورة الحياة المعتمدة. الخادم هو الحَكَم
+   النهائي، والواجهة لا تعرض ما لا معنى له في الحالة الحالية حتى لا تقدّم
+   زرًا يفشل حتمًا. */
+function mechanicActions(x, L, STATES){
+  const NEXT = {
+    draft:      ['simulated', 'rejected'],
+    simulated:  ['canary', 'held', 'rejected'],
+    canary:     ['emerging', 'held', 'rejected'],
+    emerging:   ['promoted', 'held', 'rejected'],
+    promoted:   ['retired'],
+    held:       ['simulated', 'rejected'],
+  };
+  const st = x.lifecycle_state;
+  const outs = NEXT[st] || [];
+  const canSim = st === 'draft' || st === 'simulated' || st === 'held';
+  return `
+    ${canSim ? `<button class="btn-small" onclick="App.simulateMechanic('${esc(x.id)}')">${L('محاكاة','Simulate')}</button>`:''}
+    ${outs.map(to=>`<button class="btn-small ${to==='rejected'||to==='held'?'':'brass'}"
+      ${to==='rejected'?'style="color:var(--red-500);border-color:var(--red-500)"':''}
+      onclick="App.openTransition('${esc(x.id)}','${to}','${esc(st||'')}')">${STATES[to]||to}</button>`).join('')}`;
+}
+
+function renderProposeModal(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.proposeMechanic; if(!st) return '';
+  const P = ['RESET','SPARK','DISCOVER','PLAY','MIND'];
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissPropose()"><div class="ordsheet">
+    <h3>${L('اقتراح آلية تجربة','Propose an experience mechanic')}</h3>
+    <p class="ph">${L('تبدأ في حالة مسودة، ولا تصل لأي ضيف قبل المحاكاة والترقية.','Starts as a draft — it reaches no guest before simulation and promotion.')}</p>
+    <div class="formfield"><label>${L('الاسم','Name')}</label><input id="mkName" placeholder="Quick riddle"></div>
+    <div class="formfield"><label>${L('الشخصية','Personality')}</label>
+      <select id="mkPersonality">${P.map(x=>`<option value="${x}">${x}</option>`).join('')}</select></div>
+    <div class="formfield"><label>${L('العنوان','Kicker')}</label><input id="mkTitleAr"></div>
+    <div class="formfield"><label>${L('نص اللحظة (AR)','Moment text (AR)')}</label><input id="mkBodyAr"></div>
+    <div class="formfield"><label>${L('نص اللحظة (EN)','Moment text (EN)')}</label><input id="mkBodyEn"></div>
+    ${st.error?`<div class="errbox" style="margin-top:10px">${esc(st.error)}</div>`:''}
+    <div class="actrow">
+      <button class="btn-small brass" onclick="App.submitPropose()" ${st.submitting?'disabled':''}>${st.submitting?L('جارٍ…','Working…'):L('اقتراح','Propose')}</button>
+      <button class="ghostbtn" onclick="App.dismissPropose()">${t('close')}</button>
+    </div>
+  </div></div>`;
+}
+
+function renderMechTransitionModal(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.mechTransition; if(!st) return '';
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissTransition()"><div class="ordsheet">
+    <h3>${L('نقل الآلية إلى','Move mechanic to')} ${esc(st.toState)}</h3>
+    <p class="ph">${L('من','From')}: ${esc(st.currentState)}</p>
+    ${st.toState==='canary'?`<div class="formfield"><label>${L('نسبة الحركة %','Traffic %')}</label>
+      <input id="mtCanary" type="number" step="0.5" value="5">
+      <p class="ph" style="margin-top:4px">${L('الخادم يفرض سقفًا صلبًا 5%','The server enforces a hard 5% cap')}</p></div>`:''}
+    <div class="formfield"><label>${L('السبب (مطلوب)','Reason (required)')}</label><input id="mtReason"></div>
+    ${st.error?`<div class="errbox" style="margin-top:10px">${esc(st.error)}</div>`:''}
+    <div class="actrow">
+      <button class="btn-small brass" onclick="App.submitTransition()" ${st.submitting?'disabled':''}>${st.submitting?L('جارٍ…','Working…'):L('تأكيد','Confirm')}</button>
+      <button class="ghostbtn" onclick="App.dismissTransition()">${t('close')}</button>
+    </div>
+  </div></div>`;
+}
+
+function renderBulkPointsModal(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.bulkPoints; if(!st) return '';
+  if(st.result) return `<div class="ordmodal" onclick="if(event.target===this) App.dismissBulkPoints()"><div class="ordsheet">
+    <h3>${L('تم التوليد','Generated')}</h3>
+    <p class="ph">${st.result.count} ${L('رمزًا','codes')}</p>
+    <table class="datatable"><tr><th>${L('النقطة','Point')}</th><th>${L('الرمز','Token')}</th></tr>
+      ${st.result.points.map(x=>`<tr><td>${esc(x.label)}</td><td style="font-family:var(--mono);font-size:11px">${esc(x.token)}</td></tr>`).join('')}</table>
+    <div class="actrow"><button class="btn-small brass" onclick="App.dismissBulkPoints()">${t('close')}</button></div>
+  </div></div>`;
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissBulkPoints()"><div class="ordsheet">
+    <h3>${L('توليد رموز QR بالجملة','Bulk QR generation')}</h3>
+    <p class="ph">${L('حتى 50 رمزًا في الدفعة الواحدة. تُنشأ الدفعة كاملة أو لا شيء.','Up to 50 codes per batch. The batch is created in full or not at all.')}</p>
+    <div class="formfield"><label>${L('البادئة','Label prefix')}</label><input id="bpPrefix" value="${L('طاولة','Table')}"></div>
+    <div class="formfield"><label>${L('العدد','Count')}</label><input id="bpCount" type="number" min="1" max="50" value="10"></div>
+    <div class="formfield"><label>${L('يبدأ من','Start at')}</label><input id="bpStart" type="number" min="1" value="1"></div>
+    ${st.error?`<div class="errbox" style="margin-top:10px">${esc(st.error)}</div>`:''}
+    <div class="actrow">
+      <button class="btn-small brass" onclick="App.submitBulkPoints()" ${st.submitting?'disabled':''}>${st.submitting?L('جارٍ…','Working…'):L('توليد','Generate')}</button>
+      <button class="ghostbtn" onclick="App.dismissBulkPoints()">${t('close')}</button>
+    </div>
+  </div></div>`;
+}
+
+
 
 function renderEngageOverviewAdmin(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;

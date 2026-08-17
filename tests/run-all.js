@@ -34,6 +34,7 @@ const suites = [
   './loyalty-admin.js',
   './sitemanager-surfaces.js',
   './corrective-closure.js',
+  './r3-gap-closure.js',
 ];
 
 (async () => {

@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-17T18:32:16.735Z",
+  "timestamp": "2026-08-17T18:51:33.175Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -111,6 +111,10 @@
     },
     {
       "suite": "./corrective-closure.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./r3-gap-closure.js",
       "status": "PASS"
     }
   ],

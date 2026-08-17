@@ -141,7 +141,8 @@ async function main() {
     ['PATCH', zoneId ? `/api/admin/zones/${zoneId}` : '/api/admin/zones/none', { status: 'Active' }, 'تعديل منطقة'],
     ['POST', '/api/admin/points', { zoneId, label: 'T', type: 'Table' }, 'إنشاء نقطة'],
     ['PATCH', pointId ? `/api/admin/points/${pointId}` : '/api/admin/points/none', { active: 1 }, 'تعديل نقطة'],
-    ['POST', '/api/admin/points/bulk', { zoneId, count: 2, prefix: 'AUD' }, 'توليد نقاط بالجملة'],
+    ['POST', '/api/admin/points/bulk', { zoneId, count: 2, labelPrefix: 'AUD' }, 'توليد نقاط بالجملة'],
+    ['POST', '/api/admin/mechanics/propose', { name: 'AuditMech', personality: 'PLAY', category: 'static_fallback', pool: [{ body_ar: 'a', body_en: 'b' }] }, 'اقتراح آلية'],
   ];
   const routes = {};
   for (const [m, p, b, label] of routeChecks) {
