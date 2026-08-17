@@ -22,6 +22,7 @@ const DOCS = [
   { file: 'docs/ROLE_ACCESS_MATRIX.md', category: 'الأدوار والصلاحيات · Roles & Access', landscape: true },
   { file: 'docs/CROSS_SYSTEM_AUDIT.md', category: 'تدقيق النظام · System Audit', landscape: true },
   { file: 'docs/WHITE_LABEL_AUDIT.md', category: 'تدقيق النظام · System Audit', landscape: true },
+  { file: 'docs/WHITE_LABEL_DELIVERY.md', category: 'سجل التسليم · Delivery Record' },
   { file: 'docs/POSTGRESQL_MIGRATION_PLAN.md', category: 'جاهزية الإطلاق · Go-Live Readiness' },
   { file: 'HANDOVER.md', category: 'التسليم الفني النهائي · Final Handover' },
   { file: 'docs/MASTER_REQUIREMENTS.md', category: 'المتطلبات · Requirements' },
