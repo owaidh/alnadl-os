@@ -21,6 +21,7 @@ const DOCS = [
   { file: 'docs/GOLIVE_STATUS_MATRIX.md', category: 'جاهزية الإطلاق · Go-Live Readiness', landscape: true },
   { file: 'docs/ROLE_ACCESS_MATRIX.md', category: 'الأدوار والصلاحيات · Roles & Access', landscape: true },
   { file: 'docs/CROSS_SYSTEM_AUDIT.md', category: 'تدقيق النظام · System Audit', landscape: true },
+  { file: 'docs/WHITE_LABEL_AUDIT.md', category: 'تدقيق النظام · System Audit', landscape: true },
   { file: 'docs/POSTGRESQL_MIGRATION_PLAN.md', category: 'جاهزية الإطلاق · Go-Live Readiness' },
   { file: 'HANDOVER.md', category: 'التسليم الفني النهائي · Final Handover' },
   { file: 'docs/MASTER_REQUIREMENTS.md', category: 'المتطلبات · Requirements' },
