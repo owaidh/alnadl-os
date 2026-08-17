@@ -1415,6 +1415,13 @@ on('POST', '/api/admin/partners/:id/status', ['SuperAdmin'], async (req, res, p,
   if (!partnerStatus.canTransition(current, b.status)) {
     return sendJSON(res, 409, { error: `Cannot move a partner from ${current} to ${b.status}` });
   }
+  // الشرط الحاكم يُستشار من نموذج دورة الحياة، لا يُكرَّر هنا. النقطة لا
+  // تعرف شيئًا عن الطلبات المفتوحة -- تسأل النموذج فقط.
+  const pre = partnerStatus.checkTransitionPreconditions(p.id, current, b.status);
+  if (!pre.ok) {
+    // لا شيء يُكتب: الحالة كما هي، ولا طلب يُلغى أو تُغيَّر حالته.
+    return sendJSON(res, 409, { error: pre.code, code: pre.code, openOrders: pre.openOrders, remedy: pre.remedy });
+  }
   const reason = String(b.reason).trim();
   if (reason.length < 4) return sendJSON(res, 400, { error: 'reason must be at least 4 characters' });
 

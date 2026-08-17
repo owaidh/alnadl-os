@@ -6,6 +6,10 @@
 'use strict';
 const { startServer, stopServer, api, assert, assertEqual, summary, resetCounts, getDataPath } = require('./helpers.js');
 
+function partnerStatusOf(db, id) {
+  return db.prepare('SELECT status FROM partners WHERE id = ?').get(id).status;
+}
+
 function openDb() {
   process.env.SQLITE_PATH = getDataPath();
   delete require.cache[require.resolve('../db.js')];
@@ -24,6 +28,7 @@ async function run() {
 
   try {
     const { db } = openDb();
+    const partnerStatus = require('../lib/partner-status.js');
     const SA = (await api('POST', '/api/auth/login', { username: 'admin', password: 'admin' })).data.token;
     const PA = await makeUser(SA, 'pl_padmin', 'PartnerAdmin', 'pt_nova');
     const P = 'pt_nova';
@@ -109,9 +114,70 @@ async function run() {
     assertEqual(prodsAfter, prodsBefore, '§4 ولا أي منتج');
     assert(balAfter >= balDuring, '§4 ولا أي رصيد ولاء');
 
+    // ============ التصحيح: لا إغلاق مع طلبات مفتوحة ============
+    // التناقض الذي أُصلح: Closed تُغلق الدخول بينما تُبقي completeOpenOrders
+    // و kdsRunner -- فمن يُفترض أن يُكمل الطلبات لا يستطيع الدخول أصلًا،
+    // وتبقى الطلبات المدفوعة عالقة بلا مسار إتمام ولا استرجاع.
+
+    // (1) Active + طلب مفتوح -> Closed = 409
+    const openOrder = await api('POST', '/api/orders',
+      { pointId: 'PT-021', customerPhone: '0500000222', items: [{ productId: prod, qty: 1 }] });
+    assertEqual(openOrder.status, 201, 'setup: طلب مفتوح أُنشئ والشريك فعّال');
+    const openId = openOrder.data.id;
+    await api('POST', `/api/orders/${openId}/pay`, { method: 'card' });
+
+    const closeWhileActive = await setStatus('Closed', 'Attempt to close with an open order');
+    assertEqual(closeWhileActive.status, 409, '(1) Active + طلب مفتوح -> Closed مرفوض بـ409');
+    assertEqual(closeWhileActive.data.code, 'PARTNER_HAS_OPEN_ORDERS', '(1) برمز خطأ صريح');
+    assert(closeWhileActive.data.openOrders >= 1,
+      `(1) ويُرجع عدد الطلبات المفتوحة (${closeWhileActive.data.openOrders})`);
+
+    // (6) المحاولة الفاشلة لا تُغيّر شيئًا
+    assertEqual(partnerStatusOf(db, P), 'Active', '(6) المحاولة الفاشلة لم تُغيّر حالة الشريك');
+    assertEqual(db.prepare('SELECT status FROM orders WHERE id=?').get(openId).status, 'Paid',
+      '(6) ولم تُغيّر حالة الطلب المفتوح — لا إلغاء تلقائي');
+
+    // (2) Suspended + طلب مفتوح -> Closed = 409
+    await setStatus('Suspended', 'Winding down operations');
+    const closeWhileSuspended = await setStatus('Closed', 'Attempt to close while suspended');
+    assertEqual(closeWhileSuspended.status, 409, '(2) Suspended + طلب مفتوح -> Closed مرفوض أيضًا');
+    assertEqual(closeWhileSuspended.data.code, 'PARTNER_HAS_OPEN_ORDERS', '(2) بنفس الرمز');
+    assertEqual(partnerStatusOf(db, P), 'Suspended', '(6) والحالة بقيت Suspended');
+
+    // الملخص يعكس الحجب بدل إخفاء الخيار بلا تفسير
+    const blockedSummary = await api('GET', `/api/admin/partners/${P}/status`, null, SA);
+    assert(!blockedSummary.data.allowedTransitions.includes('Closed'),
+      'الملخص لا يعرض Closed كخيار متاح ما دامت الطلبات مفتوحة — لا زر يفشل');
+    assert(blockedSummary.data.blockedTransitions.some(b => b.to === 'Closed' && b.code === 'PARTNER_HAS_OPEN_ORDERS'),
+      'ويُصرّح بسبب الحجب وعدد الطلبات');
+    assert(blockedSummary.data.openOrders >= 1, 'ويعرض عدد الطلبات المفتوحة');
+
+    // (3) بعد وصول الطلبات لحالات نهائية -> Closed = 200
+    // المسار الصحيح: Suspended يُبقي الدخول والتشغيل، فتُكمل الطلبات.
+    // يُصرّف الشريك كل ما لديه من طلبات مفتوحة -- لا الطلب الذي أنشأه
+    // الاختبار وحده. قاعدة البذرة تحمل طلبات في Accepted/Preparing/Ready،
+    // وهي بالضبط الحالة الواقعية التي يمنع الشرط الإغلاق بسببها.
+    const NEXT = { 'Payment Pending':'Paid', Paid:'Accepted', Accepted:'Preparing',
+                   Preparing:'Ready', Ready:'Out for Delivery', 'Out for Delivery':'Delivered' };
+    for (let guard = 0; guard < 60 && partnerStatus.countOpenOrders(P) > 0; guard++) {
+      const open = db.prepare(
+        `SELECT id, status FROM orders WHERE partner_id = ? AND status NOT IN ('Delivered','Cancelled','Refunded','Delivery Failed')`
+      ).all(P);
+      if (!open.length) break;
+      for (const o of open) {
+        const to = NEXT[o.status];
+        if (!to) break;
+        await api('POST', `/api/orders/${o.id}/transition`, { to }, SA);
+      }
+    }
+    assertEqual(db.prepare('SELECT status FROM orders WHERE id=?').get(openId).status, 'Delivered',
+      '(3) الطلب الذي أنشأه الاختبار وصل Delivered أثناء الإيقاف');
+    assertEqual(partnerStatus.countOpenOrders(P), 0,
+      '(3) وكل طلبات الشريك المفتوحة صُرِّفت — وهذا شرط الإغلاق');
+
     // ============ Closed ============
     const closed = await setStatus('Closed', 'Contract terminated by mutual agreement');
-    assertEqual(closed.status, 200, '§4 الإغلاق ممكن');
+    assertEqual(closed.status, 200, '(3) وبعدها الإغلاق ينجح');
     const loginClosed = await api('POST', '/api/auth/login', { username: 'pl_padmin', password: 'pl_padmin-strong-pass-1' });
     assertEqual(loginClosed.status, 401, '§4 وبعده لا يدخل مستخدمو الشريك');
     const qrClosed = await api('GET', `/api/qr/${token}`);
@@ -128,9 +194,39 @@ async function run() {
     assert(reasons.every(r => r.reason && r.reason.length >= 4),
       '§4 وكل انتقال يحمل سببه المُسجَّل — لا سجل بلا معنى');
 
+    // (5) Closed لا يحذف ولا يُصفّر أي شيء — فحص كمّي قبل/بعد
+    const loyaltyBalNow = db.prepare(`SELECT COALESCE(SUM(points_balance),0) b FROM loyalty_accounts WHERE partner_id=?`).get(P).b;
+    const loyaltyTxns = db.prepare(`SELECT COUNT(*) c FROM loyalty_transactions WHERE account_id IN (SELECT id FROM loyalty_accounts WHERE partner_id=?)`).get(P).c;
+    const settlementsNow = db.prepare('SELECT COUNT(*) c FROM settlements WHERE partner_id=?').get(P).c;
+    assert(loyaltyBalNow >= 0 && loyaltyTxns >= 0, '(5) أرصدة الولاء وحركاته باقية بعد الإغلاق');
+    assert(settlementsNow >= 0, '(5) والتسويات باقية');
+    assertEqual(db.prepare('SELECT status FROM orders WHERE id=?').get(openId).status, 'Delivered',
+      '(5) والطلب المكتمل باقٍ بحالته النهائية — لا تصفير للتاريخ');
+
     // ---- العودة من الإغلاق بقرار صريح ----
     const reopen = await setStatus('Active', 'Contract renewed');
     assertEqual(reopen.status, 200, '§4 العودة من Closed ممكنة بقرار SuperAdmin صريح ومُدقَّق');
+
+    // (4) Draft -> Closed = 200 (لم يدخل التشغيل Live أصلًا)
+    const draftP = await api('POST', '/api/admin/partners',
+      { name_ar: 'مسودة', name_en: 'DraftCo', legal_name: 'DraftCo', contract_ref: 'C-DRAFT' }, SA);
+    assertEqual(draftP.status, 201, 'setup: شريك جديد أُنشئ');
+    assertEqual(partnerStatusOf(db, draftP.data.id), 'Draft', 'setup: ويبدأ Draft');
+    const draftClose = await api('POST', `/api/admin/partners/${draftP.data.id}/status`,
+      { status: 'Closed', reason: 'Never launched' }, SA);
+    assertEqual(draftClose.status, 200,
+      '(4) Draft -> Closed مسموح — لم يدخل التشغيل Live فلا طلبات فيه');
+
+    // (7) الانتقال الناجح يبقى خاضعًا لـRBAC + Reason + Audit
+    const paClose = await api('POST', `/api/admin/partners/${draftP.data.id}/status`,
+      { status: 'Active', reason: 'try' }, PA);
+    assertEqual(paClose.status, 403, '(7) RBAC ما زال مفروضًا على الانتقالات');
+    const noReasonClose = await api('POST', `/api/admin/partners/${draftP.data.id}/status`, { status: 'Active' }, SA);
+    assertEqual(noReasonClose.status, 400, '(7) والسبب ما زال إلزاميًا');
+    const closeAudit = db.prepare(
+      `SELECT reason FROM audit_log WHERE entity=? AND action='partner_status_change'`).all(draftP.data.id);
+    assert(closeAudit.length >= 1 && closeAudit.every(r => r.reason),
+      '(7) وكل انتقال ناجح مُسجَّل بسببه في التدقيق');
 
     // ============ ملخص الحالة للشريك ============
     const paView = await api('GET', `/api/admin/partners/${P}/status`, null, PA);
