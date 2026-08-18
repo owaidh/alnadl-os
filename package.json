@@ -1,0 +1,29 @@
+{
+  "name": "alnadl-hospitality-os",
+  "version": "2.13.0",
+  "private": true,
+  "description": "ALNADL Hospitality OS — QR ordering and hospitality operations platform",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/run-all.js",
+    "test:browser": "node tests/run-all.js",
+    "verify:image": "node scripts/verify-container-image.js",
+    "verify:image:negative": "node scripts/verify-container-image.js --negative",
+    "audit": "node scripts/cross-system-audit.js",
+    "backup": "node scripts/backup-restore.js backup",
+    "backup:drill": "node scripts/backup-restore.js drill",
+    "docs:pdf": "node scripts/build-docs-pdf.js"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "playwright": "^1.44.0"
+  },
+  "comments": {
+    "runtime": "The SERVER has zero runtime dependencies by design — node:http, node:sqlite and node:crypto only. `dependencies` is intentionally empty and must stay that way; the production container installs nothing.",
+    "playwright": "Required ONLY by tests/engage-security.js (real-DOM XSS verification) and scripts/build-docs-pdf.js (PDF rendering). It is optional because the other 31 test suites run without it: when absent, engage-security skips with an explicit SKIPPED line rather than failing, so a fresh extraction with no install still produces a meaningful suite result. Install it to run the full suite including browser verification: `npm install && npx playwright install chromium`.",
+    "why-no-lockfile": "There is no package-lock.json because dependencies is empty and playwright is optional. Adding a lockfile would imply a reproducible dependency graph the server does not have and does not need."
+  }
+}

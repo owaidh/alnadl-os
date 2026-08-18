@@ -46,7 +46,13 @@ async function run() {
     function makeOrder({ outletIds, prepMinutes, split, createdAt }) {
       seq++;
       const orderId = `TEST-UX3-${seq}`;
-      const created = createdAt != null ? createdAt : now - 60 * 60000;
+      // عزل زمني: الطلب الافتراضي يجب أن يقع داخل نافذة "اليوم" مهما كانت
+      // ساعة التشغيل. `now - 60 دقيقة` يقع **أمس** إذا شُغّل الاختبار بين
+      // منتصف الليل والواحدة صباحًا -- فيصبح النجاح رهين ساعة التشغيل.
+      // نأخذ الأحدث بين "قبل ساعة" و"بعد بداية اليوم بدقيقة".
+      const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+      const withinToday = Math.max(now - 60 * 60000, dayStart.getTime() + 60000);
+      const created = createdAt != null ? createdAt : withinToday;
       db.prepare(`INSERT INTO orders (id,partner_id,property_id,zone_id,point_id,status,subtotal,vat,total,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
         .run(orderId, PARTNER, PROPERTY, 'z_pool', 'PT-021', 'Delivered', 100, 15, 115, created, created);
       outletIds.forEach((oid, i) => {
@@ -71,6 +77,11 @@ async function run() {
     const baseline = await overview();
     const baseMeasured = baseline.data.allTime.slaMeasured;
     const baseExcluded = baseline.data.allTime.slaExcludedMultiOutlet;
+    // عزل: نافذة "اليوم" لها خط أساس مستقل. المقارنة السابقة كانت تُقيس
+    // today.slaMeasured مقابل خط أساس مأخوذ من allTime -- فأي طلب قديم
+    // تركته مجموعة سابقة في run-all يجعل الرقمين مختلفين ويكسر التأكيد.
+    // الخلل كان في الاختبار لا في المنتج: نافذتا اليوم والكل صحيحتان.
+    const baseTodayMeasured = baseline.data.today.slaMeasured;
 
     // A split order spanning BOTH a 4-minute and a 30-minute outlet, ready
     // in 10 minutes. Under the old LIMIT-1 logic this would have been
@@ -112,7 +123,7 @@ async function run() {
     const tenDaysAgo = now - 10 * 86400000;
     makeOrder({ outletIds: [slowOutlet], prepMinutes: 90, split: false, createdAt: tenDaysAgo });
     const afterOld = await overview();
-    assertEqual(afterOld.data.today.slaMeasured, baseMeasured + 2,
+    assertEqual(afterOld.data.today.slaMeasured, baseTodayMeasured + 2,
       'TODAY WINDOW: a 10-day-old order does NOT appear in today.slaMeasured');
     assertEqual(afterOld.data.allTime.slaMeasured, baseMeasured + 3,
       'ALL-TIME WINDOW: the same 10-day-old order DOES appear in allTime.slaMeasured');

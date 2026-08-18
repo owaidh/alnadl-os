@@ -1,10 +1,11 @@
-> **Baseline:** `v2.12.0-r4a-audit` · **Type:** R4-B Production Blocker Closure · **Date:** 2026-08-18 · **Verdict:** **CONDITIONAL GO — Single Instance** (بانتظار مراجعتك)
+> **Baseline:** `v2.13.0-r4b-closure` · **Type:** R4-B Closure + Reproducibility Corrective · **Date:** 2026-08-18 · **Verdict:** **CONDITIONAL GO — Single Instance · pending real Docker build/run verification**
 
 # R4-B — Production Blocker Closure
 
 ## الحكم
 
 # 🟡 CONDITIONAL GO — Single Instance
+## *pending real Docker build/run verification*
 
 **PB-1 · PB-2 · G-2 مُغلقة ومُثبتة.** PB-3 صار **قيد نشر مُنفَّذًا** لا تحذيرًا.
 
@@ -19,6 +20,8 @@
 **البديل المستخدم**: `scripts/verify-container-image.js` **يقرأ تعليمات `COPY` من `Dockerfile` نفسه** ويبني منها شجرة معزولة ثم يُقلع منها. قائمة ملفات مكتوبة يدويًا كانت ستنحرف عن الملف عند أول تعديل ثم "تُثبت" شيئًا غير صحيح — وهو صنف الخطأ نفسه الذي أنتج probes خاطئة سابقًا.
 
 **ما يلزم للتحقق النهائي**: بيئة فيها Docker لتنفيذ `docker build` ثم `docker run` — والأداة نفسها تصلح كخطوة تحقق داخل خط النشر.
+
+> **التصنيف يبقى `CONDITIONAL GO — pending real Docker build/run verification`** حتى يُنفَّذ `docker build` و`docker run` فعليًا في بيئة Docker حقيقية. إصلاح PB-1 مقبول ولم يُغيَّر.
 
 ---
 
@@ -125,11 +128,47 @@ RESTORE DRILL: PASS
 
 ---
 
+## 4-ب. قابلية إعادة الإنتاج (جولة تصحيحية)
+
+### CI-1 — عزل `partner-dashboard` · ✅ PASS
+
+**السبب الجذري مُثبَت — وهو أعمق مما بدا**: التأكيد كان يُقارن `today.slaMeasured` بخط أساس من `allTime` (صحيح، وأُصلح). لكن الفشل استمر منفردًا، والسبب الحقيقي **زمني**: `makeOrder` تُنشئ الطلب عند `now - 60 دقيقة`، وهو ما يقع **أمس** إذا شُغّل الاختبار بين منتصف الليل والواحدة صباحًا — وقت الاكتشاف كان **`00:05`**.
+
+**خلل في الاختبار لا في المنتج**: نافذتا «اليوم» و«الكل» صحيحتان تمامًا.
+
+**الإصلاحان**:
+- خط أساس مستقل لنافذة اليوم (`baseTodayMeasured`)
+- الطلب الافتراضي يُثبَّت داخل اليوم: `max(now - 60m, dayStart + 1m)`
+
+**الإثبات بثلاثة ترتيبات**:
+
+| الترتيب | النتيجة |
+|---|---|
+| منفردًا · مرتين متتاليتين على نفس القاعدة | **28/28 · 28/28** |
+| بعد `financial-regression` + `concurrency` | **28/28** · `ORDER A: PASS` |
+| أولًا ثم `api-regression` + `engage-inc8` ثم **مرة أخرى** | **28/28 · 28/28** · `ORDER B: PASS` |
+
+### CI-2 — تبعية المتصفح · ✅ PASS
+
+**كان**: لا `package.json` إطلاقًا، و`playwright` تبعية **ضمنية غير موثّقة** تُسقط المجموعة بانهيار عند التحميل.
+
+**الآن**:
+- **`package.json` صريح**: `dependencies` **فارغ عمدًا** (الخادم بلا تبعية تشغيل)، و`playwright` في **`optionalDependencies`**
+- المجموعة **تُتخطّى بسطر صريح** يوضّح **ما لم يُختبَر** بدل الانهيار
+- خطوات التثبيت موثّقة في `README.md`
+
+**لماذا التخطّي لا الاستبدال**: تلك المجموعة تتحقق من ترميز المخرجات ضد **DOM حقيقي** — وهو **ما لا يمكن تزييفه بفحص مصدري**. استبدالها بفحص أضعف كان سيُعطي ثقة زائفة؛ والتخطّي المُعلَن أصدق.
+
+| الوضع | النتيجة |
+|---|---|
+| **نسخة مُستخرَجة بلا أي تثبيت** | **1121 / 1121** · 0 FAIL · مجموعة واحدة `SKIPPED` |
+| `npm install && npx playwright install chromium` | **1159 / 1159** · 0 FAIL |
+
 ## 5. أدلة الإغلاق التسعة
 
 | # | الشرط | النتيجة |
 |---|---|---|
-| 1 | Full Test Suite | ✅ **1159 / 1159** · 32 مجموعة · 0 FAIL |
+| 1 | Full Test Suite | ✅ **1159 / 1159** (32 مجموعة) · وبلا تثبيت: **1121 / 1121** · 0 FAIL |
 | 2 | Cross-System Audit | ✅ `matrix clean: no 500, no unintended 404` |
 | 3 | Browser E2E | ✅ رحلة الطلب · الأدوار السبعة · **0 أخطاء** |
 | 4 | إقلاع إنتاج نظيف من الصورة | ✅ 63 جدولًا · 17/17 · حيّ بعد فترة سماح |

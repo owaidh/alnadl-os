@@ -146,3 +146,46 @@ refund(gatewayRef, amount)
 - أضف Rate limiting على الواجهات العامة
 - اربط بوابة الدفع الحقيقية (أعلاه) واحصل على شهادة PCI DSS المناسبة حسب نطاق تكاملك
 - فعّل MFA لأدوار SuperAdmin وAlnadlFinance
+
+---
+
+## التشغيل من نسخة مُستخرَجة — خطوات موثّقة
+
+### 1. المتطلب الوحيد للخادم
+**Node.js 22+** — لا شيء غيره. الخادم **بلا أي تبعية تشغيل خارجية** (`node:http` · `node:sqlite` · `node:crypto` فقط)، و`dependencies` في `package.json` فارغ عمدًا ويجب أن يبقى كذلك.
+
+```bash
+node server.js
+```
+
+### 2. تشغيل الاختبارات — بلا تثبيت
+```bash
+node tests/run-all.js
+```
+تعمل **31 من 32 مجموعة** بلا أي تثبيت. مجموعة `engage-security` **تُتخطّى بسطر صريح** يوضّح ما لم يُختبَر — لا تنهار ولا تُفشل الحزمة.
+
+### 3. الاختبارات كاملة — مع التحقق في متصفح حقيقي
+```bash
+npm install                      # يُثبّت playwright (optionalDependencies)
+npx playwright install chromium  # يُنزّل المتصفح
+node tests/run-all.js            # 32/32
+```
+
+**لماذا اختيارية**: `playwright` يلزم مجموعة واحدة فقط — التحقق من ترميز المخرجات ضد **DOM حقيقي**. ذلك التحقق **لا يمكن تزييفه بفحص مصدري**، فتخطّيه بإعلان أصدق من استبداله بفحص أضعف يُعطي ثقة زائفة.
+
+### 4. أدوات التحقق الإنتاجي
+```bash
+node scripts/verify-container-image.js             # محتوى الصورة يُقلع ويعمل
+node scripts/verify-container-image.js --negative  # بلا migrations يرفض الإقلاع
+node scripts/cross-system-audit.js                 # تدقيق متقاطع
+node scripts/backup-restore.js drill               # تمرين نسخ واستعادة
+```
+
+### 5. ما يحتاج تبعية خارجية
+
+| الأداة | التبعية | إن غابت |
+|---|---|---|
+| `tests/engage-security.js` | `playwright` | تُتخطّى بإعلان صريح |
+| `scripts/build-docs-pdf.js` | `playwright` + `marked` | لا تُبنى الـPDF (المصادر Markdown متاحة) |
+
+**كل ما عدا ذلك — الخادم و31 مجموعة وكل أدوات التحقق الإنتاجي — يعمل ببيئة Node وحدها.**
