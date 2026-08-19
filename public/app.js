@@ -122,7 +122,7 @@ const S = {
   productDrafts:{},
   cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, theme:'system', contextSwitchedFrom:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
@@ -139,7 +139,9 @@ const S = {
 };
 
 function showToast(msg){ S.toast=msg; const d=document.createElement('div'); d.className='toast'; d.textContent=msg; document.body.appendChild(d); setTimeout(()=>d.remove(),1700); }
-function showErr(msg){ S.ui.err = msg; render(); }
+// نقطة واحدة لكل رسالة خطأ تصل المستخدم ⇒ التعريب يُطبَّق مرة واحدة
+// ولا يُنسى في مسار.
+function showErr(msg){ S.ui.err = (App && App.localizeError) ? App.localizeError(msg) : msg; render(); }
 
 /* ============================== ACTIONS ============================== */
 const App = {
@@ -384,6 +386,25 @@ const App = {
   // mechanism physically present in the production-served app.js. The
   // one-tap password-equals-username shortcut now lives entirely in the
   // developer-tools file, which never reaches a production client.
+  /* P2-04 — تعريب الرسائل التشغيلية.
+     الترجمة في الواجهة لا في الخادم: الخادم لا يعرف لغة المستخدم، وحقن
+     اللغة فيه يعني أن كل مستهلك للـAPI يرث لغة لم يطلبها. الواجهة تعرف
+     لغتها، فهي الموضع الصحيح. */
+  localizeError(msg){
+    if(S.lang !== 'ar') return msg;
+    const MAP = {
+      'Invalid credentials': 'اسم المستخدم أو كلمة المرور غير صحيحة',
+      'Forbidden': 'لا تملك صلاحية لهذا الإجراء',
+      'Not found': 'غير موجود',
+      'Unauthorized': 'يلزم تسجيل الدخول',
+      'Too many failed login attempts — try again later': 'محاولات دخول فاشلة كثيرة — حاول لاحقًا',
+      'Point unavailable': 'هذه النقطة غير متاحة حاليًا',
+      'Empty cart': 'السلة فارغة',
+    };
+    if(MAP[msg]) return MAP[msg];
+    for(const [en, ar] of Object.entries(MAP)) if(msg && msg.startsWith(en)) return ar;
+    return msg;
+  },
   async login(){
     const username = document.getElementById('loginUsername')?.value?.trim();
     const password = document.getElementById('loginPassword')?.value;
@@ -500,6 +521,22 @@ const App = {
          showToast(t('toast_saved')); await App.loadAdminAll();
          if(S.ui.pointQr && S.ui.pointQr.pointId===pointId) await App.openPointQr(pointId);
     }catch(e){ showErr(e.message); }
+  },
+  /* P2 — Light / Dark / System.
+     التفضيل يُحفظ محليًا لا على الخادم: تفضيل عرض يخصّ الجهاز لا الحساب،
+     وحفظه على الخادم كان سيجعل مستخدمًا واحدًا مقيّدًا بسمة واحدة عبر
+     شاشات مختلفة الإضاءة. */
+  applyTheme(mode){
+    const m = ['light','dark','system'].includes(mode) ? mode : 'system';
+    document.documentElement.setAttribute('data-theme', m);
+    try{ localStorage.setItem('alnadl_theme', m); }catch(e){}
+    S.theme = m;
+  },
+  cycleTheme(){
+    const order = ['system','light','dark'];
+    const next = order[(order.indexOf(S.theme||'system') + 1) % order.length];
+    App.applyTheme(next);
+    render();
   },
   async createUser(){
     const el=document.getElementById('newUserName'), roleEl=document.getElementById('newUserRole');
@@ -998,12 +1035,32 @@ const App = {
     try{ const r = await api('POST','/api/admin/onboard', b, true); showToast(t('toast_saved')); S.selectedPartnerId=r.partnerId; await App.loadTenants(); }
     catch(e){ showErr(e.message); }
   },
-  selectTenantForAdmin(partnerId){
-    S.selectedPartnerId = partnerId;
-    api('GET','/api/admin/properties',null,true).then(props=>{
+  /* P1-01 — كان يفشل صامتًا حين لا يملك الشريك عقارًا: لا رسالة ولا سبب،
+     فيبدو الزر معطّلًا بلا تفسير. الشرط مشروع (السياق يحتاج عقارًا) لكن
+     إخفاءه ليس. يُعلَن السبب ويُقترح الإجراء. */
+  async selectTenantForAdmin(partnerId){
+    try{
+      const props = await api('GET','/api/admin/properties',null,true);
       const prop = props.find(p=>p.partner_id===partnerId);
-      if(prop){ S.PARTNER_ID=partnerId; S.PROPERTY_ID=prop.id; App.loadAdminAll(); }
-    });
+      if(!prop){
+        showErr(S.lang==='ar'
+          ? 'لا يمكن الدخول لسياق هذا الشريك: لا يملك أي عقار بعد. أنشئ عقارًا أولًا من ملف الشريك.'
+          : 'Cannot enter this partner context: it has no property yet. Create one first from the partner profile.');
+        return;
+      }
+      S.selectedPartnerId = partnerId;
+      S.PARTNER_ID = partnerId; S.PROPERTY_ID = prop.id;
+      // الهوية تبقى SuperAdmin -- هذا تبديل سياق لا انتحال دور.
+      S.contextSwitchedFrom = S.contextSwitchedFrom || { role: S.session.user.role };
+      await App.loadAdminAll();
+      showToast(S.lang==='ar'?'دخلت سياق الشريك':'Entered partner context');
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  exitPartnerContext(){
+    S.contextSwitchedFrom = null; S.selectedPartnerId = null;
+    S.screen = 'tenants';
+    App.loadTenants(); render();
   },
   async changePlan(partnerId){
     const planCode = document.getElementById('planSelect_'+partnerId)?.value;
@@ -1110,8 +1167,12 @@ const App = {
   async addProduct(){
     const name_ar=document.getElementById('prodAr').value.trim(), name_en=document.getElementById('prodEn').value.trim();
     const basePrice=parseFloat(document.getElementById('prodPrice').value)||0, categoryId=document.getElementById('prodCatSel').value;
+    // P1-07: الخادم يدعم outletId منذ Phase 4 والواجهة لم تكن تسأل عنه، فكل
+    // المنتجات تُنشأ بلا منفذ ولا يعرف المشغّل لأي منفذ تنتمي في شريك
+    // متعدد المنافذ. الاختيار صريح الآن.
+    const outletId=(document.getElementById('prodOutletSel')||{}).value || null;
     if(!name_ar && !name_en) return;
-    try{ await api('POST','/api/admin/products',{categoryId,name_ar:name_ar||name_en,name_en:name_en||name_ar,basePrice},true); showToast(t('toast_prod')); await App.loadAdminAll(); }
+    try{ await api('POST','/api/admin/products',{categoryId,outletId:outletId||undefined,name_ar:name_ar||name_en,name_en:name_en||name_ar,basePrice},true); showToast(t('toast_prod')); await App.loadAdminAll(); }
     catch(e){ showErr(e.message); }
   },
   async toggleProdStatus(id,status){
@@ -1212,6 +1273,10 @@ function renderTopBar(){
   const loggedIn = !!S.session;
   bar.innerHTML = `
     <div class="brand">${guestBrandMark()}</div>
+    <button class="themebtn" onclick="App.cycleTheme()" title="${S.lang==='ar'?'وضع العرض':'Display mode'}">${
+      S.theme==='light' ? (S.lang==='ar'?'☀ فاتح':'☀ Light')
+      : S.theme==='dark' ? (S.lang==='ar'?'☾ داكن':'☾ Dark')
+      : (S.lang==='ar'?'⌂ النظام':'⌂ System')}</button>
     <div class="spacer"></div>
     ${loggedIn ? `
       <div class="sessionpill">${S.session.user.username} <span class="rl">· ${S.session.user.role}</span></div>
@@ -1854,6 +1919,10 @@ function renderStaffShell(){
     ? `<div class="admin-layout">
         <nav class="sidebar" aria-label="${S.lang==='ar'?'التنقل':'Navigation'}">
           <div class="sidebar-scope">${S.lang==='ar'?'النطاق الحالي':'Current scope'}<b>${S.session.user.username} · ${role}</b></div>
+          ${S.contextSwitchedFrom ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:8px 0;font-size:11px">
+            ${S.lang==='ar'?'أنت داخل سياق شريك':'You are inside a partner context'}
+            <button class="btn-small" style="margin-top:6px;width:100%" onclick="App.exitPartnerContext()">${S.lang==='ar'?'العودة لسياق المنصة':'Back to platform'}</button>
+          </div>`:''}
           ${groups.map(g=>`
             <div class="sidebar-group">
               <div class="sidebar-group-label">${g.label}</div>
@@ -2169,12 +2238,23 @@ function renderAdminCatalog(){
         <div class="darkfield"><label>${t('prodNameEn')}</label><input id="prodEn" placeholder="Iced Latte"></div>
         <div class="darkfield"><label>${t('prodPrice')}</label><input id="prodPrice" type="number" placeholder="20"></div>
         <div class="darkfield"><label>${t('prodCat')}</label><select id="prodCatSel">${S.admin.categories.map(c=>`<option value="${c.id}">${S.lang==='ar'?c.name_ar:c.name_en}</option>`).join('')}</select></div>
-      </div><button class="btn-small brass" onclick="App.addProduct()">+ ${t('addProd')}</button></div>
+      </div>
+      <div class="darkfield"><label>${S.lang==='ar'?'المنفذ':'Outlet'}</label>
+        <select id="prodOutletSel">
+          <option value="">${S.lang==='ar'?'— كل المنافذ (غير محدد) —':'— all outlets (unassigned) —'}</option>
+          ${(S.outlets||[]).map(o=>`<option value="${esc(o.id)}">${esc(S.lang==='ar'?o.name_ar:o.name_en)}</option>`).join('')}
+        </select>
+        <p class="ph" style="margin-top:4px">${S.lang==='ar'?'منتج بلا منفذ يظهر لكل منافذ العقار.':'A product with no outlet appears for every outlet in the property.'}</p></div>
+      <button class="btn-small brass" onclick="App.addProduct()">+ ${t('addProd')}</button></div>
     </div>
     <div class="panel"><h3>${t('currentCatalog')}</h3>
       ${S.admin.categories.map(c=>`<div class="section-sm">${S.lang==='ar'?c.name_ar:c.name_en}</div>
         ${S.admin.products.filter(p=>p.category_id===c.id).map(p=>`
-          <div class="prodlistrow"><div class="nm">${S.lang==='ar'?p.name_ar:p.name_en}</div>
+          <div class="prodlistrow"><div class="nm">${S.lang==='ar'?p.name_ar:p.name_en}
+            <span style="display:block;font-size:11px;color:var(--ink-400)">${(() => {
+              const o=(S.outlets||[]).find(x=>x.id===p.outlet_id);
+              return o ? esc(S.lang==='ar'?o.name_ar:o.name_en)
+                       : (S.lang==='ar'?'كل المنافذ':'All outlets'); })()}</span></div>
           <button class="togglepill ${p.status==='Active'?'active':'inactive'}" onclick="App.toggleProdStatus('${p.id}','${p.status}')">${p.status==='Active'?t('active'):t('inactive')}</button></div>`).join('')}`).join('')}
     </div></div>`;
 }
@@ -2253,6 +2333,26 @@ function engageEffectiveCard(st, isPartnerView){
    المبدأ: كشف قدرة خلفية مسموحة له اليوم، بلا أي توسيع صلاحية ودون
    تحويله إلى PartnerAdmin. كل عنصر هنا **يحتاج إجراءً** -- الشاشة ليست
    عرض بيانات إضافيًا، فاللوحة الحية تغطي ذلك أصلًا. */
+/* P1-08 — التنبيه كان يعرض رمز الحدث فقط: لا سبب ولا أولوية ولا إجراء،
+   فالرقم «تنبيهات 1» لا يقول للمشغّل ماذا يفعل. الترجمة هنا من رموز
+   الأحداث القائمة -- لا حقل جديد في قاعدة البيانات. */
+function notificationMeta(n, L){
+  const ev = String(n.event || n.type || '');
+  const MAP = {
+    sla_breach:        { type:L('تجاوز مهلة','SLA breach'), reason:L('تجاوز الطلب مهلة التجهيز','Order exceeded its prep window'), priority:L('عالٍ','High'), tone:'cancel', action:L('فتح الطلب','Open order') },
+    delivery_failed:   { type:L('تعذّر التسليم','Delivery failed'), reason:L('الراكض لم يتمكن من التسليم','The runner could not deliver'), priority:L('عالٍ','High'), tone:'cancel', action:L('فتح الطلب','Open order') },
+    payment_failed:    { type:L('فشل الدفع','Payment failed'), reason:L('لم تُحصَّل قيمة الطلب','The order was not captured'), priority:L('عالٍ','High'), tone:'cancel', action:L('فتح الطلب','Open order') },
+    order_created:     { type:L('طلب جديد','New order'), reason:L('طلب دخل الطابور','An order entered the queue'), priority:L('منخفض','Low'), tone:'ok', action:L('فتح الطلب','Open order') },
+    payment_success:   { type:L('دفع ناجح','Payment captured'), reason:L('حُصِّلت قيمة الطلب','The order was captured'), priority:L('منخفض','Low'), tone:'ok', action:L('فتح الطلب','Open order') },
+    order_delivered:   { type:L('تم التسليم','Delivered'), reason:L('اكتمل الطلب','The order completed'), priority:L('منخفض','Low'), tone:'ok', action:L('فتح الطلب','Open order') },
+    refund_issued:     { type:L('استرجاع','Refund'), reason:L('نُفِّذ استرجاع على الطلب','A refund was issued'), priority:L('متوسط','Medium'), tone:'pending', action:L('فتح الطلب','Open order') },
+  };
+  if (MAP[ev]) return MAP[ev];
+  // حدث غير معروف: يُعرض كما هو بدل إخفائه -- الصمت أسوأ من رمز خام.
+  return { type: ev || L('غير معروف','Unknown'), reason:L('حدث غير مصنَّف','Unclassified event'),
+           priority:L('متوسط','Medium'), tone:'pending', action:L('مراجعة','Review') };
+}
+
 function renderSiteExceptions(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const ex = S.siteExceptions;
@@ -2311,9 +2411,13 @@ function renderSiteExceptions(){
   <div class="panel">
     <h3>${L('تنبيهات الموقع','Site Notifications')}</h3>
     <p class="ph">${L('آخر ما أرسله النظام — للاطلاع، لا يحتاج إجراءً بذاته','Latest system notifications — informational, no action required by themselves')}</p>
-    ${notifs.length ? `<table class="datatable"><tr><th>${L('الحدث','Event')}</th><th>${L('الطلب','Order')}</th><th>${L('الوقت','When')}</th></tr>
-      ${notifs.slice(0,25).map(n=>`<tr><td>${esc(n.event||n.type||'')}</td><td>${esc(n.order_id||'—')}</td>
-        <td>${n.created_at?new Date(n.created_at).toLocaleString(S.lang==='ar'?'ar':'en'):'—'}</td></tr>`).join('')}</table>`
+    ${notifs.length ? `<table class="datatable"><tr><th>${L('النوع','Type')}</th><th>${L('السبب','Reason')}</th><th>${L('الطلب','Order')}</th><th>${L('الأولوية','Priority')}</th><th>${L('الوقت','When')}</th><th>${L('الإجراء','Action')}</th></tr>
+      ${notifs.slice(0,25).map(n=>{
+        const meta = notificationMeta(n, L);
+        return `<tr><td>${esc(meta.type)}</td><td>${esc(meta.reason)}</td><td>${esc(n.order_id||'—')}</td>
+        <td><span class="badge ${meta.tone}">${esc(meta.priority)}</span></td>
+        <td>${n.created_at?new Date(n.created_at).toLocaleString(S.lang==='ar'?'ar':'en'):'—'}</td>
+        <td>${n.order_id?`<button class="btn-small" onclick="App.openOrder('${esc(n.order_id)}')">${meta.action}</button>`:`<span class="ph">${esc(meta.action)}</span>`}</td></tr>`;}).join('')}</table>`
       : `<div class="statepanel on-dark" style="padding:16px 8px"><div class="glyph">—</div><p>${L('لا تنبيهات','No notifications')}</p></div>`}
   </div>`;
 }
@@ -2628,6 +2732,7 @@ function renderPartnerProfile(){
     <!-- Finance -->
     <div class="panel"><h3>${L('ملخّص مالي','Finance Summary')}</h3>
       ${line(L('تسويات','Settlements'), settlements.length)}
+      ${line(L('الشريك','Partner'), `${esc(S.lang==='ar'?partner.name_ar:partner.name_en)||'—'} <span class="ph">(${esc(pf.partnerId)})</span>`)}
       ${line(L('حصة الشريك (إجمالي)','Partner share (total)'), money2s(settlements.reduce((a,x)=>a+(x.partner_share||0),0)))}
       ${settlements.some(x=>x.status==='Disputed') ? `<div class="attentionrow high" style="margin-top:10px"><span class="dot"></span><span class="txt">${L('توجد تسوية متنازع عليها','A disputed settlement exists')}</span><span class="sev">${L('عالٍ','High')}</span></div>`:''}
       <div class="actrow"><button class="btn-small" onclick="App.setStaffScreen('settlements')">${L('التسويات','Settlements')}</button>
@@ -3399,6 +3504,10 @@ function renderUsers(){
 // in" — the mode IS whether dev-tools.js physically arrived.
 App.boot = async function(){
   document.documentElement.dir='rtl';
+  // P2: استعادة تفضيل السمة قبل أول تصيير، فلا يومض الوضع الافتراضي.
+  try{ App.applyTheme(localStorage.getItem('alnadl_theme') || 'system'); }
+  catch(e){ App.applyTheme('system'); }
+
   const params = new URLSearchParams(location.search);
   const tkn = params.get('t');
   if(tkn){ await App.loadQrContext(tkn); } else { render(); }
