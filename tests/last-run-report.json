@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-19T14:22:51.806Z",
+  "timestamp": "2026-08-19T14:38:14.803Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -135,8 +135,40 @@
     },
     {
       "suite": "./qr-flow.js",
-      "status": "PASS"
+      "status": "AWAITING_ENVIRONMENT_VERIFICATION",
+      "awaiting": [
+        {
+          "what": "SVG/PNG rendering",
+          "why": "qrcode@1.5.3 not installable in this environment (npm 403)"
+        },
+        {
+          "what": "Downloaded/printed QR re-scan",
+          "why": "requires a rendered image"
+        },
+        {
+          "what": "iPhone/Android camera scan",
+          "why": "requires a rendered image and a physical device"
+        }
+      ]
     }
   ],
-  "overall": "PASS"
+  "overall": "PASS",
+  "fullyVerified": false,
+  "awaitingEnvironmentVerification": [
+    {
+      "suite": "./qr-flow.js",
+      "what": "SVG/PNG rendering",
+      "why": "qrcode@1.5.3 not installable in this environment (npm 403)"
+    },
+    {
+      "suite": "./qr-flow.js",
+      "what": "Downloaded/printed QR re-scan",
+      "why": "requires a rendered image"
+    },
+    {
+      "suite": "./qr-flow.js",
+      "what": "iPhone/Android camera scan",
+      "why": "requires a rendered image and a physical device"
+    }
+  ]
 }

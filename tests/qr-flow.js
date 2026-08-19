@@ -158,8 +158,12 @@ async function run() {
     console.log('    These are NOT counted as passing. QR image generation is unverified');
     console.log('    until qrcode@1.5.3 is installed in the build/deploy environment.');
   }
+  // عقد صريح مع المُشغّل: المجموعة قد تمرّ محليًا وتبقى **غير متحقَّقة**
+  // في جزء جوهري منها. إخفاء ذلك خلف PASS يجعل التقرير الآلي يوحي بأن QR
+  // تُحقّق منه، وهو بالضبط ما يجب ألا يحدث.
+  module.exports.awaiting = AWAITING.slice();
   return ok;
 }
 
 if (require.main === module) { run().then(ok => process.exit(ok ? 0 : 1)); }
-module.exports = { run };
+module.exports = { run, awaiting: [] };

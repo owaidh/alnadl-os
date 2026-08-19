@@ -20,6 +20,29 @@ function loadPlaywright() {
 const playwright = loadPlaywright();
 const { startServer, stopServer, assert, assertEqual, summary, resetCounts, BASE } = require('./helpers.js');
 
+
+/** يفتح شاشة دخول الموظفين بالنموذج الحقيقي.
+    أدوات التطوير تستبدله بقائمة حسابات تجريبية لا وجود لها في الإنتاج،
+    فتُعطَّل هنا: المقصود إثبات المسار الذي يسلكه مستخدم حقيقي. */
+async function openRealLoginForm(page, base) {
+  await page.addInitScript(() => { window.__ALNADL_NO_DEVTOOLS = true; });
+  await page.goto(base + '/');
+  await page.waitForTimeout(400);
+  await page.evaluate(() => { try { delete window.AlnadlDevTools; } catch (e) { window.AlnadlDevTools = null; } });
+  await page.click('text=دخول (staff)');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { try { delete window.AlnadlDevTools; } catch (e) { window.AlnadlDevTools = null; } render(); });
+  await page.waitForSelector('#loginUsername', { timeout: 15000 });
+}
+
+async function loginThroughForm(page, base, username, password) {
+  await openRealLoginForm(page, base);
+  await page.fill('#loginUsername', username);
+  await page.fill('#loginPassword', password);
+  await page.click('.loginform button');
+  await page.waitForTimeout(2500);
+}
+
 async function run() {
   resetCounts();
   if (!playwright) {
@@ -59,6 +82,9 @@ async function run() {
       'P0-02 والشاشة تشرح أن الحساب يُنشأ بلا كلمة مرور مع رابط تفعيل');
 
     // ---- 3) إنشاء PartnerAdmin من الواجهة ----
+    // الشريك الذي يُنشأ المستخدم داخله -- يُقرأ من سياق الشاشة نفسه
+    const TARGET_PARTNER = await admin.evaluate(() => S.PARTNER_ID);
+    assert(!!TARGET_PARTNER, 'setup: سياق الشريك محدد في شاشة المستخدمين');
     const uname = 'e2e_padmin_' + Date.now().toString(36);
     await admin.fill('#newUserName', uname);
     await admin.selectOption('#newUserRole', 'PartnerAdmin');
@@ -79,15 +105,14 @@ async function run() {
     await admin.waitForTimeout(600);
 
     // ---- 5) الحساب قبل التفعيل يُرفض ----
-    const preLogin = await admin.evaluate(async (u) => {
-      const r = await fetch('/api/auth/login', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: u, password: u }),
-      });
-      return r.status;
-    }, uname);
-    assertEqual(preLogin, 401,
-      'P0-02 **والدخول باسم المستخدم ككلمة مرور مرفوض** قبل التفعيل');
+    // المسار البشري: نموذج الدخول الحقيقي، لا استدعاء fetch.
+    const pre = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+    await loginThroughForm(pre, BASE(), uname, uname);   // السلوك القديم بالضبط
+    assertEqual(await pre.locator('#loginUsername').count(), 1,
+      'P0-02 **الدخول باسم المستخدم ككلمة مرور مرفوض من النموذج الحقيقي** — يبقى على شاشة الدخول');
+    const preErr = await pre.locator('.errbox').count();
+    assert(preErr > 0, 'P0-02 وتظهر رسالة خطأ للمستخدم');
+    await pre.close();
 
     // ---- 6) المستخدم يفتح الرابط ويضع كلمة مروره ----
     const user = await browser.newPage({ viewport: { width: 420, height: 820 } });
@@ -127,20 +152,42 @@ async function run() {
     assert(/تم تفعيل|is active/i.test(doneText),
       'P0-02 **التفعيل ينجح من واجهة المستخدم**');
 
-    // ---- 7) تسجيل الدخول بكلمة المرور التي اختارها هو ----
+    // ---- 7) الدخول من النموذج الحقيقي حتى لوحة الدور ----
+    // لا fetch: المسار البشري كاملًا -- نموذج الدخول ثم الشريط الجانبي.
     const loginPage = await browser.newPage({ viewport: { width: 1200, height: 900 } });
-    const loginResult = await loginPage.goto(BASE() + '/').then(() =>
-      loginPage.evaluate(async ({ u, p }) => {
-        const r = await fetch('/api/auth/login', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: u, password: p }),
-        });
-        const d = await r.json().catch(() => ({}));
-        return { status: r.status, role: d.user && d.user.role, scope: d.user && d.user.scope };
-      }, { u: uname, p: CHOSEN }));
-    assertEqual(loginResult.status, 200,
-      'P0-02 **المستخدم يسجّل الدخول بكلمة المرور التي اختارها بنفسه**');
-    assertEqual(loginResult.role, 'PartnerAdmin', 'P0-02 وبدوره الصحيح');
+    const loginErrs = [];
+    loginPage.on('pageerror', e => loginErrs.push(e.message));
+    await loginThroughForm(loginPage, BASE(), uname, CHOSEN);
+
+    assertEqual(await loginPage.locator('#loginUsername').count(), 0,
+      'P0-02 **الدخول ينجح من النموذج الحقيقي** — شاشة الدخول اختفت');
+
+    // لوحة الدور نفسها تُثبت الدور والنطاق، لا استجابة API
+    const scopeText = await loginPage.locator('.sidebar-scope').textContent().catch(() => '');
+    assert(scopeText.includes(uname),
+      `P0-02 **ولوحة الدور تعرض المستخدم الصحيح** (${scopeText.trim().slice(0, 60)})`);
+    assert(/PartnerAdmin/.test(scopeText),
+      'P0-02 **والدور المعروض في اللوحة هو PartnerAdmin** — لا مجرد 200');
+
+    // نطاق الشريك: يُثبَت بأن اللوحة تعرض بيانات شريكه هو
+    const partnerScope = await loginPage.evaluate(() => ({
+      role: S.session && S.session.user && S.session.user.role,
+      scope: S.session && S.session.user && S.session.user.scope,
+      partnerId: S.PARTNER_ID,
+    }));
+    assertEqual(partnerScope.role, 'PartnerAdmin', 'P0-02 والدور في الجلسة PartnerAdmin');
+    assertEqual(partnerScope.scope, TARGET_PARTNER,
+      `P0-02 **ونطاقه هو الشريك الذي أُنشئ داخله بالضبط** (${partnerScope.scope})`);
+
+    // وعمليًا: يرى مستخدمي شريكه ولا يرى غيره
+    await loginPage.evaluate(() => App.setStaffScreen('users'));
+    await loginPage.waitForTimeout(1500);
+    const visibleUsers = await loginPage.evaluate(() =>
+      (S.users || []).map(u => u.partner_scope));
+    assert(visibleUsers.length > 0, 'P0-02 ويصل فعليًا لشاشة مستخدمي شريكه');
+    assert(visibleUsers.every(sc => sc === TARGET_PARTNER || sc == null),
+      'P0-02 **ولا يرى مستخدمًا من شريك آخر** — العزل مُثبَت من اللوحة لا من الـAPI');
+    assertEqual(loginErrs.length, 0, `P0-02 وصفر أخطاء في صفحة الدخول (${loginErrs.join('; ')})`);
 
     // ---- 8) الرمز لا يُعاد استخدامه ----
     const replay = await browser.newPage();
@@ -171,17 +218,31 @@ async function run() {
     await smPage.fill('#pw2', SM_PASS);
     await smPage.click('#go');
     await smPage.waitForTimeout(1800);
-    const smLogin = await smPage.evaluate(async ({ u, p }) => {
-      const r = await fetch('/api/auth/login', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: u, password: p }),
-      });
-      const d = await r.json().catch(() => ({}));
-      return { status: r.status, role: d.user && d.user.role };
-    }, { u: smName, p: SM_PASS });
-    assertEqual(smLogin.status, 200, 'P0-02 **ونفس الرحلة تعمل لـSiteManager**');
-    assertEqual(smLogin.role, 'SiteManager', 'P0-02 بدوره الصحيح');
     await smPage.close();
+
+    // الدخول من النموذج الحقيقي حتى لوحة SiteManager
+    const smLogin = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+    await loginThroughForm(smLogin, BASE(), smName, SM_PASS);
+    assertEqual(await smLogin.locator('#loginUsername').count(), 0,
+      'P0-02 **ونفس الرحلة تعمل لـSiteManager من النموذج الحقيقي**');
+    // أدوار التشغيل تستخدم غلافًا مختلفًا عن الإداري: .sidebar-scope خاص
+    // بالأخير. التصحيح لافتراضي في الاختبار لا للمنتج -- الدور يُثبَت من
+    // الشريط العلوي ومن شاشة الهبوط التشغيلية أدناه.
+    const smTop = await smLogin.locator('.topbar, .brand').first().textContent().catch(() => '');
+    const smBody = await smLogin.locator('body').textContent().catch(() => '');
+    assert(/SiteManager/.test(smTop + smBody),
+      'P0-02 ولوحته تعرض دوره SiteManager');
+    const smSession = await smLogin.evaluate(() => ({
+      role: S.session && S.session.user && S.session.user.role,
+      scope: S.session && S.session.user && S.session.user.scope,
+      screen: S.screen,
+    }));
+    assertEqual(smSession.role, 'SiteManager', 'P0-02 والدور في الجلسة SiteManager');
+    assertEqual(smSession.scope, TARGET_PARTNER,
+      `P0-02 **ونطاقه هو الشريك المطلوب** (${smSession.scope})`);
+    assert(['live', 'kds', 'exceptions'].includes(smSession.screen),
+      `P0-02 **ويهبط على شاشة دوره التشغيلية** (${smSession.screen})`);
+    await smLogin.close();
 
     // ---- 10) إعادة إصدار رابط من الشاشة ----
     await admin.evaluate(() => App.setStaffScreen('users'));
