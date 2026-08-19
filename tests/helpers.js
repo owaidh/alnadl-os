@@ -40,7 +40,12 @@ function startServer() {
 function stopServer() {
   if (serverProcess) {
     serverProcess.kill();
-    try { fs.unlinkSync(serverProcess._dataPath); } catch {}
+    // WAL يُنتج ملفَّين شقيقَين (-wal و -shm)، وهذا التنظيف كان يحذف الملف
+    // الأصلي وحده منذ ما قبل تفعيل WAL. النتيجة تراكم صامت: مئات الملفات
+    // في جذر المستودع بعد كل تشغيل كامل، دخلت فعليًا في حزمة تسليم.
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      try { fs.unlinkSync(serverProcess._dataPath + suffix); } catch {}
+    }
     serverProcess = null;
   }
 }

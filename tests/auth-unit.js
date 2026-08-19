@@ -41,7 +41,8 @@ async function run() {
     assert(wrongPw === null, 'a wrong password is still correctly rejected post-upgrade');
 
   } finally {
-    try { fs.unlinkSync(dataPath); } catch {}
+    // نفس علّة helpers.js: ملفّا WAL الشقيقان كانا يبقيان بعد كل تشغيل.
+    for (const suffix of ['', '-wal', '-shm', '-journal']) { try { fs.unlinkSync(dataPath + suffix); } catch {} }
   }
   return summary();
 }
