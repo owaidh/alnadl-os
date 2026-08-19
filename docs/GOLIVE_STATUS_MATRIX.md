@@ -1,4 +1,4 @@
-> **Version:** v2.14.0-operational-closure · **Status:** مصفوفة حالة متطلبات الإطلاق · **Last Updated:** 2026-08-19 · **Baseline:** `v2.14.0-operational-closure`
+> **Version:** v2.15.0-operational-closure · **Status:** مصفوفة حالة متطلبات الإطلاق · **Last Updated:** 2026-08-19 · **Baseline:** `v2.15.0-operational-closure`
 
 # Production Go-Live Requirements — Status Matrix
 

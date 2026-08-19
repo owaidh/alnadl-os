@@ -1,4 +1,4 @@
-> **Version:** v2.14.0-operational-closure · **Status:** Phase 1-5 + UX-0..5 + Go-Live P0/P1 + Operational Closure · **Last Updated:** 2026-08-19
+> **Version:** v2.15.0-operational-closure · **Status:** Phase 1-5 + UX-0..5 + Go-Live P0/P1 + Operational Closure · **Last Updated:** 2026-08-19
 
 # Alnadl Hospitality OS — Database Schema
 

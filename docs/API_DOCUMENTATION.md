@@ -1,4 +1,4 @@
-> **Version:** v2.14.0-operational-closure · **Last Updated:** 2026-08-19
+> **Version:** v2.15.0-operational-closure · **Last Updated:** 2026-08-19
 
 # Alnadl Hospitality OS — API Documentation
 

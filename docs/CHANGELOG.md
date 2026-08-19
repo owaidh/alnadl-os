@@ -1,10 +1,10 @@
-> **Version:** v2.14.0 · **Status:** OPERATIONAL CLOSURE · **Last Updated:** 2026-08-19 · **Release Tag:** `v2.14.0-operational-closure`
+> **Version:** v2.15.0 · **Status:** OPERATIONAL CLOSURE · **Last Updated:** 2026-08-19 · **Release Tag:** `v2.15.0-operational-closure`
 
 # Alnadl Hospitality OS — Change Log / Release Notes (§26.1)
 
 كل إصدار أدناه له Git tag مطابق — `git log --oneline`/`git tag -l` في المستودع يُظهر السجل الكامل بالتفصيل الحرفي لكل تغيير وملف تأثّر.
 
-## v2.14.0 — Operational Closure (2026-08-19)
+## v2.15.0 — Operational Closure (2026-08-19)
 
 الدفعتان (أ) و(ب) من Operational Closure، بنسخة نهائية واحدة بلا وسم وسيط. التفصيل الكامل ببنوده وحالاتها في `docs/OPERATIONAL_CLOSURE_REPORT.md`.
 
