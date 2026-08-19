@@ -36,6 +36,7 @@ const suites = [
   './corrective-closure.js',
   './r3-gap-closure.js',
   './white-label.js',
+  './operational-closure-b.js',
   './trusted-proxy.js',
   './production-deployment.js',
   './browser-activation-journey.js',

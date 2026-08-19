@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-19T15:04:45.336Z",
+  "timestamp": "2026-08-19T15:53:44.059Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -119,6 +119,10 @@
     },
     {
       "suite": "./white-label.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./operational-closure-b.js",
       "status": "PASS"
     },
     {

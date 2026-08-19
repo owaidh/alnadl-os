@@ -24,6 +24,10 @@ const T = {
     total:'الإجمالي', continueCheckout:'متابعة للدفع', emptyCart:'سلتك فارغة — أضف منتجات من القائمة',
     checkoutTitle:'إتمام الطلب', deliverTo:'التسليم إلى', nameField:'الاسم', phoneField:'رقم الجوال',
     payMethod:'طريقة الدفع', card:'بطاقة / Apple Pay', wallet:'رصيد الشركة', payNow:'ادفع الآن',
+    pos:'الدفع عند التسليم', cash:'نقدًا عند التسليم',
+    confirmOrder:'تأكيد الطلب', noPayTitle:'لا حاجة للدفع هنا',
+    noPayBody:'هذا الطلب لا يُحصَّل منك. أكّد الطلب وسيصلك.',
+    orderConfirmed:'تم تأكيد طلبك', st_confirmed:'تم تأكيد الطلب',
     paySuccess:'تم الدفع بنجاح', payFail:'تعذر إتمام الدفع', yourOrder:'طلبك رقم', retry:'إعادة المحاولة',
     goTrack:'الانتقال إلى متابعة الطلب', trackTitle:'طلب', needHelp:'تحتاج مساعدة؟',
     st_created:'تم إنشاء الطلب', st_pending:'بانتظار تأكيد الدفع', st_paid:'تم الاستلام',
@@ -65,6 +69,10 @@ const T = {
     total:'Total', continueCheckout:'Continue to checkout', emptyCart:'Your cart is empty — add items from the menu',
     checkoutTitle:'Checkout', deliverTo:'Deliver to', nameField:'Name', phoneField:'Mobile number',
     payMethod:'Payment method', card:'Card / Apple Pay', wallet:'Corporate wallet', payNow:'Pay now',
+    pos:'Pay on delivery', cash:'Cash on delivery',
+    confirmOrder:'Confirm order', noPayTitle:'No payment needed here',
+    noPayBody:'This order is not collected from you. Confirm it and it will be on its way.',
+    orderConfirmed:'Your order is confirmed', st_confirmed:'Order confirmed',
     paySuccess:'Payment successful', payFail:'Payment could not be completed', yourOrder:'Your order #', retry:'Retry',
     goTrack:'Go to order tracking', trackTitle:'Order', needHelp:'Need help?',
     st_created:'Order created', st_pending:'Awaiting payment confirmation', st_paid:'Order received',
@@ -120,12 +128,12 @@ const S = {
   // added (see addActiveToCart) so the next open starts fresh rather
   // than replaying a just-completed selection.
   productDrafts:{},
-  cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
+  cart:[], currentOrder:null, payMethod:'card', paymentPolicy:null, promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
   adminPlans:null, theme:'system', contextSwitchedFrom:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
-  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], merchantStatuses:{}, paymentPolicies:null, wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
   ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, activationHandoff:null, pointQr:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
@@ -256,12 +264,35 @@ const App = {
     const ref = document.getElementById('employeeRef')?.value.trim();
     if(!ref) return;
     try{
-      const r = await api('GET', `/api/wallets/lookup?ownerRef=${encodeURIComponent(ref)}`);
+      // P1-03: النطاق يُشتق على الخادم من هذا الرمز؛ بلا رمز لا بحث.
+      const r = await api('GET', `/api/wallets/lookup?ownerRef=${encodeURIComponent(ref)}&t=${encodeURIComponent(S.qrContext.token)}`);
       S.wallet = { ...r, ownerRef: ref }; S.payMethod='wallet'; showToast(S.lang==='ar'?'تم العثور على المحفظة':'Wallet found'); render();
     }catch(e){ S.wallet=null; showErr(S.lang==='ar'?'لا توجد محفظة بهذا المعرّف':'No wallet found for this ID'); }
   },
 
-  async goCheckout(){ if(S.cart.length===0) return; App.goScreen('checkout'); },
+  async goCheckout(){
+    if(S.cart.length===0) return;
+    // P1-04: السياسة تُقرأ من الخادم قبل رسم الشاشة، لا تُخمّن. المنفذ
+    // يُمرَّر فقط حين تكون السلّة من منفذ واحد -- نفس قاعدة الخادم عند
+    // الإنشاء بالضبط، فلا تنشأ قاعدتان تختلفان.
+    try{
+      const outletIds = [...new Set(S.cart.map(c=>{
+        const prod = (S.catalog?.products||[]).find(pr=>pr.id===c.productId);
+        return prod ? prod.outlet_id : null;
+      }).filter(Boolean))];
+      const qs = `pointId=${encodeURIComponent(S.qrContext.point.id)}` + (outletIds.length===1? `&outletId=${encodeURIComponent(outletIds[0])}`:'');
+      S.paymentPolicy = await api('GET', `/api/payment-policy?${qs}`);
+      // الوسيلة المختارة مسبقًا قد لا تكون مصرّحًا بها هنا؛ تُصحَّح إلى أول
+      // وسيلة متاحة بدل تركها تفشل عند الإرسال.
+      const allowed = S.paymentPolicy.allowedMethods || [];
+      if(allowed.length && !allowed.includes(S.payMethod)) S.payMethod = allowed[0];
+    }catch(e){
+      // فشل القراءة لا يُسقط الرحلة: الخادم هو الحَكَم على أي حال، ورد
+      // الإنشاء يُصحّح الواجهة. نعود للسلوك التاريخي (تحصيل أونلاين).
+      S.paymentPolicy = null;
+    }
+    App.goScreen('checkout');
+  },
 
   // UX-1 corrective finding: this function used to accept a simulateFail
   // parameter, with the real payment button and a "Simulate payment
@@ -289,6 +320,17 @@ const App = {
         };
         const created = await api('POST', '/api/orders', payload);
         S.currentOrder = { id: created.id, status: created.status, paymentRef: created.paymentRef };
+        // رد الإنشاء هو الحقيقة النهائية: الخادم يحلّ السياسة على مستوى
+        // المنفذ بعد معرفة السلّة، وقد يختلف عمّا رسمته الشاشة. تصحيح
+        // الواجهة من الرد يمنع عرض خطوة دفع لطلب لا يُدفع.
+        if(created.requiresGuestPayment !== undefined){
+          S.paymentPolicy = { policy: created.paymentPolicy, requiresGuestPayment: created.requiresGuestPayment, allowedMethods: created.allowedMethods||[] };
+        }
+      }
+      // لا خطوة دفع أصلًا: الطلب خرج من الإنشاء مؤكَّدًا (Confirmed).
+      if(S.paymentPolicy && S.paymentPolicy.requiresGuestPayment === false){
+        App.goScreen('paymentResult');
+        return;
       }
       const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod });
       S.currentOrder.status = result.status;
@@ -301,7 +343,7 @@ const App = {
     if(!S.currentOrder) return;
     try{ const o = await api('GET', '/api/orders/'+S.currentOrder.id); S.currentOrder = { ...S.currentOrder, ...o }; render(); }catch{}
   },
-  startNewOrder(){ S.cart=[]; S.currentOrder=null; S.promo=null; S.redeemPoints=0; S.loyaltyBalance=null; S.wallet=null; S.payMethod='card'; S.checkoutName=''; S.checkoutPhone=''; App.goScreen('welcome'); },
+  startNewOrder(){ S.cart=[]; S.currentOrder=null; S.promo=null; S.redeemPoints=0; S.loyaltyBalance=null; S.wallet=null; S.payMethod='card'; S.paymentPolicy=null; S.checkoutName=''; S.checkoutPhone=''; App.goScreen('welcome'); },
   setStar(n){ S.feedback = S.feedback||{stars:0,tags:[],comment:''}; S.feedback.stars=n; render(); },
   toggleTag(tag){ S.feedback = S.feedback||{stars:0,tags:[],comment:''}; const i=S.feedback.tags.indexOf(tag); if(i>-1) S.feedback.tags.splice(i,1); else S.feedback.tags.push(tag); render(); },
   async submitFeedback(){
@@ -461,6 +503,7 @@ const App = {
     if(scr==='revenue') await App.loadOutletsForRevenue();
     if(scr==='branding') await App.loadBranding();
     if(scr==='merchants') await App.loadMerchants();
+    if(scr==='paymentpolicy') await App.loadPaymentPolicies();
     if(scr==='wallets') await App.loadWallets();
   },
   async loadPortfolio(){ S.portfolio = await api('GET','/api/admin/portfolio',null,true); render(); },
@@ -665,7 +708,57 @@ const App = {
     catch(e){ showErr(e.message); }
   },
 
-  async loadMerchants(){ S.merchants = await api('GET','/api/admin/merchants',null,true); render(); },
+  async loadMerchants(){
+    S.merchants = await api('GET','/api/admin/merchants',null,true);
+    // P1-05: الملخّص يُقرأ لكل شريك تجاري لأن الانتقالات المتاحة تعتمد على
+    // طلباته المفتوحة، وهي معلومة لا يملكها العميل ولا يجوز أن يخمّنها --
+    // زر إغلاق يفشل عند الضغط أسوأ من زر غائب بسبب مُعلَن.
+    const map = {};
+    for(const m of S.merchants){
+      try{ map[m.id] = await api('GET',`/api/admin/merchants/${m.id}/status`,null,true); }catch(e){ map[m.id]=null; }
+    }
+    S.merchantStatuses = map;
+    render();
+  },
+  async setMerchantStatus(merchantId, to){
+    const reason = prompt(S.lang==='ar'?'سبب تغيير حالة الشريك التجاري (يُسجَّل في سجل التدقيق):':'Reason for this merchant status change (recorded in the audit log):');
+    if(!reason) return; // السبب إلزامي على الخادم؛ الإلغاء هنا يمنع رحلة تفشل
+    try{
+      await api('POST',`/api/admin/merchants/${merchantId}/status`,{status:to, reason},true);
+      showToast(t('toast_saved')); await App.loadMerchants();
+    }catch(e){ showErr(e.message); }
+  },
+
+  /* ---- P1-04: إدارة سياسة التحصيل ---- */
+  async loadPaymentPolicies(){
+    const partnerId = S.PARTNER_ID;
+    const [overrides, effective, properties, outlets] = await Promise.all([
+      api('GET',`/api/admin/payment-policy/overrides?partnerId=${partnerId}`,null,true),
+      api('GET',`/api/admin/payment-policy/effective?partnerId=${partnerId}`,null,true),
+      api('GET','/api/admin/properties',null,true).catch(()=>[]),
+      api('GET','/api/admin/outlets',null,true).catch(()=>[]),
+    ]);
+    S.paymentPolicies = { ...overrides, effective, properties, outlets, partnerId };
+    render();
+  },
+  async savePaymentPolicy(scopeType, scopeId){
+    const sel = document.getElementById(`pp_${scopeType}_${scopeId}`);
+    if(!sel) return;
+    const policy = sel.value;
+    if(policy==='__inherit__'){ return App.clearPaymentPolicy(scopeType, scopeId); }
+    const body = { policy };
+    if(policy==='MIXED'){
+      const checked = [...document.querySelectorAll(`input[data-mixed="${scopeType}_${scopeId}"]:checked`)].map(i=>i.value);
+      if(!checked.length) return showErr(S.lang==='ar'?'اختر وسيلة واحدة على الأقل لسياسة MIXED':'Pick at least one method for MIXED');
+      body.allowedMethods = checked;
+    }
+    try{ await api('PUT',`/api/admin/payment-policy/${scopeType}/${scopeId}`,body,true); showToast(t('toast_saved')); await App.loadPaymentPolicies(); }
+    catch(e){ showErr(e.message); }
+  },
+  async clearPaymentPolicy(scopeType, scopeId){
+    try{ await api('DELETE',`/api/admin/payment-policy/${scopeType}/${scopeId}`,null,true); showToast(t('toast_saved')); await App.loadPaymentPolicies(); }
+    catch(e){ showErr(e.message); }
+  },
   async addMerchant(){
     const name_ar=document.getElementById('merAr').value.trim(), name_en=document.getElementById('merEn').value.trim();
     const commissionRate=(parseFloat(document.getElementById('merCommission').value)||10)/100;
@@ -1188,7 +1281,7 @@ window.App = App;
 
 /* ============================== RENDER ============================== */
 function statusBadge(status){
-  const map = { 'Created':['pending','st_created'],'Payment Pending':['pending','st_pending'],'Paid':['paid','st_paid'],
+  const map = { 'Created':['pending','st_created'],'Payment Pending':['pending','st_pending'],'Paid':['paid','st_paid'],'Confirmed':['paid','st_confirmed'],
     'Accepted':['paid','st_accepted'],'Preparing':['prep','st_preparing'],'Ready':['ready','st_ready'],
     'Out for Delivery':['out','st_out'],'Delivered':['delivered','st_delivered'],
     'Partially Ready':['ready','st_partially_ready'],'Partially Delivered':['out','st_partially_delivered'],
@@ -1552,6 +1645,17 @@ function scrCheckout(){
   const t1 = App.computeTotals();
   const feat = S.qrContext.features || {};
   const walletCoverPreview = S.wallet ? Math.min(t1.total, S.wallet.remaining, S.wallet.policy?.perOrderCap ?? Infinity) : 0;
+  /* P1-04 -- الشاشة تعكس السياسة ولا تتجاوزها:
+       * لا تحصيل  -> كتلة وسائل الدفع تختفي كليًا. إظهارها معطّلة كان
+         سيترك الضيف يتساءل عمّا ينقصه؛ الغياب أوضح من التعطيل.
+       * تحصيل     -> تُعرض الوسائل المصرّح بها فقط. الإخفاء ليس إنفاذًا
+         (الإنفاذ على الخادم)، لكنه يمنع ضيفًا من اختيار طريق يُرفض.
+     غياب السياسة (تعذّر قراءتها) يسقط للسلوك التاريخي: بطاقة أونلاين. */
+  const pol = S.paymentPolicy;
+  const collects = !pol || pol.requiresGuestPayment !== false;
+  const allowed = (pol && pol.allowedMethods) || ['card','applepay','mada'];
+  const show = m => allowed.includes(m);
+  const showCard = show('card') || show('applepay') || show('mada');
   return `
   <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('cart')">${S.lang==='ar'?'→':'←'}</button><h3>${t('checkoutTitle')}</h3><div style="width:32px"></div></div></div>
   <div class="scrbody">
@@ -1572,9 +1676,16 @@ function scrCheckout(){
           </div>`:''}
       </div>` : ''}
 
+    ${!collects? `
+    <div class="loyaltybox" style="border-color:var(--sage-500)">
+      <div class="loyaltybox-head">✓ ${t('noPayTitle')}</div>
+      <div style="font-size:12px;color:var(--ink-400);margin-top:6px">${t('noPayBody')}</div>
+    </div>` : `
     <div class="formfield"><label>${t('payMethod')}</label>
-      <div class="paymethodrow ${S.payMethod==='card'?'sel':''}" onclick="App.setPayMethod('card')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='card'?'on':''}"></div>💳 ${t('card')}</div></div>
-      ${feat.corporateWallet? `
+      ${showCard? `<div class="paymethodrow ${S.payMethod==='card'?'sel':''}" onclick="App.setPayMethod('card')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='card'?'on':''}"></div>💳 ${t('card')}</div></div>`:''}
+      ${show('pos')? `<div class="paymethodrow ${S.payMethod==='pos'?'sel':''}" onclick="App.setPayMethod('pos')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='pos'?'on':''}"></div>🧾 ${t('pos')}</div></div>`:''}
+      ${show('cash')? `<div class="paymethodrow ${S.payMethod==='cash'?'sel':''}" onclick="App.setPayMethod('cash')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='cash'?'on':''}"></div>💵 ${t('cash')}</div></div>`:''}
+      ${feat.corporateWallet && show('wallet')? `
       <div class="paymethodrow ${S.payMethod==='wallet'?'sel':''}" style="flex-direction:column;align-items:stretch;gap:8px" onclick="${S.wallet?"App.setPayMethod('wallet')":''}">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='wallet'?'on':''}"></div>🏢 ${t('wallet')}</div>
@@ -1585,7 +1696,7 @@ function scrCheckout(){
             <button onclick="App.lookupWallet()" style="border:1px solid var(--ink-800);background:var(--white);border-radius:8px;padding:8px 12px;font-size:11.5px;font-weight:700">${S.lang==='ar'?'ربط':'Link'}</button>
           </div>` : `<div style="font-size:11px;color:var(--ink-400)">${S.lang==='ar'?'ستُغطّى':'Will cover'} ${money(walletCoverPreview)} ${unitCur()} ${S.lang==='ar'?'من إجمالي':'of'} ${money(t1.total)}</div>`}
       </div>`:''}
-    </div>
+    </div>`}
 
     <div class="totalsbox">
       <div class="totalline"><span>${t('subtotal')}</span><span>${money(t1.subtotal)}</span></div>
@@ -1595,15 +1706,17 @@ function scrCheckout(){
       <div class="totalline grand"><span>${t('total')}</span><span>${money(t1.total)} ${unitCur()}</span></div></div>
   </div>
   <div style="position:absolute;bottom:0;inset-inline:0;padding:14px 18px;background:var(--cream-050);border-top:1px solid var(--cream-200);display:flex;flex-direction:column;gap:8px;">
-    <button class="btn-primary" onclick="App.submitPayment()">${t('payNow')} · ${money(t1.total)} ${unitCur()}</button>
-    ${window.AlnadlDevTools && window.AlnadlDevTools.renderPaymentTestControl ? window.AlnadlDevTools.renderPaymentTestControl() : ''}
+    <button class="btn-primary" onclick="App.submitPayment()">${collects? `${t('payNow')} · ${money(t1.total)} ${unitCur()}` : t('confirmOrder')}</button>
+    ${collects && window.AlnadlDevTools && window.AlnadlDevTools.renderPaymentTestControl ? window.AlnadlDevTools.renderPaymentTestControl() : ''}
   </div>`;
 }
 
 function scrPaymentResult(){
   const o = S.currentOrder; const ok = o && o.status!=='Failed';
+  // طلب لم يُحصَّل لا يُقال عنه "تم الدفع بنجاح" -- الرسالة تتبع ما حدث فعلًا.
+  const noPay = S.paymentPolicy && S.paymentPolicy.requiresGuestPayment === false;
   return `<div class="resultwrap"><div class="resulticon ${ok?'ok':'fail'}">${ok?'✓':'✕'}</div>
-    <h2 style="margin:0">${ok?t('paySuccess'):t('payFail')}</h2>
+    <h2 style="margin:0">${ok? (noPay? t('orderConfirmed') : t('paySuccess')) : t('payFail')}</h2>
     ${ok? `<div class="orderno">${t('yourOrder')}${o.id}</div>`:`<p style="color:var(--ink-400);font-size:12.5px;max-width:260px">${S.lang==='ar'?'لم يتم إنشاء طلب مكرر — يمكنك إعادة المحاولة بأمان.':'No duplicate order was created — you can safely retry.'}</p>`}
     ${ok? `<button class="btn-primary" style="max-width:260px" onclick="App.goTrack()">${t('goTrack')}</button>` : `<button class="btn-primary" style="max-width:260px" onclick="App.retryPayment()">${t('retry')}</button>`}
   </div>`;
@@ -1611,8 +1724,11 @@ function scrPaymentResult(){
 
 function scrTracking(){
   const o=S.currentOrder; if(!o) return scrWelcome();
-  const order=['Paid','Accepted','Preparing','Ready','Out for Delivery','Delivered'];
-  const labels=['st_paid','st_accepted','st_preparing','st_ready','st_out','st_delivered'];
+  // P1-04: أول درجة في السلّم هي الحالة التي تخلّي الطلب فعلًا -- 'Paid'
+  // حين يُحصَّل، و'Confirmed' حين لا يُحصَّل. الرحلة بعدها واحدة.
+  const cleared = o.status==='Confirmed' || S.paymentPolicy?.requiresGuestPayment===false ? 'Confirmed' : 'Paid';
+  const order=[cleared,'Accepted','Preparing','Ready','Out for Delivery','Delivered'];
+  const labels=[cleared==='Confirmed'?'st_confirmed':'st_paid','st_accepted','st_preparing','st_ready','st_out','st_delivered'];
   // Partial states (Q04, multi-outlet orders) map onto the same 6-step
   // visual, but never claim more progress than genuinely happened —
   // "Partially Ready" sits at the Ready step, "Partially Delivered" at the
@@ -1793,6 +1909,7 @@ function navGroupsFor(role){
       ]},
       { id:'SA04', label:L('التجاري','Commercial'), items:[
         ['revenue', L('نماذج الإيراد','Revenue Models')],
+        ['paymentpolicy', L('سياسة التحصيل','Payment Policy')],
         ['settlements', t('revShareTitle')],
         ['refunds', L('الاسترجاعات','Refunds')],
         ['wallets', L('محافظ الشركات','Corporate Wallets')],
@@ -1836,6 +1953,7 @@ function navGroupsFor(role){
       ]},
       { id:'P-COM', label:L('التجاري','Commercial'), items:[
         ['revenue', L('نماذج الإيراد','Revenue Models')],
+        ['paymentpolicy', L('سياسة التحصيل','Payment Policy')],
         ['wallets', L('محافظ الشركات','Corporate Wallets')],
         ['billing', L('الباقة','Plan')],
       ]},
@@ -1855,12 +1973,12 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')],['exceptions', S.lang==='ar'?'الاستثناءات':'Exceptions']],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')],['engagecontrol', S.lang==='ar'?'تحكّم Engage':'Engage Control'],['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['paymentpolicy', S.lang==='ar'?'سياسة التحصيل':'Payment Policy'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')],['engagecontrol', S.lang==='ar'?'تحكّم Engage':'Engage Control'],['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
     AlnadlFinance:[['revledger', S.lang==='ar'?'دفتر الإيراد':'Revenue Ledger'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
     PartnerViewer:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
     ProductAdmin:[['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['engageoverview', S.lang==='ar'?'نظرة Engage':'Engage Overview']],
     SafetyReviewer:[['safety', S.lang==='ar'?'حوادث السلامة':'Safety Incidents'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
-    PartnerAdmin:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    PartnerAdmin:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['paymentpolicy', S.lang==='ar'?'سياسة التحصيل':'Payment Policy'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
   const nav = navByRole[role] || [];
   let inner = '';
@@ -1891,6 +2009,7 @@ function renderStaffShell(){
   else if(S.screen==='branding') inner = renderBranding();
   else if(S.screen==='refunds') inner = renderRefunds();
   else if(S.screen==='merchants') inner = renderMerchants();
+  else if(S.screen==='paymentpolicy') inner = renderPaymentPolicy();
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
 
@@ -3414,7 +3533,73 @@ function renderRefunds(){
   </div>`:''}`;
 }
 
+function renderPaymentPolicy(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  /* P1-04 — الشاشة تُظهر ثلاثة مستويات في مكان واحد لأن الوراثة نفسها هي
+     المعلومة: مشغّل يرى "أونلاين" على منفذ دون معرفة أي مستوى فرضها سيغيّر
+     المستوى الخطأ ولا يتحرّك شيء. ولذلك يُعرض المصدر صراحةً بجانب النتيجة. */
+  const d = S.paymentPolicies;
+  if(!d) return `<div class="panel"><p class="ph">${L('جارٍ التحميل…','Loading…')}</p></div>`;
+  const POLICY_LABEL = {
+    ONLINE: L('تحصيل أونلاين','Collect online'),
+    POS_ON_DELIVERY: L('تحصيل عند التسليم (نقاط بيع/نقدًا)','Collect on delivery (POS/cash)'),
+    CORPORATE_WALLET: L('محفظة الشركة','Corporate wallet'),
+    NO_GUEST_PAYMENT: L('لا تحصيل من الضيف','No guest payment'),
+    MIXED: L('مختلط (وسائل مُحدَّدة)','Mixed (specific methods)'),
+  };
+  const ovFor = (type,id)=> (d.overrides||[]).find(o=>o.scope_type===type && o.scope_id===id) || null;
+  const methodsAll = (d.methodsByPolicy && d.methodsByPolicy.MIXED) || ['card','applepay','mada','pos','cash','wallet'];
+
+  const row = (type, id, name)=>{
+    const ov = ovFor(type,id);
+    const current = ov && ov.policy ? ov.policy : '__inherit__';
+    let mixed = [];
+    try{ mixed = ov && ov.allowed_methods_json ? JSON.parse(ov.allowed_methods_json) : []; }catch(e){ mixed=[]; }
+    return `<div class="prodlistrow" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div class="nm">${name}<span style="display:block">${type} · ${id}</span></div>
+        ${ov && ov.policy? `<span class="badge ready">${POLICY_LABEL[ov.policy]||ov.policy}</span>` : `<span class="badge pending">${L('موروثة','Inherited')}</span>`}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <select id="pp_${type}_${id}" onchange="render()">
+          ${type!=='partner'? `<option value="__inherit__" ${current==='__inherit__'?'selected':''}>${L('وراثة من الأعلى','Inherit from above')}</option>`:''}
+          ${(d.policies||[]).map(pl=>`<option value="${pl}" ${current===pl?'selected':''}>${POLICY_LABEL[pl]||pl}</option>`).join('')}
+        </select>
+        <button class="btn-small brass" onclick="App.savePaymentPolicy('${type}','${id}')">${L('حفظ','Save')}</button>
+        ${ov? `<button class="btn-small line" onclick="App.clearPaymentPolicy('${type}','${id}')">${L('إزالة التجاوز','Clear override')}</button>`:''}
+      </div>
+      ${current==='MIXED'? `<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--ink-300)">
+        ${methodsAll.map(m=>`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" data-mixed="${type}_${id}" value="${m}" ${mixed.includes(m)?'checked':''}> ${m}</label>`).join('')}
+      </div>`:''}
+    </div>`;
+  };
+
+  const props = (d.properties||[]).filter(pr=>pr.partner_id===d.partnerId);
+  const propIds = new Set(props.map(pr=>pr.id));
+  const outlets = (d.outlets||[]).filter(o=>propIds.has(o.property_id));
+
+  return `
+  <div class="panel"><p class="ph" style="margin:0">${L(
+    'الترتيب: المنفذ ثم العقار ثم الشريك، والافتراضي تحصيل أونلاين. المستوى الأدق يحسم. الإنفاذ على الخادم: إخفاء وسيلة من الشاشة لا يمنع طلبًا مصنوعًا يدويًا. «لا تحصيل من الضيف» يعني أن الطلب يحمل قيمته الكاملة في التقارير والتسويات لكنه لا يُحصَّل من الضيف — وليس مجانيًا.',
+    'Resolution order: Outlet, then Property, then Partner, defaulting to online collection. The most specific level wins. Enforcement is server-side: hiding a method from the screen does not stop a hand-crafted request. "No guest payment" means the order carries its full value into reports and settlement but is never collected from the guest — it is not free.')}</p></div>
+  <div class="panel"><h3>${L('السياسة الفعّالة على مستوى الشريك','Effective policy at partner level')}</h3>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+      <span class="badge ready">${POLICY_LABEL[d.effective.policy]||d.effective.policy}</span>
+      <span style="font-size:12px;color:var(--ink-300)">${L('المصدر','Source')}: ${d.effective.source}</span>
+      <span style="font-size:12px;color:var(--ink-300)">${L('الوسائل','Methods')}: ${(d.effective.allowedMethods||[]).join(', ') || L('لا شيء','none')}</span>
+    </div>
+  </div>
+  <div class="panel"><h3>${L('مستوى الشريك','Partner level')}</h3>${row('partner', d.partnerId, d.partnerId)}</div>
+  <div class="panel"><h3>${L('العقارات','Properties')}</h3>
+    ${props.length? props.map(pr=>row('property', pr.id, S.lang==='ar'?pr.name_ar:pr.name_en)).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${L('لا عقارات','No properties')}</div>`}
+  </div>
+  <div class="panel"><h3>${L('المنافذ','Outlets')}</h3>
+    ${outlets.length? outlets.map(o=>row('outlet', o.id, S.lang==='ar'?o.name_ar:o.name_en)).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${L('لا منافذ','No outlets')}</div>`}
+  </div>`;
+}
+
 function renderMerchants(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
   const rows = S.merchants || [];
   const featureOn = S.subscription ? S.subscription.features?.marketplace : true; // SuperAdmin has no single subscription context; PartnerAdmin's is loaded
   return `<div class="grid2"><div>
@@ -3426,8 +3611,22 @@ function renderMerchants(){
       <button class="btn-small brass" onclick="App.addMerchant()">+ ${S.lang==='ar'?'إضافة':'Add'}</button>
     </div></div>
     <div class="panel"><h3>${S.lang==='ar'?'الشركاء الحاليون':'Current merchants'}</h3>
-      ${rows.length? rows.map(m=>`<div class="prodlistrow"><div class="nm">${S.lang==='ar'?m.name_ar:m.name_en}<span style="display:block">${m.kind==='alnadl'?(S.lang==='ar'?'مُدار من النادل':'Alnadl-operated'):(S.lang==='ar'?`شريك · عمولة ${Math.round(m.commission_rate*100)}%`:`Partner · ${Math.round(m.commission_rate*100)}% commission`)}</span></div>
-        <span class="badge ${m.status==='Active'?'ready':'cancel'}">${m.status}</span></div>`).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا يوجد شركاء بعد':'No merchants yet'}</div>`}
+      ${rows.length? rows.map(m=>{
+        const st = (S.merchantStatuses||{})[m.id];
+        const badgeCls = m.status==='Active'?'ready':(m.status==='Inactive'?'pending':'cancel');
+        const label = { Active:L('نشط','Active'), Inactive:L('موقوف مؤقتًا','Inactive'), Closed:L('مغلق','Closed') }[m.status] || m.status;
+        return `<div class="prodlistrow" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div class="nm">${S.lang==='ar'?m.name_ar:m.name_en}<span style="display:block">${m.kind==='alnadl'?L('مُدار من النادل','Alnadl-operated'):(S.lang==='ar'?`شريك · عمولة ${Math.round(m.commission_rate*100)}%`:`Partner · ${Math.round(m.commission_rate*100)}% commission`)}</span></div>
+          <span class="badge ${badgeCls}">${label}</span>
+        </div>
+        ${st? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px">
+          ${st.openOrders>0? `<span style="font-size:11px;color:var(--ink-300)">${L('طلبات مفتوحة','Open orders')}: ${st.openOrders}</span>`:''}
+          ${st.allowedTransitions.map(to=>`<button class="btn-small line" onclick="App.setMerchantStatus('${m.id}','${to}')">→ ${({Active:L('تفعيل','Activate'),Inactive:L('إيقاف مؤقت','Set inactive'),Closed:L('إغلاق','Close')})[to]}</button>`).join('')}
+          ${st.blockedTransitions.map(b=>`<span style="font-size:11px;color:var(--brass-400,#C08A3E)" title="${b.remedy||''}">${L('الإغلاق محجوب','Close blocked')} — ${b.remedy||''}</span>`).join('')}
+          ${st.reopenRequiresSuperAdmin && S.session.user.role!=='SuperAdmin'? `<span style="font-size:11px;color:var(--ink-300)">${L('إعادة الفتح تتطلب SuperAdmin','Reopening requires SuperAdmin')}</span>`:''}
+        </div>`:''}
+        </div>`;}).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا يوجد شركاء بعد':'No merchants yet'}</div>`}
     </div></div>`;
 }
 
