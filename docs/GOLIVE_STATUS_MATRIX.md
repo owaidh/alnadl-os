@@ -1,4 +1,4 @@
-> **Version:** v2.8.1-golive-matrix · **Status:** مصفوفة حالة متطلبات الإطلاق · **Last Updated:** 2026-08-14 · **Baseline:** `v2.8.0-golive-p0p1`
+> **Version:** v2.14.0-operational-closure · **Status:** مصفوفة حالة متطلبات الإطلاق · **Last Updated:** 2026-08-19 · **Baseline:** `v2.14.0-operational-closure`
 
 # Production Go-Live Requirements — Status Matrix
 
@@ -107,3 +107,19 @@
 **وبند واحد ينتظر قرارك**: §3.3 Payment Gateway.
 
 > إغلاق §3.1 يفتح البندين التابعين له تلقائيًا — أي أن **حاجزًا واحدًا حقيقيًا** يفصل النسخة الحالية عن Release Candidate.
+
+---
+
+## Operational Closure — الدفعتان (أ) و(ب) · 2026-08-19
+
+التفصيل الكامل ببنوده وأدلّته في `docs/OPERATIONAL_CLOSURE_REPORT.md`.
+
+| Requirement | Status | Evidence / Test | External Dependency | Remaining Action |
+|---|---|---|---|---|
+| **P1-04 سياسة التحصيل عبر رحلة الضيف** | **Implemented & Verified** | `tests/operational-closure-b.js` (23 بندًا) · `tests/browser-payment-policy.js` | — | لا شيء |
+| **P1-03 ربط المحافظ بكيان الشريك** | **Implemented & Verified** | `operational-closure-b.js` بنود 11-13 — خصم عابر للمستأجرين مُغلَق | — | لا شيء |
+| **P1-05 دورة حياة الشريك التجاري** | **Implemented & Verified** | `operational-closure-b.js` بنود 14-20 · التحقق البصري بند 6 | — | لا شيء |
+| P1-01 · P1-06 · P1-07 · P1-08 · P2 (الدفعة أ) | **Implemented & Verified** | تقرير الإغلاق §2 | — | لا شيء |
+| **ملف `package-lock.json`** | **Implemented – Awaiting Environment Verification** | `scripts/generate-lockfile.sh` جاهز | **وصول إلى registry.npmjs.org** | تشغيل السكربت على جهاز متصل ثم إيداع الملف |
+| **صور QR (SVG/PNG · طباعة · مسح بجهاز)** | **Implemented – Awaiting Environment Verification** | منطق الرمز مُختبَر بالكامل في `tests/qr-flow.js` — الصورة وحدها غير مُتحقَّقة | **npm + جهاز حقيقي** | `npm ci && npm run verify:qr` ثم مسح رمز مطبوع بجهازين |
+| **بناء وتشغيل صورة Docker** | **Implemented – Awaiting Environment Verification** | `tests/production-deployment.js` — 27 تأكيدًا تبني الشجرة من `COPY` وتُشغّلها فعليًا | **مُشغِّل حاويات** | `bash scripts/docker-verify.sh` |
