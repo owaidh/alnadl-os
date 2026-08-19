@@ -40,6 +40,7 @@ const suites = [
   './trusted-proxy.js',
   './production-deployment.js',
   './browser-activation-journey.js',
+  './browser-payment-policy.js',
   './qr-flow.js',
 ];
 

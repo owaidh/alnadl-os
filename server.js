@@ -2944,7 +2944,28 @@ on('GET', '/api/admin/payment-policy/overrides', ['SuperAdmin', 'PartnerAdmin', 
   assertPartnerScope(session, partnerId);
   const rows = db.prepare('SELECT * FROM payment_policy_overrides').all()
     .filter(r => paymentScopePartner(r.scope_type, r.scope_id) === partnerId);
-  sendJSON(res, 200, { policies: paymentPolicy.POLICIES, methodsByPolicy: paymentPolicy.METHODS_BY_POLICY, overrides: rows });
+
+  /* التحقق البصري كشف نقصًا حقيقيًا: صفّ يقول «موروثة» دون أن يقول **ماذا**
+     يرث. وهو عين العيب الذي بُنيت الشاشة لعلاجه، مطبَّقًا مستوًى أدنى. الحلّ
+     أن يحسب الخادم النتيجة الفعّالة لكل نطاق بالمُحلِّل نفسه -- إعادة بناء
+     الوراثة في الواجهة كانت ستُنشئ نسخة ثانية من القاعدة تنحرف يومًا. */
+  const properties = db.prepare('SELECT id, name_ar, name_en FROM properties WHERE partner_id = ?').all(partnerId);
+  const outlets = db.prepare(`SELECT o.id, o.name_ar, o.name_en, o.property_id FROM outlets o
+                              JOIN properties p ON p.id = o.property_id WHERE p.partner_id = ?`).all(partnerId);
+  const effectiveByScope = {};
+  effectiveByScope[`partner:${partnerId}`] = paymentPolicy.resolvePaymentPolicy({ partnerId });
+  for (const pr of properties) {
+    effectiveByScope[`property:${pr.id}`] = paymentPolicy.resolvePaymentPolicy({ partnerId, propertyId: pr.id });
+  }
+  for (const o of outlets) {
+    effectiveByScope[`outlet:${o.id}`] = paymentPolicy.resolvePaymentPolicy({
+      partnerId, propertyId: o.property_id, outletId: o.id,
+    });
+  }
+  sendJSON(res, 200, {
+    policies: paymentPolicy.POLICIES, methodsByPolicy: paymentPolicy.METHODS_BY_POLICY,
+    overrides: rows, properties, outlets, effectiveByScope,
+  });
 });
 
 on('PUT', '/api/admin/payment-policy/:scopeType/:scopeId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {

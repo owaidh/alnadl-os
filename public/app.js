@@ -732,13 +732,13 @@ const App = {
   /* ---- P1-04: إدارة سياسة التحصيل ---- */
   async loadPaymentPolicies(){
     const partnerId = S.PARTNER_ID;
-    const [overrides, effective, properties, outlets] = await Promise.all([
+    // النطاقات والنتيجة الفعّالة لكل منها تأتي من النقطة نفسها: الوراثة
+    // تُحسب في مكان واحد على الخادم ولا تُعاد بناؤها هنا.
+    const [overrides, effective] = await Promise.all([
       api('GET',`/api/admin/payment-policy/overrides?partnerId=${partnerId}`,null,true),
       api('GET',`/api/admin/payment-policy/effective?partnerId=${partnerId}`,null,true),
-      api('GET','/api/admin/properties',null,true).catch(()=>[]),
-      api('GET','/api/admin/outlets',null,true).catch(()=>[]),
     ]);
-    S.paymentPolicies = { ...overrides, effective, properties, outlets, partnerId };
+    S.paymentPolicies = { ...overrides, effective, partnerId };
     render();
   },
   async savePaymentPolicy(scopeType, scopeId){
@@ -3548,6 +3548,8 @@ function renderPaymentPolicy(){
     MIXED: L('مختلط (وسائل مُحدَّدة)','Mixed (specific methods)'),
   };
   const ovFor = (type,id)=> (d.overrides||[]).find(o=>o.scope_type===type && o.scope_id===id) || null;
+  // النتيجة الفعّالة كما حلّها الخادم -- لا تُعاد حوسبتها هنا.
+  const eff = (type,id)=> (d.effectiveByScope||{})[`${type}:${id}`] || { policy:'ONLINE', source:'default' };
   const methodsAll = (d.methodsByPolicy && d.methodsByPolicy.MIXED) || ['card','applepay','mada','pos','cash','wallet'];
 
   const row = (type, id, name)=>{
@@ -3558,7 +3560,9 @@ function renderPaymentPolicy(){
     return `<div class="prodlistrow" style="flex-direction:column;align-items:stretch;gap:8px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div class="nm">${name}<span style="display:block">${type} · ${id}</span></div>
-        ${ov && ov.policy? `<span class="badge ready">${POLICY_LABEL[ov.policy]||ov.policy}</span>` : `<span class="badge pending">${L('موروثة','Inherited')}</span>`}
+        ${ov && ov.policy
+          ? `<span class="badge ready">${POLICY_LABEL[ov.policy]||ov.policy}</span>`
+          : `<span class="badge pending">${L('موروثة','Inherited')}: ${POLICY_LABEL[(eff(type,id).policy)]||eff(type,id).policy} ${L('من','from')} ${eff(type,id).source}</span>`}
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
         <select id="pp_${type}_${id}" onchange="render()">
@@ -3574,9 +3578,8 @@ function renderPaymentPolicy(){
     </div>`;
   };
 
-  const props = (d.properties||[]).filter(pr=>pr.partner_id===d.partnerId);
-  const propIds = new Set(props.map(pr=>pr.id));
-  const outlets = (d.outlets||[]).filter(o=>propIds.has(o.property_id));
+  const props = d.properties||[];
+  const outlets = d.outlets||[];
 
   return `
   <div class="panel"><p class="ph" style="margin:0">${L(

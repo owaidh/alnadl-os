@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-19T15:53:44.059Z",
+  "timestamp": "2026-08-19T16:04:00.582Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -135,6 +135,10 @@
     },
     {
       "suite": "./browser-activation-journey.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./browser-payment-policy.js",
       "status": "PASS"
     },
     {
