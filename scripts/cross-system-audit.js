@@ -99,6 +99,10 @@ async function main() {
     ['GET', '/api/admin/revenue-ledger', null, 'دفتر الإيراد'],
     ['GET', '/api/admin/wallets', null, 'محافظ الشركات'],
     ['GET', '/api/admin/branding?partnerId=pt_nova', null, 'العلامة التجارية'],
+    // Operational Closure (ب): الأسطح الجديدة تدخل المصفوفة كغيرها -- سطح
+    // لا يمرّ بالتدقيق العابر هو سطح لم يُثبَت عزله.
+    ['GET', '/api/admin/payment-policy/overrides?partnerId=pt_nova', null, 'سياسة التحصيل — التجاوزات'],
+    ['GET', '/api/admin/payment-policy/effective?partnerId=pt_nova', null, 'سياسة التحصيل — الفعّالة'],
     ['GET', '/api/audit', null, 'سجل التدقيق'],
     ['GET', '/api/admin/notifications', null, 'التنبيهات'],
     ['GET', '/api/ops/queue', null, 'طابور التشغيل'],

@@ -10,7 +10,7 @@ const crypto = require('crypto');
 
 const { db, uid, hash, hashPbkdf2 } = require('./db.js');
 const { login, authenticate, requireRole, assertPartnerScope } = require('./lib/auth.js');
-const { canTransition, actorAllowed, TRANSITIONS } = require('./lib/statemachine.js');
+const { canTransition, actorAllowed, TRANSITIONS, CLEARED_TO_PREPARE, ACTIVE_KDS_STATES } = require('./lib/statemachine.js');
 const { computeSettlement, saveSettlement } = require('./lib/settlement.js');
 const { getSubscription, requireFeature } = require('./lib/plan.js');
 const { getGateway } = require('./lib/payment.js');
@@ -22,7 +22,10 @@ const { assertCanManageUser, assertNotLastSuperAdmin, assignableRoles, issueActi
 const { resolveEngageEnabled, getGlobalKillSwitchState, getAIGenerationGlobalKillSwitchState } = require('./lib/engage-flags.js');
 const partnerStatus = require('./lib/partner-status.js');
 const { resolveBranding, hasWhiteLabelEntitlement, validateOverridePayload, getOverride } = require('./lib/branding.js');
-const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
+const qrLib = require('./lib/qr.js');
+const { getWallet, quoteCoverage, commitSpend, findWalletForPartner, assertWalletBelongsToPartner } = require('./lib/wallet.js');
+const paymentPolicy = require('./lib/payment-policy.js');
+const merchantStatus = require('./lib/merchant-status.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
 const { startSession, serveNextMoment, submitResponse, endSession } = require('./lib/engage-session.js');
@@ -183,8 +186,30 @@ function bucketForPublicRoute(method, pattern) {
                 database and reports 503 when it cannot serve.
    Neither reveals secrets, versions of dependencies, connection strings or
    internal paths (§4.1: "لا تكشف endpoints أسرارًا"). */
+/* Release identification.
+   لم يكن هناك أي معرّف بناء في وقت التشغيل، فكان إثبات "ما هو المنشور"
+   مستحيلًا -- وهو ما أنتج التباسًا حقيقيًا في تقرير التشغيل: بدا أن سلوكًا
+   قديمًا يعني نشرًا قديمًا، بينما كان الخلل في الواجهة نفسها.
+
+   القيم تُحقن عند البناء (ARG/ENV) ولا تُستنتج من ملفات الحاوية: حاوية
+   تصف نفسها بقراءة محتواها قد تُبلّغ عن شيء لم تُبنَ منه. القيمة الموثوقة
+   الوحيدة هي ما كتبه خط البناء.
+
+   عامة عمدًا وللقراءة فقط: لا تكشف سرًا ولا مسارًا ولا تبعية -- وهي لازمة
+   لأي فحص خارجي يقارن الإنتاج بالحزمة المسلَّمة. */
+const RELEASE = Object.freeze({
+  version: process.env.BUILD_VERSION || 'unknown',
+  commit: process.env.BUILD_COMMIT || 'unknown',
+  buildTime: process.env.BUILD_TIME || 'unknown',
+  environment: process.env.NODE_ENV || 'development',
+});
+
+on('GET', '/version', null, async (req, res) => {
+  sendJSON(res, 200, RELEASE);
+});
+
 on('GET', '/health', null, async (req, res) => {
-  sendJSON(res, 200, { status: 'ok', uptimeSec: Math.floor(process.uptime()) });
+  sendJSON(res, 200, { status: 'ok', uptimeSec: Math.floor(process.uptime()), release: RELEASE });
 });
 on('GET', '/ready', null, async (req, res) => {
   const checks = {};
@@ -391,6 +416,12 @@ on('POST', '/api/orders', null, async (req, res) => {
   for (const it of items) {
     const prod = db.prepare('SELECT * FROM products WHERE id = ?').get(it.productId);
     if (!prod || prod.status !== 'Active') return sendJSON(res, 409, { error: `Product unavailable: ${it.productId}` });
+    // P1-05: حالة الشريك التجاري تُفحص هنا وليس في الكتالوج فقط. إخفاء
+    // الصنف من القائمة لا يمنع سلّة قديمة في متصفّح ضيف من إرساله بعد
+    // دقيقتين من إيقاف المطعم -- والرسالة محايدة عمدًا.
+    if (prod.merchant_id && !merchantStatus.can(prod.merchant_id, 'acceptNewOrderItems')) {
+      return sendJSON(res, 409, { error: merchantStatus.GUEST_ITEM_UNAVAILABLE_EN, messageAr: merchantStatus.GUEST_ITEM_UNAVAILABLE_AR, productId: it.productId });
+    }
     let unit = prod.base_price;
     let variant = null;
     if (it.variantId) {
@@ -436,9 +467,44 @@ on('POST', '/api/orders', null, async (req, res) => {
   const paymentRef = uid('pay');
   const now = Date.now();
 
-  db.prepare(`INSERT INTO orders (id,partner_id,property_id,zone_id,point_id,customer_name,customer_phone,status,subtotal,vat,total,payment_ref,promo_code,discount_amount,loyalty_points_used,loyalty_account_id,wallet_id,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, property.partner_id, property.id, zone.id, point.id, customerName || null, customerPhone || null, 'Created', subtotal, vat, total, paymentRef, appliedCode, discountAmount + loyaltyDiscount, loyaltyPointsUsed, loyaltyAccountId, body.walletId || null, now, now);
+  /* ---- P1-04: سياسة التحصيل تُحسم عند الإنشاء، لا عند الدفع ----
+     السبب: الطلب الذي لا يُحصَّل من الضيف **لا يمرّ بنقطة الدفع إطلاقًا**،
+     فلو انتظرنا /pay لبقي عالقًا في 'Payment Pending' إلى الأبد -- وهو
+     بالضبط ما كان سيحدث لفندق يخدم نزلاءه.
+     المنفذ يُشتق من أصناف السلّة نفسها، فسلّة من منفذ واحد تُحكم بسياسة
+     ذلك المنفذ، وسلّة موزّعة تسقط لمستوى الموقع لأن منفذين قد يختلفان
+     ولا يجوز أن يقرّر أحدهما عن الآخر. */
+  const cartOutlets = [...new Set(resolvedItems.map(ri => ri.prod.outlet_id).filter(Boolean))];
+  const policyCtx = {
+    partnerId: property.partner_id,
+    propertyId: property.id,
+    outletId: cartOutlets.length === 1 ? cartOutlets[0] : null,
+  };
+  const policy = paymentPolicy.resolvePaymentPolicy(policyCtx);
+
+  /* ---- P1-03: المحفظة تُربط بكيان الشريك، لا بمعرّف مالك عائم ---- */
+  let walletId = body.walletId || null;
+  if (walletId) {
+    try { assertWalletBelongsToPartner(walletId, property.partner_id); }
+    // بلا e.status الخطأ ليس رفضًا تجاريًا بل عطل برمجي، ويُعاد رميه ليصير
+    // 500 صريحًا. كشف هذا الاختبارُ نفسه: استيراد ناقص كان يعود كـ409 يبدو
+    // رفضًا مشروعًا تمامًا -- أخطر شكل يأخذه عُطل.
+    catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message, code: e.code }); }
+  }
+  // CORPORATE_WALLET تعني أن التحصيل من ميزانية الشركة حصرًا. بلا محفظة
+  // صالحة لا يوجد مسار تحصيل أصلًا، ورفض الطلب الآن أصدق من قبوله ثم
+  // تعليقه عند دفع سيفشل حتمًا.
+  if (policy.policy === 'CORPORATE_WALLET' && !walletId) {
+    return sendJSON(res, 409, { error: 'This location requires a corporate wallet to place an order', code: 'WALLET_REQUIRED' });
+  }
+
+  // محورَان منفصلان: بأي وسيلة، وهل التحصيل مطلوب أصلًا.
+  const collectionStatus = policy.requiresGuestPayment ? 'PENDING' : 'NOT_REQUIRED';
+  const paymentMethodAtCreate = policy.requiresGuestPayment ? null : 'NO_GUEST_PAYMENT';
+
+  db.prepare(`INSERT INTO orders (id,partner_id,property_id,zone_id,point_id,customer_name,customer_phone,status,subtotal,vat,total,payment_ref,promo_code,discount_amount,loyalty_points_used,loyalty_account_id,wallet_id,payment_method,collection_status,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, property.partner_id, property.id, zone.id, point.id, customerName || null, customerPhone || null, 'Created', subtotal, vat, total, paymentRef, appliedCode, discountAmount + loyaltyDiscount, loyaltyPointsUsed, loyaltyAccountId, walletId, paymentMethodAtCreate, collectionStatus, now, now);
   const insertedItemIds = [];
   for (const ri of resolvedItems) {
     const itemId = uid('oi');
@@ -470,14 +536,43 @@ on('POST', '/api/orders', null, async (req, res) => {
     audit('system', 'System', 'unified_cart_split', id, null, { outlets: distinctOutlets.length }, null);
   }
 
-  // Created -> Payment Pending (system-driven, matches §10 first transition)
-  db.prepare(`UPDATE orders SET status='Payment Pending', updated_at=? WHERE id=?`).run(Date.now(), id);
-  audit('system', 'System', 'order_create', id, null, { status: 'Payment Pending' }, null);
+  /* الانتقال الأول يتفرّع على السياسة (§10 + P1-04):
+       يُحصَّل    -> Payment Pending، تمامًا كما كان قبل هذه الدفعة
+       لا يُحصَّل -> Confirmed مباشرة، فيصل المطبخ بلا خطوة دفع وهمية.
+     كل ما كان يقع عند نجاح الدفع (الفروع، الولاء، الإيراد، حدث Engage)
+     يقع هنا في معاملة واحدة، لأن هذه هي لحظة تخلية الطلب فعلًا. تركها
+     للدفع كان سيعني طلبًا يُطبخ ويُسلَّم بلا سطر إيراد واحد. */
+  if (policy.requiresGuestPayment) {
+    db.prepare(`UPDATE orders SET status='Payment Pending', updated_at=? WHERE id=?`).run(Date.now(), id);
+    audit('system', 'System', 'order_create', id, null, { status: 'Payment Pending', collectionStatus }, null);
+  } else {
+    db.exec('BEGIN');
+    try {
+      db.prepare(`UPDATE orders SET status='Confirmed', updated_at=? WHERE id=?`).run(Date.now(), id);
+      db.prepare(`UPDATE child_orders SET status='Confirmed', updated_at=? WHERE parent_order_id=? AND status='Created'`).run(Date.now(), id);
+      if (loyaltyPointsUsed > 0 && loyaltyAccountId) commitRedemption(loyaltyAccountId, loyaltyPointsUsed, id);
+      // الإيراد يُسجَّل بقيمة الطلب الكاملة: النادل تستحق حصّتها عن خدمة
+      // قُدِّمت فعلًا، وكون التحصيل خارج رحلة الضيف لا يجعل الطلب مجانيًا.
+      recordOrderRevenue(id);
+      db.prepare(`INSERT INTO engage_outbox (id,order_id,event_type,status,created_at) VALUES (?,?,?,?,?)`)
+        .run(uid('eo'), id, 'order.confirmed', 'pending', Date.now());
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    audit('system', 'System', 'order_create', id, null, { status: 'Confirmed', collectionStatus: 'NOT_REQUIRED', policy: policy.policy, policySource: policy.source }, null);
+  }
   const activeToken = db.prepare('SELECT token FROM qr_tokens WHERE point_id = ? AND active = 1').get(pointId);
   if (activeToken) logQrEvent(activeToken.token, 'order', id);
   notify('order_created', id, 'push');
 
-  sendJSON(res, 201, { id, paymentRef, total: Math.round(total * 100) / 100, status: 'Payment Pending', loyaltyPointsUsed, loyaltyDiscount: Math.round(loyaltyDiscount * 100) / 100 });
+  const finalStatus = db.prepare('SELECT status FROM orders WHERE id = ?').get(id).status;
+  sendJSON(res, 201, {
+    id, paymentRef, total: Math.round(total * 100) / 100, status: finalStatus,
+    loyaltyPointsUsed, loyaltyDiscount: Math.round(loyaltyDiscount * 100) / 100,
+    // الواجهة تحتاج أن تعرف أن خطوة الدفع لا وجود لها في هذه الرحلة --
+    // لا أن تخمّنها من الحالة.
+    paymentPolicy: policy.policy, requiresGuestPayment: policy.requiresGuestPayment,
+    allowedMethods: policy.allowedMethods, collectionStatus,
+  });
 });
 
 on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
@@ -495,9 +590,37 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
   let method = body.method || 'card';
   let cardAmount = order.total, walletCovered = 0;
 
+  /* ---- P1-04: الإنفاذ على الخادم، وهنا تحديدًا ----
+     إخفاء زر من شاشة الدفع لا يمنع طلبًا مصنوعًا يدويًا؛ ولذلك تُفحص
+     السياسة على النقطة نفسها لا في الواجهة. السياق يُعاد حلّه من الطلب
+     المحفوظ لا من الجسم المُرسل: لو أُخذ من العميل لأمكنه انتحال منفذ
+     سياسته أوسع. */
+  const payOutlets = [...new Set(db.prepare('SELECT DISTINCT outlet_id FROM order_items WHERE order_id = ?')
+    .all(order.id).map(r => r.outlet_id).filter(Boolean))];
+  const payCtx = {
+    partnerId: order.partner_id, propertyId: order.property_id,
+    outletId: payOutlets.length === 1 ? payOutlets[0] : null,
+  };
+  try {
+    paymentPolicy.assertMethodAllowed(payCtx, method);
+  } catch (e) {
+    return sendJSON(res, e.status || 400, { error: e.message, code: e.code });
+  }
+  // اتساق ثانٍ مقصود: طلب سُجِّل NOT_REQUIRED لا يُحصَّل لاحقًا حتى لو
+  // تغيّرت السياسة بعد إنشائه. الطلب يُحكَم بالسياسة التي أُنشئ تحتها.
+  if (order.collection_status === 'NOT_REQUIRED') {
+    return sendJSON(res, 409, { error: 'This order does not require payment', code: 'NO_GUEST_PAYMENT' });
+  }
+
   // Corporate Wallet split payment (§14 "Split Payment" — wallet covers part, employee pays the rest)
   if (method === 'wallet' && order.wallet_id) {
     requireFeature(order.partner_id, 'corporateWallet');
+    // P1-03: لا خصم من محفظة لا تخصّ شريك هذا الطلب.
+    try { assertWalletBelongsToPartner(order.wallet_id, order.partner_id); }
+    // بلا e.status الخطأ ليس رفضًا تجاريًا بل عطل برمجي، ويُعاد رميه ليصير
+    // 500 صريحًا. كشف هذا الاختبارُ نفسه: استيراد ناقص كان يعود كـ409 يبدو
+    // رفضًا مشروعًا تمامًا -- أخطر شكل يأخذه عُطل.
+    catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message, code: e.code }); }
     const quote = quoteCoverage(order.wallet_id, order.total);
     if (!quote.wallet) return sendJSON(res, 409, { error: 'Wallet unavailable or inactive' });
     walletCovered = quote.covered;
@@ -551,7 +674,10 @@ on('POST', '/api/orders/:id/pay', null, async (req, res, p) => {
     }
 
     newStatus = succeeded ? 'Paid' : 'Failed';
-    db.prepare('UPDATE orders SET status=?, updated_at=?, wallet_covered=? WHERE id=?').run(newStatus, Date.now(), walletCovered, order.id);
+    // collection_status هو السجل المالي، والحالة سجل تشغيلي. يُكتبان معًا
+    // في المعاملة نفسها فلا يفترقان أبدًا.
+    db.prepare('UPDATE orders SET status=?, updated_at=?, wallet_covered=?, payment_method=?, collection_status=? WHERE id=?')
+      .run(newStatus, Date.now(), walletCovered, method, succeeded ? 'COLLECTED' : 'FAILED', order.id);
     audit('gateway:' + gateway.name, 'Gateway', 'payment_webhook', order.id, { status: order.status }, { status: newStatus }, null);
     notify(newStatus === 'Paid' ? 'payment_success' : 'payment_failed', order.id, 'push');
     // Unified Cart: cascade Paid to every child order fanned out at creation (§8).
@@ -1045,6 +1171,16 @@ on('POST', '/api/orders/:id/refund', ['AlnadlFinance', 'SiteManager', 'SuperAdmi
     return sendJSON(res, 409, { error: `Order in status ${order.status} is not refundable` });
   }
 
+  // P1-04: لا يُسترجَع ما لم يُحصَّل. الرسالة صريحة بدل "لا يوجد رصيد
+  // متبقٍ" العام، لأن السببين مختلفان تمامًا: هذا الطلب لم يكن مقابله نقد
+  // من الضيف أصلًا، وتسجيل استرجاع له كان سيُنشئ مصروفًا وهميًا في الدفتر.
+  if (order.collection_status === 'NOT_REQUIRED') {
+    return sendJSON(res, 409, {
+      error: 'This order was never collected from the guest, so there is nothing to refund',
+      code: 'NO_GUEST_PAYMENT',
+    });
+  }
+
   const totalPaid = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM payments WHERE order_id = ? AND status = 'Captured'`).get(p.id).s;
   const alreadyRefunded = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE order_id = ? AND status = 'Refunded'`).get(p.id).s;
   const remaining = Math.round((totalPaid - alreadyRefunded) * 100) / 100;
@@ -1081,6 +1217,9 @@ on('POST', '/api/orders/:id/refund', ['AlnadlFinance', 'SiteManager', 'SuperAdmi
     if (!canTransition(order.status, targetStatus)) return sendJSON(res, 409, { error: `Invalid transition ${order.status} → ${targetStatus}` });
     db.prepare('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?').run(targetStatus, Date.now(), p.id);
   }
+  // الاسترجاع الكامل وحده يقلب حالة التحصيل؛ الجزئي يبقى COLLECTED لأن
+  // جزءًا من المال ما زال محصَّلًا فعلًا.
+  if (isFull) db.prepare('UPDATE orders SET collection_status = ? WHERE id = ?').run('REFUNDED', p.id);
   audit(session.username, session.role, 'refund', p.id, { status: order.status, alreadyRefunded }, { status: targetStatus, refundAmount: amount, reason: body.reason }, body.reason);
 
   // Q03: reverse the Revenue Ledger proportionally so this refund is never
@@ -1110,7 +1249,7 @@ on('GET', '/api/ops/queue', ['Operator', 'SiteManager', 'SuperAdmin'], async (re
   const rows = db.prepare(`
     SELECT o.*, pt.label AS point_label, z.name_ar AS zone_name_ar, z.name_en AS zone_name_en
     FROM orders o LEFT JOIN points pt ON pt.id = o.point_id LEFT JOIN zones z ON z.id = pt.zone_id
-    WHERE o.status IN ('Paid','Accepted','Preparing','Ready','Out for Delivery') ORDER BY o.created_at ASC`).all();
+    WHERE o.status IN (${ACTIVE_KDS_STATES.map(() => '?').join(',')}) ORDER BY o.created_at ASC`).all(...ACTIVE_KDS_STATES);
   const result = [];
   for (const o of rows) {
     const children = db.prepare('SELECT * FROM child_orders WHERE parent_order_id = ?').all(o.id);
@@ -1125,7 +1264,7 @@ on('GET', '/api/ops/queue', ['Operator', 'SiteManager', 'SuperAdmin'], async (re
       // actionable once split — each Outlet's portion is its own ticket.
       // Filtering by ?stationId lets a KDS screen show only its own station.
       for (const c of children) {
-        if (['Paid', 'Accepted', 'Preparing', 'Ready', 'Out for Delivery'].indexOf(c.status) === -1) continue;
+        if (ACTIVE_KDS_STATES.indexOf(c.status) === -1) continue;
         if (query.stationId && c.station_id !== query.stationId) continue;
         const outlet = db.prepare('SELECT name_ar, name_en, sla_prep_min FROM outlets WHERE id = ?').get(c.outlet_id);
         const items = db.prepare('SELECT * FROM order_items WHERE child_order_id = ?').all(c.id);
@@ -1193,7 +1332,7 @@ on('POST', '/api/orders/:id/transition', ['Operator', 'SiteManager', 'Runner', '
 function deriveParentStatus(parentOrderId) {
   const children = db.prepare('SELECT status FROM child_orders WHERE parent_order_id = ?').all(parentOrderId);
   if (!children.length) return;
-  const order = ['Paid', 'Accepted', 'Preparing', 'Ready', 'Out for Delivery', 'Delivered'];
+  const order = [...CLEARED_TO_PREPARE, 'Accepted', 'Preparing', 'Ready', 'Out for Delivery', 'Delivered'];
   const active = children.filter(c => c.status !== 'Cancelled');
   let newStatus;
   if (active.length === 0) {
@@ -1740,6 +1879,64 @@ on('POST', '/api/admin/points', ['SuperAdmin', 'PartnerAdmin'], async (req, res,
    التوثيق نفسه، ويُفرض على الخادم لا على الواجهة. */
 const BULK_POINTS_MAX = 50;
 
+/* --------- GUEST QR (P0-01) -----------------------------------------------
+   يُولَّد من الرابط حتميًا ولا يُخزَّن: صورة مخزَّنة نسخة ثانية قد تتقادم
+   بصمت عن الرمز الحقيقي في qr_tokens. ونفس buildGuestUrl تُستخدم لزر
+   "فتح كضيف"، فلا مساران ينحرفان. */
+function pointQrContext(pointId) {
+  return db.prepare(`
+    SELECT pt.id, pt.label, pt.active, q.token, z.id AS zone_id, z.name_ar AS zone_ar, z.name_en AS zone_en,
+           z.status AS zone_status, pr.id AS property_id, pr.partner_id
+    FROM points pt
+    JOIN zones z ON z.id = pt.zone_id
+    JOIN properties pr ON pr.id = z.property_id
+    LEFT JOIN qr_tokens q ON q.point_id = pt.id AND q.active = 1
+    WHERE pt.id = ?`).get(pointId);
+}
+
+on('GET', '/api/admin/points/:id/qr', ['SuperAdmin', 'PartnerAdmin', 'SiteManager'], async (req, res, p, query, session) => {
+  const ctx = pointQrContext(p.id);
+  if (!ctx) return sendJSON(res, 404, { error: 'Point not found' });
+  assertPartnerScope(session, ctx.partner_id);
+  if (!ctx.token) return sendJSON(res, 409, { error: 'This point has no active QR token' });
+
+  const format = (query.format || 'json').toLowerCase();
+  const guestUrl = qrLib.buildGuestUrl(ctx.token, { absolute: true });
+
+  if (format === 'json') {
+    return sendJSON(res, 200, {
+      pointId: ctx.id, label: ctx.label, active: !!ctx.active,
+      zone: { id: ctx.zone_id, name_ar: ctx.zone_ar, name_en: ctx.zone_en, status: ctx.zone_status },
+      propertyId: ctx.property_id, partnerId: ctx.partner_id,
+      guestUrl,
+      qrAvailable: qrLib.isAvailable(),
+      // الأصل غير مضبوط يعني رابطًا نسبيًا -- صالح للنقر، غير صالح للطباعة.
+      absoluteUrl: !!qrLib.publicBase(),
+    });
+  }
+  if (!['svg', 'png'].includes(format)) return sendJSON(res, 400, { error: 'format must be json, svg or png' });
+
+  try {
+    if (format === 'svg') {
+      const svg = await qrLib.toSvg(ctx.token, { width: query.size, ecc: query.ecc });
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(svg);
+    }
+    const png = await qrLib.toPngBuffer(ctx.token, { width: query.size, ecc: query.ecc });
+    const download = query.download === '1';
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'no-store',
+      ...(download ? { 'Content-Disposition': `attachment; filename="qr-${ctx.id}.png"` } : {}),
+    });
+    return res.end(png);
+  } catch (e) {
+    // غياب الاعتماد ليس خطأ خادم: يُبلَّغ بوضوح ليعرف المشغّل ما ينقص.
+    if (e.code === 'QR_DEPENDENCY_MISSING') return sendJSON(res, 503, { error: e.message, code: e.code });
+    throw e;
+  }
+});
+
 on('POST', '/api/admin/points/bulk', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
   requireFields(b, ['zoneId', 'count']);
@@ -2047,7 +2244,7 @@ function partnerDecisionLayers(partnerId, orders, delivered, outletPerformance) 
   // is a sound question even without per-child timings, because it reads
   // the parent's own created_at, not a per-outlet completion time.
   const openBreaches = orders.filter(o => {
-    if (!['Paid', 'Accepted', 'Preparing'].includes(o.status)) return false;
+    if (![...CLEARED_TO_PREPARE, 'Accepted', 'Preparing'].includes(o.status)) return false;
     const budgetRow = db.prepare(`SELECT MAX(ou.sla_prep_min) AS budget FROM order_items oi JOIN outlets ou ON ou.id = oi.outlet_id WHERE oi.order_id = ?`).get(o.id);
     const budgetMin = (budgetRow && budgetRow.budget) || DEFAULT_SLA_PREP_MIN;
     return (now - o.created_at) / 60000 > budgetMin;
@@ -2205,10 +2402,10 @@ on('GET', '/api/manager/live', ['SiteManager', 'Operator', 'SuperAdmin'], async 
   const counts = { New: 0, Preparing: 0, Ready: 0, Delayed: 0 };
   const now = Date.now();
   for (const o of todayOrders) {
-    if (o.status === 'Paid') counts.New++;
+    if (CLEARED_TO_PREPARE.includes(o.status)) counts.New++;
     else if (['Accepted', 'Preparing'].includes(o.status)) counts.Preparing++;
     else if (['Ready', 'Out for Delivery'].includes(o.status)) counts.Ready++;
-    if (['Paid', 'Accepted', 'Preparing'].includes(o.status) && now - o.created_at > 8 * 60000) counts.Delayed++;
+    if ([...CLEARED_TO_PREPARE, 'Accepted', 'Preparing'].includes(o.status) && now - o.created_at > 8 * 60000) counts.Delayed++;
   }
   const delivered = todayOrders.filter(o => o.status === 'Delivered');
   const fulfillments = delivered.map(o => db.prepare('SELECT * FROM fulfillment WHERE order_id = ?').get(o.id)).filter(Boolean);
@@ -2235,7 +2432,8 @@ on('GET', '/api/admin/portfolio', ['SuperAdmin'], async (req, res) => {
   const totalGmv = sites.reduce((s, x) => s + x.gmv, 0);
   const totalOrders = sites.reduce((s, x) => s + x.orders, 0);
   const sorted = [...sites].sort((a, b) => b.gmv - a.gmv);
-  const alerts = db.prepare(`SELECT COUNT(*) c FROM orders WHERE status IN ('Paid','Accepted','Preparing') AND created_at < ?`).get(Date.now() - 8 * 60000).c;
+  const alertStates = [...CLEARED_TO_PREPARE, 'Accepted', 'Preparing'];
+  const alerts = db.prepare(`SELECT COUNT(*) c FROM orders WHERE status IN (${alertStates.map(() => '?').join(',')}) AND created_at < ?`).get(...alertStates, Date.now() - 8 * 60000).c;
   sendJSON(res, 200, { totalGmv: Math.round(totalGmv * 100) / 100, sites: sites.length, totalOrders, topSite: sorted[0] || null, lowestSite: sorted[sorted.length - 1] || null, alerts, bySite: sorted });
 });
 
@@ -2694,12 +2892,201 @@ on('GET', '/api/admin/revenue-ledger', ['SuperAdmin', 'PartnerAdmin', 'PartnerVi
   sendJSON(res, 200, rows);
 });
 
+/* ------------------------------ PAYMENT POLICY (P1-04) ---------------------------------
+   نقاط إدارة السياسة. الوراثة تُحسب في lib/payment-policy.js وحده؛ هذه
+   النقاط تقرأ وتكتب فقط -- نفس فصل المسؤوليات المتّبع في العلامة التجارية.
+
+   الصلاحيات: SuperAdmin و PartnerAdmin، والنطاق يُفحص على الخادم فلا
+   يستطيع شريك أن يكتب سياسة على عقار أو منفذ ليس له. مستوى الشريك مشمول
+   هنا -- بخلاف العلامة -- لأن السياسة إعداد تشغيلي يخصّ العميل نفسه لا
+   نموذجًا تجاريًا تملكه النادل. */
+function paymentScopePartner(scopeType, scopeId) {
+  if (scopeType === 'partner') return scopeId;
+  if (scopeType === 'property') return propertyPartnerId(scopeId);
+  if (scopeType === 'outlet') return outletPartnerId(scopeId);
+  return null;
+}
+function assertPaymentScope(session, scopeType, scopeId) {
+  if (!['partner', 'property', 'outlet'].includes(scopeType)) {
+    const e = new Error('scopeType must be partner, property or outlet'); e.status = 400; throw e;
+  }
+  const partnerId = paymentScopePartner(scopeType, scopeId);
+  if (!partnerId) { const e = new Error('Scope not found'); e.status = 404; throw e; }
+  // وجود الكيان يُتحقَّق منه صراحة: معرّف شريك مخترع كان سيُنشئ سياسة
+  // معلّقة لا تخصّ أحدًا وتظهر في القوائم.
+  if (scopeType === 'partner' && !db.prepare('SELECT 1 FROM partners WHERE id = ?').get(scopeId)) {
+    const e = new Error('Scope not found'); e.status = 404; throw e;
+  }
+  assertTenantWrite(session, partnerId);
+  return partnerId;
+}
+
+on('GET', '/api/admin/payment-policy/effective', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  if (session.role !== 'SuperAdmin' && query.partnerId && query.partnerId !== session.scope) {
+    return sendJSON(res, 403, { error: 'Forbidden: cannot read another partner\'s payment policy' });
+  }
+  const partnerId = session.role === 'SuperAdmin' ? query.partnerId : session.scope;
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
+  assertPartnerScope(session, partnerId);
+  // السلسلة تُعاد كاملة لا النتيجة وحدها: مشغّل يرى "أونلاين" بلا معرفة
+  // أي مستوى فرضها لا يستطيع تغييرها، فيغيّر المستوى الخطأ ولا شيء يتحرك.
+  sendJSON(res, 200, paymentPolicy.resolvePaymentPolicy({
+    partnerId, propertyId: query.propertyId || null, outletId: query.outletId || null,
+  }));
+});
+
+on('GET', '/api/admin/payment-policy/overrides', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  if (session.role !== 'SuperAdmin' && query.partnerId && query.partnerId !== session.scope) {
+    return sendJSON(res, 403, { error: 'Forbidden: cannot read another partner\'s payment policy' });
+  }
+  const partnerId = session.role === 'SuperAdmin' ? query.partnerId : session.scope;
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
+  assertPartnerScope(session, partnerId);
+  const rows = db.prepare('SELECT * FROM payment_policy_overrides').all()
+    .filter(r => paymentScopePartner(r.scope_type, r.scope_id) === partnerId);
+
+  /* التحقق البصري كشف نقصًا حقيقيًا: صفّ يقول «موروثة» دون أن يقول **ماذا**
+     يرث. وهو عين العيب الذي بُنيت الشاشة لعلاجه، مطبَّقًا مستوًى أدنى. الحلّ
+     أن يحسب الخادم النتيجة الفعّالة لكل نطاق بالمُحلِّل نفسه -- إعادة بناء
+     الوراثة في الواجهة كانت ستُنشئ نسخة ثانية من القاعدة تنحرف يومًا. */
+  const properties = db.prepare('SELECT id, name_ar, name_en FROM properties WHERE partner_id = ?').all(partnerId);
+  const outlets = db.prepare(`SELECT o.id, o.name_ar, o.name_en, o.property_id FROM outlets o
+                              JOIN properties p ON p.id = o.property_id WHERE p.partner_id = ?`).all(partnerId);
+  const effectiveByScope = {};
+  effectiveByScope[`partner:${partnerId}`] = paymentPolicy.resolvePaymentPolicy({ partnerId });
+  for (const pr of properties) {
+    effectiveByScope[`property:${pr.id}`] = paymentPolicy.resolvePaymentPolicy({ partnerId, propertyId: pr.id });
+  }
+  for (const o of outlets) {
+    effectiveByScope[`outlet:${o.id}`] = paymentPolicy.resolvePaymentPolicy({
+      partnerId, propertyId: o.property_id, outletId: o.id,
+    });
+  }
+  sendJSON(res, 200, {
+    policies: paymentPolicy.POLICIES, methodsByPolicy: paymentPolicy.METHODS_BY_POLICY,
+    overrides: rows, properties, outlets, effectiveByScope,
+  });
+});
+
+on('PUT', '/api/admin/payment-policy/:scopeType/:scopeId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  let partnerId;
+  try { partnerId = assertPaymentScope(session, p.scopeType, p.scopeId); }
+  catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message }); }
+  const v = paymentPolicy.validatePolicyPayload(b);
+  if (!v.ok) return sendJSON(res, 400, { error: v.reason });
+
+  const before = paymentPolicy.getOverride(p.scopeType, p.scopeId);
+  if (before) {
+    db.prepare(`UPDATE payment_policy_overrides SET policy=?, allowed_methods_json=?, updated_at=?, updated_by=?
+                WHERE scope_type=? AND scope_id=?`)
+      .run(v.policy, v.allowedJson, Date.now(), session.username, p.scopeType, p.scopeId);
+  } else {
+    db.prepare(`INSERT INTO payment_policy_overrides (id,scope_type,scope_id,policy,allowed_methods_json,updated_at,updated_by)
+                VALUES (?,?,?,?,?,?,?)`)
+      .run(uid('pp'), p.scopeType, p.scopeId, v.policy, v.allowedJson, Date.now(), session.username);
+  }
+  // قرار مالي يُدقَّق دائمًا: من غيّر، ومن ماذا إلى ماذا.
+  audit(session.username, session.role, 'payment_policy_set', `${p.scopeType}:${p.scopeId}`,
+    before ? { policy: before.policy, allowed: before.allowed_methods_json } : null,
+    { policy: v.policy, allowed: v.allowedJson }, b.reason || null);
+  sendJSON(res, 200, { ok: true, scopeType: p.scopeType, scopeId: p.scopeId, policy: v.policy, partnerId });
+});
+
+on('DELETE', '/api/admin/payment-policy/:scopeType/:scopeId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  try { assertPaymentScope(session, p.scopeType, p.scopeId); }
+  catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message }); }
+  const before = paymentPolicy.getOverride(p.scopeType, p.scopeId);
+  if (!before) return sendJSON(res, 404, { error: 'No override at this scope' });
+  // الحذف = العودة للوراثة، لا الانتقال إلى ONLINE. الفرق جوهري: منفذ
+  // داخل عقار لا يُحصِّل يجب أن يعود إلى "لا تحصيل"، لا أن يبدأ فجأة
+  // بتحصيل المال من النزلاء.
+  db.prepare('DELETE FROM payment_policy_overrides WHERE scope_type=? AND scope_id=?').run(p.scopeType, p.scopeId);
+  audit(session.username, session.role, 'payment_policy_clear', `${p.scopeType}:${p.scopeId}`,
+    { policy: before.policy }, { policy: null, inherits: true }, q.reason || null);
+  sendJSON(res, 200, { ok: true, inherits: true });
+});
+
+/* السياسة الفعّالة كما يراها الضيف. عامّة عمدًا -- الضيف بلا جلسة -- لكن
+   النطاق يُشتق من النقطة على الخادم، ولا تُعاد أي معلومة تتجاوز ما تحتاجه
+   الشاشة: هل هناك خطوة دفع، وما الوسائل. */
+on('GET', '/api/payment-policy', null, async (req, res, p, query) => {
+  const point = db.prepare('SELECT * FROM points WHERE id = ?').get(query.pointId);
+  if (!point) return sendJSON(res, 404, { error: 'Point not found' });
+  const zone = db.prepare('SELECT * FROM zones WHERE id = ?').get(point.zone_id);
+  const property = zone ? db.prepare('SELECT * FROM properties WHERE id = ?').get(zone.property_id) : null;
+  if (!property) return sendJSON(res, 404, { error: 'Point not found' });
+  // نفس قاعدة الخادم عند الإنشاء: المنفذ يُؤخذ فقط إن كان واحدًا، وإلا
+  // فمستوى العقار. لا تُبنى قاعدة ثانية للواجهة تختلف عن قاعدة الإنشاء.
+  const r = paymentPolicy.resolvePaymentPolicy({
+    partnerId: property.partner_id, propertyId: property.id, outletId: query.outletId || null,
+  });
+  sendJSON(res, 200, {
+    policy: r.policy, requiresGuestPayment: r.requiresGuestPayment, allowedMethods: r.allowedMethods,
+  });
+});
+
+/* ------------------------------ COMMERCIAL PARTNER LIFECYCLE (P1-05) ---------------------
+   دورة حياة الشريك التجاري (merchant). القرار يُتخذ في lib/merchant-status.js
+   وحده وهذه النقاط تقرأ وتكتب فقط. */
+on('GET', '/api/admin/merchants/:id/status', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, q, session) => {
+  const m = merchantStatus.getMerchant(p.id);
+  if (!m) return sendJSON(res, 404, { error: 'Merchant not found' });
+  const partnerId = propertyPartnerId(m.property_id);
+  if (session.role !== 'SuperAdmin' && session.scope !== partnerId) {
+    return sendJSON(res, 403, { error: 'Forbidden: cannot read another partner\'s merchant' });
+  }
+  sendJSON(res, 200, merchantStatus.statusSummary(p.id));
+});
+
+on('POST', '/api/admin/merchants/:id/status', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const m = merchantStatus.getMerchant(p.id);
+  if (!m) return sendJSON(res, 404, { error: 'Merchant not found' });
+  const partnerId = propertyPartnerId(m.property_id);
+  try { assertTenantWrite(session, partnerId); }
+  catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message }); }
+
+  const from = merchantStatus.getStatus(p.id);
+  const to = b.status;
+  if (!merchantStatus.STATUSES.includes(to)) {
+    return sendJSON(res, 400, { error: `status must be one of ${merchantStatus.STATUSES.join(', ')}` });
+  }
+  if (from === to) return sendJSON(res, 200, { ok: true, unchanged: true, ...merchantStatus.statusSummary(p.id) });
+  if (!merchantStatus.canTransition(from, to)) {
+    return sendJSON(res, 409, { error: `Invalid transition ${from} → ${to}` });
+  }
+  // إعادة الفتح بعد الإغلاق قرار تعاقدي لا تشغيلي -- نفس قاعدة الشريك
+  // المستضيف، ولذلك تُحجز لـSuperAdmin.
+  if (from === 'Closed' && merchantStatus.REOPEN_REQUIRES_SUPERADMIN && session.role !== 'SuperAdmin') {
+    return sendJSON(res, 403, { error: 'Reopening a closed commercial partner requires SuperAdmin' });
+  }
+  const pre = merchantStatus.checkTransitionPreconditions(p.id, from, to);
+  if (!pre.ok) return sendJSON(res, 409, { error: 'Cannot close while operational work is open', ...pre });
+  // السبب إلزامي في كل تغيير: أثر تجاري يمسّ إيراد طرف ثالث لا يُترك بلا
+  // تفسير في السجل.
+  if (!b.reason) return sendJSON(res, 400, { error: 'A reason is required for the audit trail' });
+
+  db.prepare('UPDATE merchants SET status = ? WHERE id = ?').run(to, p.id);
+  audit(session.username, session.role, 'merchant_status', p.id, { status: from }, { status: to }, b.reason);
+  sendJSON(res, 200, { ok: true, from, to, ...merchantStatus.statusSummary(p.id) });
+});
+
 /* ------------------------------ CORPORATE WALLET (Phase 3, §8/§14) --------------------------------- */
 on('GET', '/api/wallets/lookup', null, async (req, res, p, query) => {
   // Public lookup by owner_ref — a real deployment would resolve this from an
   // authenticated employee session (SSO), not a query param; kept simple here
   // since this MVP has no corporate employee login flow yet.
-  const w = db.prepare('SELECT * FROM wallet_accounts WHERE owner_ref = ? AND status=\'Active\'').get(query.ownerRef);
+  //
+  // P1-03: النطاق أصبح إلزاميًا. owner_ref نصّ يكتبه الشريك ولا يضمن أحد
+  // تفرّده عبر المستأجرين، فبحث بلا نطاق كان يسمح لضيف عند الشريك (أ) بربط
+  // محفظة الشريك (ب) وخصم ميزانيتها. الشريك يُشتق من رمز QR على الخادم --
+  // لا يُقبل partnerId من العميل، وإلا عاد الخلل نفسه بصيغة أخرى.
+  const partnerId = partnerScopeFromQrToken(query.t);
+  if (!partnerId) return sendJSON(res, 400, { error: 'A valid QR context is required' });
+  const w = findWalletForPartner(partnerId, query.ownerRef);
+  // نفس الرد لمحفظة غير موجودة ولمحفظة تخصّ شريكًا آخر: الرد المختلف كان
+  // سيتحوّل إلى أداة استكشاف تكشف وجود محافظ عند شركاء آخرين.
   if (!w) return sendJSON(res, 404, { error: 'No wallet found' });
   sendJSON(res, 200, { id: w.id, ownerName: w.owner_name, remaining: Math.round((w.monthly_budget - w.spent_this_period) * 100) / 100, policy: JSON.parse(w.policy_json || '{}') });
 });
@@ -2711,6 +3098,18 @@ on('GET', '/api/admin/wallets', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'],
 on('POST', '/api/admin/wallets', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
   const partnerId = session.role === 'PartnerAdmin' ? session.scope : b.partnerId;
+  // P1-03: المحفظة تُنشأ مربوطة بكيان شريك **قائم**. كان partnerId يُكتب
+  // كما وصل بلا فحص، فمعرّف مخطوء يُنتج محفظة يتيمة لا تظهر في أي قائمة
+  // مُنطّقة، ولا يكتشفها أحد إلا حين تفشل عملية دفع لموظّف.
+  if (!partnerId || !db.prepare('SELECT 1 FROM partners WHERE id = ?').get(partnerId)) {
+    return sendJSON(res, 400, { error: 'A valid partnerId is required' });
+  }
+  if (!b.ownerRef) return sendJSON(res, 400, { error: 'ownerRef is required' });
+  // التفرّد داخل الشريك -- لا عالميًا: شركتان تحت شريكين مختلفين لهما كل
+  // الحق في استخدام 'dept:engineering' نفسه.
+  if (db.prepare('SELECT 1 FROM wallet_accounts WHERE partner_id = ? AND owner_ref = ?').get(partnerId, b.ownerRef)) {
+    return sendJSON(res, 409, { error: 'A wallet with this owner reference already exists for this partner' });
+  }
   requireFeature(partnerId, 'corporateWallet');
   const id = uid('wal');
   db.prepare(`INSERT INTO wallet_accounts (id,partner_id,owner_name,owner_ref,monthly_budget,spent_this_period,period_start,policy_json,status,created_at)
@@ -2807,7 +3206,7 @@ const server = http.createServer(async (req, res) => {
 
   // /health and /ready are registered routes, not static assets — they must
   // reach the dispatcher below rather than being looked up on disk.
-  const OPS_ROUTES = new Set(['/health', '/ready']);
+  const OPS_ROUTES = new Set(['/health', '/ready', '/version']);
   if (!pathname.startsWith('/api/') && !OPS_ROUTES.has(pathname)) return serveStatic(req, res, pathname);
 
   for (const r of routes) {

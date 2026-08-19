@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>تفعيل الحساب · Activate account</title>
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:var(--plum-900,#1B1220); }
+  .actcard { width:min(420px,92vw); background:var(--surface,#241830); border-radius:16px; padding:26px 22px; box-shadow:0 18px 48px rgba(0,0,0,.45); }
+  .actcard h1 { font-size:20px; margin:0 0 4px; color:var(--ink-100,#F3EEF7); }
+  .actcard .sub { font-size:13px; color:var(--ink-400,#9B8CA8); margin:0 0 18px; }
+  .actcard label { display:block; font-size:12px; font-weight:700; color:var(--ink-300,#BFB0CC); margin:14px 0 6px; }
+  .actcard input { width:100%; box-sizing:border-box; padding:11px 12px; border-radius:9px;
+    border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.05); color:var(--ink-100,#F3EEF7); font-size:15px; }
+  .actcard button { width:100%; margin-top:18px; padding:12px; border-radius:9px; border:0; cursor:pointer;
+    background:var(--brass-500,#C8A24A); color:#231A08; font-weight:800; font-size:15px; }
+  .actcard button[disabled] { opacity:.55; cursor:not-allowed; }
+  .msg { margin-top:14px; padding:10px 12px; border-radius:9px; font-size:13px; line-height:1.6; }
+  .msg.err { background:rgba(190,60,55,.16); color:#F2B5B1; }
+  .msg.ok  { background:rgba(90,150,110,.16); color:#B7E3C4; }
+  .hint { font-size:12px; color:var(--ink-400,#9B8CA8); margin-top:8px; line-height:1.7; }
+  .langbtn { background:none; border:1px solid rgba(255,255,255,.18); color:var(--ink-300,#BFB0CC);
+    width:auto; padding:5px 12px; margin:0 0 14px; font-size:12px; font-weight:600; border-radius:999px; }
+</style>
+</head>
+<body>
+<div class="actcard">
+  <button class="langbtn" id="langBtn" type="button">EN</button>
+  <h1 id="ttl">تفعيل الحساب</h1>
+  <p class="sub" id="sub">ضع كلمة مرورك لتفعيل حسابك</p>
+  <div id="body"></div>
+</div>
+
+<script>
+/* صفحة التفعيل — الحلقة التي كانت مفقودة.
+   النقطتان GET/POST /api/activate/:token موجودتان منذ R1 بلا أي واجهة
+   تستخدمهما، فكان الرمز يُولَّد ولا يستطيع أحد استعماله.
+
+   صفحة مستقلة عمدًا لا شاشة داخل التطبيق: المستخدم هنا **لا يملك جلسة
+   ولا حسابًا يعمل بعد**، فمنطق الجلسة والأدوار كله غير ذي صلة -- وتحميله
+   يعني تحميل سطح أوسع لمن لا يملك صلاحية شيء. */
+var T = {
+  ar: { title:'تفعيل الحساب', sub:'ضع كلمة مرورك لتفعيل حسابك',
+        user:'المستخدم', role:'الدور', pw:'كلمة المرور الجديدة', pw2:'تأكيد كلمة المرور',
+        submit:'تفعيل الحساب', working:'جارٍ التفعيل…',
+        min:'10 محارف على الأقل', mismatch:'كلمتا المرور غير متطابقتين',
+        invalid:'هذا الرابط غير صالح أو منتهي الصلاحية أو استُخدم من قبل. اطلب رابطًا جديدًا من مسؤول النظام.',
+        done:'تم تفعيل حسابك. يمكنك تسجيل الدخول الآن.', login:'الذهاب لتسجيل الدخول',
+        note:'كلمة المرور التي تضعها هنا يعرفها أنت وحدك — لا يراها مسؤول النظام.' },
+  en: { title:'Activate account', sub:'Set your password to activate your account',
+        user:'User', role:'Role', pw:'New password', pw2:'Confirm password',
+        submit:'Activate account', working:'Activating…',
+        min:'At least 10 characters', mismatch:'Passwords do not match',
+        invalid:'This link is invalid, expired, or already used. Ask your administrator for a new one.',
+        done:'Your account is active. You can sign in now.', login:'Go to sign in',
+        note:'The password you set here is known only to you — not to your administrator.' }
+};
+var lang = 'ar';
+function t(k){ return T[lang][k]; }
+
+function token(){
+  var p = new URLSearchParams(location.search);
+  return p.get('token') || p.get('t') || '';
+}
+function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g, function(c){
+  return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+
+function applyLang(){
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+  document.getElementById('ttl').textContent = t('title');
+  document.getElementById('sub').textContent = t('sub');
+  document.getElementById('langBtn').textContent = lang === 'ar' ? 'EN' : 'AR';
+}
+
+function showInvalid(){
+  document.getElementById('body').innerHTML =
+    '<div class="msg err">' + esc(t('invalid')) + '</div>';
+}
+
+function showForm(info){
+  document.getElementById('body').innerHTML =
+    '<p class="hint">' + esc(t('user')) + ': <b>' + esc(info.username) + '</b>' +
+      (info.role ? ' · ' + esc(t('role')) + ': ' + esc(info.role) : '') + '</p>' +
+    '<label for="pw">' + esc(t('pw')) + '</label>' +
+    '<input id="pw" type="password" autocomplete="new-password">' +
+    '<label for="pw2">' + esc(t('pw2')) + '</label>' +
+    '<input id="pw2" type="password" autocomplete="new-password">' +
+    '<button id="go" type="button">' + esc(t('submit')) + '</button>' +
+    '<p class="hint">' + esc(t('min')) + '. ' + esc(t('note')) + '</p>' +
+    '<div id="msg"></div>';
+  document.getElementById('go').addEventListener('click', submit);
+  document.getElementById('pw2').addEventListener('keydown', function(e){ if(e.key==='Enter') submit(); });
+}
+
+function setMsg(text, cls){
+  document.getElementById('msg').innerHTML = '<div class="msg ' + cls + '">' + esc(text) + '</div>';
+}
+
+async function submit(){
+  var pw = document.getElementById('pw').value;
+  var pw2 = document.getElementById('pw2').value;
+  var btn = document.getElementById('go');
+  if (pw.length < 10) { setMsg(t('min'), 'err'); return; }
+  if (pw !== pw2) { setMsg(t('mismatch'), 'err'); return; }
+  btn.disabled = true; btn.textContent = t('working');
+  try {
+    var res = await fetch('/api/activate/' + encodeURIComponent(token()), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    });
+    var data = await res.json();
+    if (res.ok && data.ok) {
+      document.getElementById('body').innerHTML =
+        '<div class="msg ok">' + esc(t('done')) + '</div>' +
+        '<button type="button" onclick="location.href=\'/\'">' + esc(t('login')) + '</button>';
+      return;
+    }
+    setMsg(data.error || t('invalid'), 'err');
+  } catch (e) {
+    setMsg(t('invalid'), 'err');
+  }
+  btn.disabled = false; btn.textContent = t('submit');
+}
+
+async function boot(){
+  applyLang();
+  var tk = token();
+  if (!tk) { showInvalid(); return; }
+  try {
+    var res = await fetch('/api/activate/' + encodeURIComponent(tk));
+    var data = await res.json();
+    // الخادم يُوحّد الرفض عمدًا: خاطئ ومنتهٍ ومستهلَك استجابة واحدة، فلا
+    // يصلح المسار لتعداد الحسابات. الواجهة تعكس ذلك ولا تُفصّل أكثر.
+    if (data && data.valid) showForm(data); else showInvalid();
+  } catch (e) { showInvalid(); }
+}
+
+document.getElementById('langBtn').addEventListener('click', function(){
+  lang = lang === 'ar' ? 'en' : 'ar';
+  applyLang();
+  boot();
+});
+boot();
+</script>
+</body>
+</html>

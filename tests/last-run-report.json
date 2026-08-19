@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-18T00:50:39.346Z",
+  "timestamp": "2026-08-19T16:16:53.145Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -122,13 +122,61 @@
       "status": "PASS"
     },
     {
+      "suite": "./operational-closure-b.js",
+      "status": "PASS"
+    },
+    {
       "suite": "./trusted-proxy.js",
       "status": "PASS"
     },
     {
       "suite": "./production-deployment.js",
       "status": "PASS"
+    },
+    {
+      "suite": "./browser-activation-journey.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./browser-payment-policy.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./qr-flow.js",
+      "status": "AWAITING_ENVIRONMENT_VERIFICATION",
+      "awaiting": [
+        {
+          "what": "SVG/PNG rendering",
+          "why": "qrcode@1.5.3 not installable in this environment (npm 403)"
+        },
+        {
+          "what": "Downloaded/printed QR re-scan",
+          "why": "requires a rendered image"
+        },
+        {
+          "what": "iPhone/Android camera scan",
+          "why": "requires a rendered image and a physical device"
+        }
+      ]
     }
   ],
-  "overall": "PASS"
+  "overall": "PASS",
+  "fullyVerified": false,
+  "awaitingEnvironmentVerification": [
+    {
+      "suite": "./qr-flow.js",
+      "what": "SVG/PNG rendering",
+      "why": "qrcode@1.5.3 not installable in this environment (npm 403)"
+    },
+    {
+      "suite": "./qr-flow.js",
+      "what": "Downloaded/printed QR re-scan",
+      "why": "requires a rendered image"
+    },
+    {
+      "suite": "./qr-flow.js",
+      "what": "iPhone/Android camera scan",
+      "why": "requires a rendered image and a physical device"
+    }
+  ]
 }

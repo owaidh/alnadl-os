@@ -36,8 +36,12 @@ const suites = [
   './corrective-closure.js',
   './r3-gap-closure.js',
   './white-label.js',
+  './operational-closure-b.js',
   './trusted-proxy.js',
   './production-deployment.js',
+  './browser-activation-journey.js',
+  './browser-payment-policy.js',
+  './qr-flow.js',
 ];
 
 (async () => {
@@ -46,24 +50,53 @@ const suites = [
     console.log(`\n${'='.repeat(60)}\nRunning ${suite}\n${'='.repeat(60)}`);
     const mod = require(suite);
     const ok = await mod.run();
-    results.push({ suite, ok });
+    // مجموعة قد تُبلّغ عن بنود لم تُنفَّذ لغياب اعتماد بيئي. تمريرها كـPASS
+    // كامل يُنتج تقريرًا آليًا يوحي بتحقق لم يحدث -- فتُسجَّل حالة ثالثة.
+    const awaiting = (mod && Array.isArray(mod.awaiting)) ? mod.awaiting : [];
+    results.push({ suite, ok, awaiting });
   }
 
   console.log(`\n${'='.repeat(60)}\nFINAL REPORT\n${'='.repeat(60)}`);
   let allPass = true;
   for (const r of results) {
-    console.log(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.suite}`);
+    const label = !r.ok ? 'FAIL'
+      : (r.awaiting && r.awaiting.length) ? 'AWAITING_ENVIRONMENT_VERIFICATION'
+      : 'PASS';
+    console.log(`  ${label}  ${r.suite}`);
+    if (r.awaiting && r.awaiting.length) {
+      for (const a of r.awaiting) console.log(`        awaiting: ${a.what}`);
+    }
     if (!r.ok) allPass = false;
   }
 
+  const awaitingSuites = results.filter(r => r.ok && r.awaiting && r.awaiting.length);
   const report = {
     timestamp: new Date().toISOString(),
-    suites: results.map(r => ({ suite: r.suite, status: r.ok ? 'PASS' : 'FAIL' })),
+    suites: results.map(r => ({
+      suite: r.suite,
+      status: !r.ok ? 'FAIL'
+        : (r.awaiting && r.awaiting.length) ? 'AWAITING_ENVIRONMENT_VERIFICATION'
+        : 'PASS',
+      ...(r.awaiting && r.awaiting.length ? { awaiting: r.awaiting } : {}),
+    })),
+    // الانحدار الأخضر يبقى منفصلًا وصادقًا: كل ما شُغّل نجح. لكن
+    // fullyVerified تُجيب سؤالًا مختلفًا -- هل تحقّق كل شيء فعلًا؟
     overall: allPass ? 'PASS' : 'FAIL',
+    fullyVerified: allPass && awaitingSuites.length === 0,
+    awaitingEnvironmentVerification: awaitingSuites.flatMap(r =>
+      r.awaiting.map(a => ({ suite: r.suite, what: a.what, why: a.why }))),
   };
   const reportPath = path.join(__dirname, 'last-run-report.json');
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
   console.log(`\nOverall: ${report.overall}`);
+  if (!report.fullyVerified && report.overall === 'PASS') {
+    console.log(`Fully verified: NO — ${report.awaitingEnvironmentVerification.length} item(s) awaiting environment verification`);
+    for (const a of report.awaitingEnvironmentVerification) {
+      console.log(`  - ${a.what}  [${a.suite}]  ${a.why}`);
+    }
+  } else if (report.fullyVerified) {
+    console.log('Fully verified: YES');
+  }
   console.log(`Report written to ${reportPath}`);
 
   process.exit(allPass ? 0 : 1);

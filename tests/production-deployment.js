@@ -40,7 +40,13 @@ async function run() {
     const posOut = JSON.parse(positive.stdout.slice(positive.stdout.indexOf('{'), positive.stdout.lastIndexOf('}') + 1));
     assertEqual(posOut.migrationsApplied, posOut.migrationsExpected,
       `PB-1 وكل المهاجرات مُطبَّقة (${posOut.migrationsApplied}/${posOut.migrationsExpected})`);
-    assertEqual(posOut.lastMigration, '017_branding_overrides', 'PB-1 حتى 017 ضمنًا');
+    // كان هذا التأكيد يثبّت '017_branding_overrides' نصًّا، فأخفق لحظة إضافة
+    // المهاجرة 018 -- وهو إخفاق في الاختبار لا في المنتج. المصدر الصحيح هو
+    // مجلد migrations/ نفسه: أي مهاجرة تُضاف لاحقًا تُفحص تلقائيًا، وأي
+    // مهاجرة **لا تُطبَّق** ما زالت تُسقط الاختبار -- وهو الغرض الأصلي.
+    const expectedLast = fs.readdirSync(path.join(ROOT, 'migrations'))
+      .filter(f => /^\d+_.+\.js$/.test(f)).sort().pop().replace(/\.js$/, '');
+    assertEqual(posOut.lastMigration, expectedLast, `PB-1 حتى آخر مهاجرة في المستودع (${expectedLast}) ضمنًا`);
     assert(posOut.tables >= 60, `PB-1 والمخطط كامل (${posOut.tables} جدولًا)`);
     assertEqual(posOut.aliveAfterGrace, true,
       'PB-1 **وتبقى حيّة بعد فترة سماح** — العطل السابق كان يقع بعد الإقلاع حين يبدأ العامل');

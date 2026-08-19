@@ -1,13 +1,29 @@
 # Alnadl Hospitality OS — production container
-# No external npm dependencies exist in this project, so the image is
-# intentionally minimal: official Node image + the source, nothing else.
+#
+# The image carried no dependency step while the project genuinely had none.
+# That stopped being true when P0-01 added qrcode@1.5.3 for guest QR
+# generation, and the stale comment below it was worse than the missing step:
+# it asserted a property the project no longer had, so the gap read as
+# intentional. A production image built without this step ships an app whose
+# QR endpoint answers 503 forever.
 FROM node:22-slim
 
 WORKDIR /app
 
-# Copy source. There is no package.json/npm install step because this
-# project has zero external dependencies (node:http, node:sqlite, node:crypto
-# only) — that is a deliberate architectural choice, not an oversight.
+# Dependencies first, in their own layer: the manifest changes far less often
+# than the source, so this layer is reused across ordinary code builds.
+#
+# npm ci (not npm install) because ci installs EXACTLY the lockfile and fails
+# if the two disagree. npm install would silently resolve a different
+# transitive graph than the one that was tested -- which is the whole reason a
+# lockfile exists.
+#
+# --omit=dev keeps playwright (an optional test-only dependency) out of the
+# production image entirely.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# Copy source.
 COPY server.js db.js ./
 COPY lib ./lib
 COPY public ./public
@@ -21,6 +37,22 @@ COPY migrations ./migrations
 # at /app so the database survives container restarts/redeploys:
 #   docker run -v alnadl-data:/app/data -e SQLITE_PATH=/app/data/data.sqlite ...
 # (see db.js — DB_PATH honors this if you set it; default is ./data.sqlite)
+# Release identification — تُمرَّر وقت البناء ولا تُستنتج من محتوى الحاوية.
+# استنتاجها من الملفات يجعل الحاوية "تصف نفسها" بما قد لا يطابق ما بُني منه
+# فعلًا؛ والقيمة الوحيدة الموثوقة هي ما حقنه خط البناء صراحةً.
+#
+#   docker build \
+#     --build-arg BUILD_VERSION="$(git describe --tags --abbrev=0)" \
+#     --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" \
+#     --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+#     -t alnadl:production .
+ARG BUILD_VERSION=unknown
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ENV BUILD_VERSION=$BUILD_VERSION
+ENV BUILD_COMMIT=$BUILD_COMMIT
+ENV BUILD_TIME=$BUILD_TIME
+
 ENV NODE_ENV=production
 ENV PORT=8787
 EXPOSE 8787

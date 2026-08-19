@@ -575,3 +575,130 @@ table.datatable td{ color:var(--cream-100); padding:9px 10px; border-bottom:1px 
 /* End state shares the mode's surface so closure feels part of the same
    experience, not a jarring hand-off to a generic screen. */
 .engage-card.end h2{ font-family:var(--display); font-size:20px; font-weight:700; margin:0; }
+
+/* ============================================================================
+   P2 — Light / Dark / System theming.
+   
+   لماذا هنا وبهذا الشكل: طبقة ink-* موجودة أصلًا كـ**أسماء دلالية** تشير
+   إلى الرمب البنفسجي، وهي بالضبط نقطة الانعطاف الصحيحة. قلب السمة يعني
+   إعادة توجيه هذه الأسماء فقط -- لا لمس أي مكوّن، ولا نسخة ثانية من
+   التصميم تتقادم عن الأولى.
+   
+   الافتراضي System: لا نفرض تفضيلًا على مستخدم ضبطه على مستوى نظامه.
+   ============================================================================ */
+
+/* الوضع الفاتح -- يُطبَّق حين يختاره المستخدم صراحةً */
+html[data-theme="light"] {
+  /* الأسطح: من الأفتح للأغمق قليلًا */
+  --ink-950:#FFFFFF; --ink-900:#FAF8FC; --ink-850:#F4F0F8; --ink-800:#EDE7F3;
+  /* الحدود والفواصل */
+  --ink-700:#DED5E8; --ink-600:#C4B6D4;
+  /* النصوص: يجب أن تكون **داكنة** على خلفية فاتحة -- هذا ما أخطأتُ فيه أولًا */
+  --ink-400:#6E5C81; --ink-300:#3F3350; --ink-200:#241A31; --ink-100:#150E1E;
+  color-scheme: light;
+}
+
+/* أو حين يكون الاختيار System ونظام المستخدم فاتح */
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] {
+    --ink-950:#FFFFFF; --ink-900:#FAF8FC; --ink-850:#F4F0F8; --ink-800:#EDE7F3;
+    --ink-700:#DED5E8; --ink-600:#C4B6D4;
+    --ink-400:#6E5C81; --ink-300:#3F3350; --ink-200:#241A31; --ink-100:#150E1E;
+    color-scheme: light;
+  }
+}
+
+html[data-theme="dark"] { color-scheme: dark; }
+
+/* حالات النجاح/التحذير/الخطر تبقى مقروءة في الوضعين: الدرجات الداكنة
+   المستخدمة على خلفيات فاتحة لا تنقلب، لأن انقلابها يجعل "خطر" يبدو
+   باهتًا -- وهي أكثر حالة يجب ألا تُخطئ العين فيها. */
+html[data-theme="light"] .errbox,
+html[data-theme="system"] .errbox { background:rgba(190,60,55,.10); color:#8E2620; }
+html[data-theme="light"] .notebox,
+html[data-theme="system"] .notebox { border:1px solid rgba(0,0,0,.08); }
+
+/* الحقول والجداول والنوافذ ترث من ink-* فلا تحتاج قواعد خاصة، عدا الحدود
+   التي كانت شفافة-بيضاء (تختفي على خلفية فاتحة). */
+html[data-theme="light"] input,
+html[data-theme="light"] select,
+html[data-theme="light"] textarea,
+html[data-theme="system"] input,
+html[data-theme="system"] select,
+html[data-theme="system"] textarea {
+  border-color:rgba(0,0,0,.16); background:rgba(0,0,0,.03); color:var(--ink-100);
+}
+html[data-theme="light"] .datatable th,
+html[data-theme="system"] .datatable th { border-bottom-color:rgba(0,0,0,.12); }
+html[data-theme="light"] .datatable td,
+html[data-theme="system"] .datatable td { border-bottom-color:rgba(0,0,0,.06); }
+html[data-theme="light"] .panel,
+html[data-theme="system"] .panel { border:1px solid rgba(0,0,0,.07); }
+html[data-theme="light"] .ordsheet,
+html[data-theme="system"] .ordsheet { box-shadow:0 18px 48px rgba(0,0,0,.18); }
+
+/* التركيز يجب أن يبقى مرئيًا في الوضعين -- وهو أول ما يُكسر عند قلب سمة. */
+html[data-theme="light"] :focus-visible,
+html[data-theme="system"] :focus-visible { outline:2px solid var(--purple-500); outline-offset:2px; }
+html[data-theme="dark"] :focus-visible { outline:2px solid var(--brass-500); outline-offset:2px; }
+
+/* المعطّل يجب أن يُقرأ كمعطّل لا كغائب. */
+html[data-theme="light"] [disabled],
+html[data-theme="system"] [disabled] { opacity:.5; }
+
+/* زر تبديل السمة */
+.themebtn { background:none; border:1px solid var(--ink-700); color:var(--ink-300);
+  padding:5px 10px; border-radius:999px; font-size:11px; font-weight:700; cursor:pointer; }
+.themebtn:hover { border-color:var(--ink-600); color:var(--ink-200); }
+
+/* عناصر صُمّمت لخلفية داكنة وتحتاج قلبًا صريحًا في الوضع الفاتح.
+   اكتشفها التحقق البصري: العناوين والشريط الجانبي وبطاقات الشركاء كانت
+   تُصيَّر فاتحًا على فاتح فتختفي عمليًا. */
+html[data-theme="light"] body,
+html[data-theme="system"] body { background:var(--ink-950); color:var(--ink-200); }
+html[data-theme="light"] h1, html[data-theme="light"] h2, html[data-theme="light"] h3,
+html[data-theme="system"] h1, html[data-theme="system"] h2, html[data-theme="system"] h3 { color:var(--ink-100); }
+html[data-theme="light"] .sidebar,
+html[data-theme="system"] .sidebar { background:var(--ink-900); border-inline-end-color:var(--ink-700); }
+html[data-theme="light"] .sidebar-link,
+html[data-theme="system"] .sidebar-link { color:var(--ink-200); }
+html[data-theme="light"] .ph,
+html[data-theme="system"] .ph { color:var(--ink-400); }
+html[data-theme="light"] .panel,
+html[data-theme="system"] .panel { background:var(--ink-900); color:var(--ink-200); }
+html[data-theme="light"] .ordsheet,
+html[data-theme="system"] .ordsheet { background:var(--ink-950); color:var(--ink-200); }
+html[data-theme="light"] .statepanel.on-dark,
+html[data-theme="system"] .statepanel.on-dark { color:var(--ink-300); }
+html[data-theme="light"] .totalline,
+html[data-theme="system"] .totalline { color:var(--ink-300) !important; }
+html[data-theme="light"] .nm, html[data-theme="light"] .meta b, html[data-theme="light"] .kpi .val,
+html[data-theme="system"] .nm, html[data-theme="system"] .meta b, html[data-theme="system"] .kpi .val { color:var(--ink-100); }
+html[data-theme="light"] .kpi, html[data-theme="light"] .prodlistrow, html[data-theme="light"] .pointrow,
+html[data-theme="system"] .kpi, html[data-theme="system"] .prodlistrow, html[data-theme="system"] .pointrow { background:var(--ink-900); color:var(--ink-200); }
+html[data-theme="light"] .datatable, html[data-theme="light"] .datatable td,
+html[data-theme="system"] .datatable, html[data-theme="system"] .datatable td { color:var(--ink-200); }
+html[data-theme="light"] .datatable th,
+html[data-theme="system"] .datatable th { color:var(--ink-300); }
+html[data-theme="light"] .darkfield label, html[data-theme="light"] .formfield label,
+html[data-theme="system"] .darkfield label, html[data-theme="system"] .formfield label { color:var(--ink-300); }
+html[data-theme="light"] .togglepill,
+html[data-theme="system"] .togglepill { color:var(--ink-200); border-color:var(--ink-600); }
+
+/* بقايا التحقق البصري الثاني: عناصر تحمل ألوانًا فاتحة مباشرة (لا عبر
+   ink-*) فتختفي على خلفية بيضاء. تُقلب صراحةً. */
+html[data-theme="light"] .brand, html[data-theme="system"] .brand { color:var(--ink-100); }
+html[data-theme="light"] .rolechip, html[data-theme="system"] .rolechip { color:var(--ink-200); }
+html[data-theme="light"] .tenantcard b, html[data-theme="light"] .tenantcard .nm,
+html[data-theme="system"] .tenantcard b, html[data-theme="system"] .tenantcard .nm { color:var(--ink-100); }
+html[data-theme="light"] .sidebar-scope, html[data-theme="system"] .sidebar-scope { color:var(--ink-300); }
+html[data-theme="light"] .sidebar-scope b, html[data-theme="system"] .sidebar-scope b { color:var(--ink-100); }
+html[data-theme="light"] .cnt, html[data-theme="system"] .cnt { color:var(--ink-300); }
+html[data-theme="light"] .btn-small, html[data-theme="system"] .btn-small { color:var(--ink-200); border-color:var(--ink-600); }
+html[data-theme="light"] .ghostbtn, html[data-theme="system"] .ghostbtn { color:var(--ink-300); border-color:var(--ink-600); }
+html[data-theme="light"] .themebtn, html[data-theme="system"] .themebtn { color:var(--ink-300); border-color:var(--ink-600); }
+html[data-theme="light"] .meta span, html[data-theme="system"] .meta span { color:var(--ink-400); }
+html[data-theme="light"] .sub, html[data-theme="system"] .sub { color:var(--ink-400); }
+html[data-theme="light"] label, html[data-theme="system"] label { color:var(--ink-300); }
+/* عناصر داخل بطاقات ملوّنة تبقى كما هي: الشارات والأزرار النحاسية مصمَّمة
+   بتباينها الخاص ولا تتبع السطح. */

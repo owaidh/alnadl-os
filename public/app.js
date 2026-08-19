@@ -24,6 +24,10 @@ const T = {
     total:'الإجمالي', continueCheckout:'متابعة للدفع', emptyCart:'سلتك فارغة — أضف منتجات من القائمة',
     checkoutTitle:'إتمام الطلب', deliverTo:'التسليم إلى', nameField:'الاسم', phoneField:'رقم الجوال',
     payMethod:'طريقة الدفع', card:'بطاقة / Apple Pay', wallet:'رصيد الشركة', payNow:'ادفع الآن',
+    pos:'الدفع عند التسليم', cash:'نقدًا عند التسليم',
+    confirmOrder:'تأكيد الطلب', noPayTitle:'لا حاجة للدفع هنا',
+    noPayBody:'هذا الطلب لا يُحصَّل منك. أكّد الطلب وسيصلك.',
+    orderConfirmed:'تم تأكيد طلبك', st_confirmed:'تم تأكيد الطلب',
     paySuccess:'تم الدفع بنجاح', payFail:'تعذر إتمام الدفع', yourOrder:'طلبك رقم', retry:'إعادة المحاولة',
     goTrack:'الانتقال إلى متابعة الطلب', trackTitle:'طلب', needHelp:'تحتاج مساعدة؟',
     st_created:'تم إنشاء الطلب', st_pending:'بانتظار تأكيد الدفع', st_paid:'تم الاستلام',
@@ -65,6 +69,10 @@ const T = {
     total:'Total', continueCheckout:'Continue to checkout', emptyCart:'Your cart is empty — add items from the menu',
     checkoutTitle:'Checkout', deliverTo:'Deliver to', nameField:'Name', phoneField:'Mobile number',
     payMethod:'Payment method', card:'Card / Apple Pay', wallet:'Corporate wallet', payNow:'Pay now',
+    pos:'Pay on delivery', cash:'Cash on delivery',
+    confirmOrder:'Confirm order', noPayTitle:'No payment needed here',
+    noPayBody:'This order is not collected from you. Confirm it and it will be on its way.',
+    orderConfirmed:'Your order is confirmed', st_confirmed:'Order confirmed',
     paySuccess:'Payment successful', payFail:'Payment could not be completed', yourOrder:'Your order #', retry:'Retry',
     goTrack:'Go to order tracking', trackTitle:'Order', needHelp:'Need help?',
     st_created:'Order created', st_pending:'Awaiting payment confirmation', st_paid:'Order received',
@@ -120,14 +128,14 @@ const S = {
   // added (see addActiveToCart) so the next open starts fresh rather
   // than replaying a just-completed selection.
   productDrafts:{},
-  cart:[], currentOrder:null, payMethod:'card', promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
+  cart:[], currentOrder:null, payMethod:'card', paymentPolicy:null, promo:null, redeemPoints:0, loyaltyBalance:null, wallet:null, activeOutletId:null,
   checkoutName:'', checkoutPhone:'',
-  adminPlans:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
+  adminPlans:null, theme:'system', contextSwitchedFrom:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
-  portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], merchantStatuses:{}, paymentPolicies:null, wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, activationHandoff:null, pointQr:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
   // token the server handed us plus eligibility — never any policy,
   // personality reasoning, or AI internals. `moment.payload` is the
@@ -139,7 +147,9 @@ const S = {
 };
 
 function showToast(msg){ S.toast=msg; const d=document.createElement('div'); d.className='toast'; d.textContent=msg; document.body.appendChild(d); setTimeout(()=>d.remove(),1700); }
-function showErr(msg){ S.ui.err = msg; render(); }
+// نقطة واحدة لكل رسالة خطأ تصل المستخدم ⇒ التعريب يُطبَّق مرة واحدة
+// ولا يُنسى في مسار.
+function showErr(msg){ S.ui.err = (App && App.localizeError) ? App.localizeError(msg) : msg; render(); }
 
 /* ============================== ACTIONS ============================== */
 const App = {
@@ -254,12 +264,35 @@ const App = {
     const ref = document.getElementById('employeeRef')?.value.trim();
     if(!ref) return;
     try{
-      const r = await api('GET', `/api/wallets/lookup?ownerRef=${encodeURIComponent(ref)}`);
+      // P1-03: النطاق يُشتق على الخادم من هذا الرمز؛ بلا رمز لا بحث.
+      const r = await api('GET', `/api/wallets/lookup?ownerRef=${encodeURIComponent(ref)}&t=${encodeURIComponent(S.qrContext.token)}`);
       S.wallet = { ...r, ownerRef: ref }; S.payMethod='wallet'; showToast(S.lang==='ar'?'تم العثور على المحفظة':'Wallet found'); render();
     }catch(e){ S.wallet=null; showErr(S.lang==='ar'?'لا توجد محفظة بهذا المعرّف':'No wallet found for this ID'); }
   },
 
-  async goCheckout(){ if(S.cart.length===0) return; App.goScreen('checkout'); },
+  async goCheckout(){
+    if(S.cart.length===0) return;
+    // P1-04: السياسة تُقرأ من الخادم قبل رسم الشاشة، لا تُخمّن. المنفذ
+    // يُمرَّر فقط حين تكون السلّة من منفذ واحد -- نفس قاعدة الخادم عند
+    // الإنشاء بالضبط، فلا تنشأ قاعدتان تختلفان.
+    try{
+      const outletIds = [...new Set(S.cart.map(c=>{
+        const prod = (S.catalog?.products||[]).find(pr=>pr.id===c.productId);
+        return prod ? prod.outlet_id : null;
+      }).filter(Boolean))];
+      const qs = `pointId=${encodeURIComponent(S.qrContext.point.id)}` + (outletIds.length===1? `&outletId=${encodeURIComponent(outletIds[0])}`:'');
+      S.paymentPolicy = await api('GET', `/api/payment-policy?${qs}`);
+      // الوسيلة المختارة مسبقًا قد لا تكون مصرّحًا بها هنا؛ تُصحَّح إلى أول
+      // وسيلة متاحة بدل تركها تفشل عند الإرسال.
+      const allowed = S.paymentPolicy.allowedMethods || [];
+      if(allowed.length && !allowed.includes(S.payMethod)) S.payMethod = allowed[0];
+    }catch(e){
+      // فشل القراءة لا يُسقط الرحلة: الخادم هو الحَكَم على أي حال، ورد
+      // الإنشاء يُصحّح الواجهة. نعود للسلوك التاريخي (تحصيل أونلاين).
+      S.paymentPolicy = null;
+    }
+    App.goScreen('checkout');
+  },
 
   // UX-1 corrective finding: this function used to accept a simulateFail
   // parameter, with the real payment button and a "Simulate payment
@@ -287,6 +320,17 @@ const App = {
         };
         const created = await api('POST', '/api/orders', payload);
         S.currentOrder = { id: created.id, status: created.status, paymentRef: created.paymentRef };
+        // رد الإنشاء هو الحقيقة النهائية: الخادم يحلّ السياسة على مستوى
+        // المنفذ بعد معرفة السلّة، وقد يختلف عمّا رسمته الشاشة. تصحيح
+        // الواجهة من الرد يمنع عرض خطوة دفع لطلب لا يُدفع.
+        if(created.requiresGuestPayment !== undefined){
+          S.paymentPolicy = { policy: created.paymentPolicy, requiresGuestPayment: created.requiresGuestPayment, allowedMethods: created.allowedMethods||[] };
+        }
+      }
+      // لا خطوة دفع أصلًا: الطلب خرج من الإنشاء مؤكَّدًا (Confirmed).
+      if(S.paymentPolicy && S.paymentPolicy.requiresGuestPayment === false){
+        App.goScreen('paymentResult');
+        return;
       }
       const result = await api('POST', `/api/orders/${S.currentOrder.id}/pay`, { method:S.payMethod });
       S.currentOrder.status = result.status;
@@ -299,7 +343,7 @@ const App = {
     if(!S.currentOrder) return;
     try{ const o = await api('GET', '/api/orders/'+S.currentOrder.id); S.currentOrder = { ...S.currentOrder, ...o }; render(); }catch{}
   },
-  startNewOrder(){ S.cart=[]; S.currentOrder=null; S.promo=null; S.redeemPoints=0; S.loyaltyBalance=null; S.wallet=null; S.payMethod='card'; S.checkoutName=''; S.checkoutPhone=''; App.goScreen('welcome'); },
+  startNewOrder(){ S.cart=[]; S.currentOrder=null; S.promo=null; S.redeemPoints=0; S.loyaltyBalance=null; S.wallet=null; S.payMethod='card'; S.paymentPolicy=null; S.checkoutName=''; S.checkoutPhone=''; App.goScreen('welcome'); },
   setStar(n){ S.feedback = S.feedback||{stars:0,tags:[],comment:''}; S.feedback.stars=n; render(); },
   toggleTag(tag){ S.feedback = S.feedback||{stars:0,tags:[],comment:''}; const i=S.feedback.tags.indexOf(tag); if(i>-1) S.feedback.tags.splice(i,1); else S.feedback.tags.push(tag); render(); },
   async submitFeedback(){
@@ -384,6 +428,25 @@ const App = {
   // mechanism physically present in the production-served app.js. The
   // one-tap password-equals-username shortcut now lives entirely in the
   // developer-tools file, which never reaches a production client.
+  /* P2-04 — تعريب الرسائل التشغيلية.
+     الترجمة في الواجهة لا في الخادم: الخادم لا يعرف لغة المستخدم، وحقن
+     اللغة فيه يعني أن كل مستهلك للـAPI يرث لغة لم يطلبها. الواجهة تعرف
+     لغتها، فهي الموضع الصحيح. */
+  localizeError(msg){
+    if(S.lang !== 'ar') return msg;
+    const MAP = {
+      'Invalid credentials': 'اسم المستخدم أو كلمة المرور غير صحيحة',
+      'Forbidden': 'لا تملك صلاحية لهذا الإجراء',
+      'Not found': 'غير موجود',
+      'Unauthorized': 'يلزم تسجيل الدخول',
+      'Too many failed login attempts — try again later': 'محاولات دخول فاشلة كثيرة — حاول لاحقًا',
+      'Point unavailable': 'هذه النقطة غير متاحة حاليًا',
+      'Empty cart': 'السلة فارغة',
+    };
+    if(MAP[msg]) return MAP[msg];
+    for(const [en, ar] of Object.entries(MAP)) if(msg && msg.startsWith(en)) return ar;
+    return msg;
+  },
   async login(){
     const username = document.getElementById('loginUsername')?.value?.trim();
     const password = document.getElementById('loginPassword')?.value;
@@ -440,16 +503,122 @@ const App = {
     if(scr==='revenue') await App.loadOutletsForRevenue();
     if(scr==='branding') await App.loadBranding();
     if(scr==='merchants') await App.loadMerchants();
+    if(scr==='paymentpolicy') await App.loadPaymentPolicies();
     if(scr==='wallets') await App.loadWallets();
   },
   async loadPortfolio(){ S.portfolio = await api('GET','/api/admin/portfolio',null,true); render(); },
   async loadLive(){ try{ S.live = await api('GET',`/api/manager/live?propertyId=${S.PROPERTY_ID}`,null,true); }catch(e){} render(); },
   async loadUsers(){ S.users = await api('GET','/api/admin/users',null,true); render(); },
+  /* P0-02 — دورة التفعيل: كانت النقطة تُرجع activationToken **والواجهة
+     ترميه**، فيُنشأ حساب بلا كلمة مرور ولا وسيلة لتفعيله ⇒ Invalid
+     credentials حتمية. الخادم سليم منذ R1؛ الناقص كان توصيل الواجهة.
+     الرمز يُعاد مرة واحدة فقط ولا يمكن استرجاعه، فيُعرض فورًا للنسخ. */
+  /* P0-01 — إجراءات نقطة QR. الرابط يأتي من الخادم (buildGuestUrl) ولا
+     يُبنى هنا: بناؤه في الواجهة يعني مسارًا ثانيًا ينحرف يومًا، فيفتح الزر
+     شيئًا ويقود الرمز المطبوع لشيء آخر. */
+  async openPointQr(pointId){
+    S.ui.pointQr = { pointId, loading:true }; render();
+    try{
+      const info = await api('GET', `/api/admin/points/${pointId}/qr`, null, true);
+      S.ui.pointQr = { ...info, pointId, loading:false };
+    }catch(e){ S.ui.pointQr = { pointId, loading:false, error:e.message }; }
+    render();
+  },
+  dismissPointQr(){ S.ui.pointQr=null; render(); },
+  openAsGuest(){
+    const st=S.ui.pointQr; if(!st||!st.guestUrl) return;
+    window.open(st.guestUrl, '_blank', 'noopener');
+  },
+  copyGuestUrl(){
+    const st=S.ui.pointQr; if(!st||!st.guestUrl) return;
+    const abs = st.guestUrl.startsWith('http') ? st.guestUrl : location.origin + st.guestUrl;
+    const done=()=>showToast(S.lang==='ar'?'نُسخ الرابط':'Link copied');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(abs).then(done).catch(()=>{
+        const i=document.getElementById('qrUrl'); if(i){ i.select(); document.execCommand('copy'); done(); }});
+    } else { const i=document.getElementById('qrUrl'); if(i){ i.select(); document.execCommand('copy'); done(); } }
+  },
+  downloadQr(){
+    const st=S.ui.pointQr; if(!st) return;
+    window.location.href = `/api/admin/points/${st.pointId}/qr?format=png&size=1024&download=1`;
+  },
+  printQr(){
+    const st=S.ui.pointQr; if(!st) return;
+    const w = window.open('', '_blank');
+    if(!w) return;
+    const label = (st.label||'').replace(/[<>&]/g,'');
+    const zone = ((S.lang==='ar'?st.zone&&st.zone.name_ar:st.zone&&st.zone.name_en)||'').replace(/[<>&]/g,'');
+    // الرمز يُحمَّل من نفس النقطة المركزية -- لا نسخة ثانية للطباعة.
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR ${label}</title>
+      <style>body{font-family:system-ui,sans-serif;text-align:center;padding:40px}
+      img{width:320px;height:320px}h2{margin:18px 0 4px}p{color:#666;margin:0}
+      @media print{@page{margin:12mm}}</style></head><body>
+      <img src="/api/admin/points/${st.pointId}/qr?format=png&size=1024" alt="QR">
+      <h2>${label}</h2><p>${zone}</p>
+      <script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script>
+      </body></html>`);
+    w.document.close();
+  },
+  async togglePointActive(pointId, active){
+    try{ await api('PATCH',`/api/admin/points/${pointId}`,{active:!active},true);
+         showToast(t('toast_saved')); await App.loadAdminAll();
+         if(S.ui.pointQr && S.ui.pointQr.pointId===pointId) await App.openPointQr(pointId);
+    }catch(e){ showErr(e.message); }
+  },
+  /* P2 — Light / Dark / System.
+     التفضيل يُحفظ محليًا لا على الخادم: تفضيل عرض يخصّ الجهاز لا الحساب،
+     وحفظه على الخادم كان سيجعل مستخدمًا واحدًا مقيّدًا بسمة واحدة عبر
+     شاشات مختلفة الإضاءة. */
+  applyTheme(mode){
+    const m = ['light','dark','system'].includes(mode) ? mode : 'system';
+    document.documentElement.setAttribute('data-theme', m);
+    try{ localStorage.setItem('alnadl_theme', m); }catch(e){}
+    S.theme = m;
+  },
+  cycleTheme(){
+    const order = ['system','light','dark'];
+    const next = order[(order.indexOf(S.theme||'system') + 1) % order.length];
+    App.applyTheme(next);
+    render();
+  },
   async createUser(){
-    const username=document.getElementById('newUserName').value.trim(), role=document.getElementById('newUserRole').value;
-    if(!username) return;
-    try{ await api('POST','/api/admin/users',{username,role,partner_scope:S.PARTNER_ID},true); showToast(t('toast_saved')); await App.loadUsers(); }
-    catch(e){ showErr(e.message); }
+    const el=document.getElementById('newUserName'), roleEl=document.getElementById('newUserRole');
+    const username=el.value.trim(), role=roleEl.value;
+    if(!username){ showErr(S.lang==='ar'?'اسم المستخدم مطلوب':'Username is required'); return; }
+    try{
+      const r = await api('POST','/api/admin/users',{username,role,partner_scope:S.PARTNER_ID},true);
+      el.value='';
+      S.ui.activationHandoff = {
+        username: r.username || username, role,
+        token: r.activationToken, expiresAt: r.expiresAt,
+        url: `${location.origin}/activate.html?token=${encodeURIComponent(r.activationToken||'')}`,
+      };
+      await App.loadUsers();
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  dismissActivationHandoff(){ S.ui.activationHandoff=null; render(); },
+  async reissueActivation(userId, username){
+    try{
+      const r = await api('POST',`/api/admin/users/${userId}/activation`,{},true);
+      S.ui.activationHandoff = {
+        username, reissued:true, token:r.activationToken, expiresAt:r.expiresAt,
+        url: `${location.origin}/activate.html?token=${encodeURIComponent(r.activationToken||'')}`,
+      };
+      await App.loadUsers();
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  copyActivationLink(){
+    const st=S.ui.activationHandoff; if(!st) return;
+    const done=()=>showToast(S.lang==='ar'?'نُسخ الرابط':'Link copied');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(st.url).then(done).catch(()=>{
+        const i=document.getElementById('actLink'); if(i){ i.select(); document.execCommand('copy'); done(); }
+      });
+    } else {
+      const i=document.getElementById('actLink'); if(i){ i.select(); document.execCommand('copy'); done(); }
+    }
   },
   async toggleUser(id,active){ try{ await api('PATCH',`/api/admin/users/${id}`,{active:!active},true); await App.loadUsers(); }catch(e){ showErr(e.message); } },
 
@@ -539,7 +708,57 @@ const App = {
     catch(e){ showErr(e.message); }
   },
 
-  async loadMerchants(){ S.merchants = await api('GET','/api/admin/merchants',null,true); render(); },
+  async loadMerchants(){
+    S.merchants = await api('GET','/api/admin/merchants',null,true);
+    // P1-05: الملخّص يُقرأ لكل شريك تجاري لأن الانتقالات المتاحة تعتمد على
+    // طلباته المفتوحة، وهي معلومة لا يملكها العميل ولا يجوز أن يخمّنها --
+    // زر إغلاق يفشل عند الضغط أسوأ من زر غائب بسبب مُعلَن.
+    const map = {};
+    for(const m of S.merchants){
+      try{ map[m.id] = await api('GET',`/api/admin/merchants/${m.id}/status`,null,true); }catch(e){ map[m.id]=null; }
+    }
+    S.merchantStatuses = map;
+    render();
+  },
+  async setMerchantStatus(merchantId, to){
+    const reason = prompt(S.lang==='ar'?'سبب تغيير حالة الشريك التجاري (يُسجَّل في سجل التدقيق):':'Reason for this merchant status change (recorded in the audit log):');
+    if(!reason) return; // السبب إلزامي على الخادم؛ الإلغاء هنا يمنع رحلة تفشل
+    try{
+      await api('POST',`/api/admin/merchants/${merchantId}/status`,{status:to, reason},true);
+      showToast(t('toast_saved')); await App.loadMerchants();
+    }catch(e){ showErr(e.message); }
+  },
+
+  /* ---- P1-04: إدارة سياسة التحصيل ---- */
+  async loadPaymentPolicies(){
+    const partnerId = S.PARTNER_ID;
+    // النطاقات والنتيجة الفعّالة لكل منها تأتي من النقطة نفسها: الوراثة
+    // تُحسب في مكان واحد على الخادم ولا تُعاد بناؤها هنا.
+    const [overrides, effective] = await Promise.all([
+      api('GET',`/api/admin/payment-policy/overrides?partnerId=${partnerId}`,null,true),
+      api('GET',`/api/admin/payment-policy/effective?partnerId=${partnerId}`,null,true),
+    ]);
+    S.paymentPolicies = { ...overrides, effective, partnerId };
+    render();
+  },
+  async savePaymentPolicy(scopeType, scopeId){
+    const sel = document.getElementById(`pp_${scopeType}_${scopeId}`);
+    if(!sel) return;
+    const policy = sel.value;
+    if(policy==='__inherit__'){ return App.clearPaymentPolicy(scopeType, scopeId); }
+    const body = { policy };
+    if(policy==='MIXED'){
+      const checked = [...document.querySelectorAll(`input[data-mixed="${scopeType}_${scopeId}"]:checked`)].map(i=>i.value);
+      if(!checked.length) return showErr(S.lang==='ar'?'اختر وسيلة واحدة على الأقل لسياسة MIXED':'Pick at least one method for MIXED');
+      body.allowedMethods = checked;
+    }
+    try{ await api('PUT',`/api/admin/payment-policy/${scopeType}/${scopeId}`,body,true); showToast(t('toast_saved')); await App.loadPaymentPolicies(); }
+    catch(e){ showErr(e.message); }
+  },
+  async clearPaymentPolicy(scopeType, scopeId){
+    try{ await api('DELETE',`/api/admin/payment-policy/${scopeType}/${scopeId}`,null,true); showToast(t('toast_saved')); await App.loadPaymentPolicies(); }
+    catch(e){ showErr(e.message); }
+  },
   async addMerchant(){
     const name_ar=document.getElementById('merAr').value.trim(), name_en=document.getElementById('merEn').value.trim();
     const commissionRate=(parseFloat(document.getElementById('merCommission').value)||10)/100;
@@ -909,12 +1128,32 @@ const App = {
     try{ const r = await api('POST','/api/admin/onboard', b, true); showToast(t('toast_saved')); S.selectedPartnerId=r.partnerId; await App.loadTenants(); }
     catch(e){ showErr(e.message); }
   },
-  selectTenantForAdmin(partnerId){
-    S.selectedPartnerId = partnerId;
-    api('GET','/api/admin/properties',null,true).then(props=>{
+  /* P1-01 — كان يفشل صامتًا حين لا يملك الشريك عقارًا: لا رسالة ولا سبب،
+     فيبدو الزر معطّلًا بلا تفسير. الشرط مشروع (السياق يحتاج عقارًا) لكن
+     إخفاءه ليس. يُعلَن السبب ويُقترح الإجراء. */
+  async selectTenantForAdmin(partnerId){
+    try{
+      const props = await api('GET','/api/admin/properties',null,true);
       const prop = props.find(p=>p.partner_id===partnerId);
-      if(prop){ S.PARTNER_ID=partnerId; S.PROPERTY_ID=prop.id; App.loadAdminAll(); }
-    });
+      if(!prop){
+        showErr(S.lang==='ar'
+          ? 'لا يمكن الدخول لسياق هذا الشريك: لا يملك أي عقار بعد. أنشئ عقارًا أولًا من ملف الشريك.'
+          : 'Cannot enter this partner context: it has no property yet. Create one first from the partner profile.');
+        return;
+      }
+      S.selectedPartnerId = partnerId;
+      S.PARTNER_ID = partnerId; S.PROPERTY_ID = prop.id;
+      // الهوية تبقى SuperAdmin -- هذا تبديل سياق لا انتحال دور.
+      S.contextSwitchedFrom = S.contextSwitchedFrom || { role: S.session.user.role };
+      await App.loadAdminAll();
+      showToast(S.lang==='ar'?'دخلت سياق الشريك':'Entered partner context');
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  exitPartnerContext(){
+    S.contextSwitchedFrom = null; S.selectedPartnerId = null;
+    S.screen = 'tenants';
+    App.loadTenants(); render();
   },
   async changePlan(partnerId){
     const planCode = document.getElementById('planSelect_'+partnerId)?.value;
@@ -1021,8 +1260,12 @@ const App = {
   async addProduct(){
     const name_ar=document.getElementById('prodAr').value.trim(), name_en=document.getElementById('prodEn').value.trim();
     const basePrice=parseFloat(document.getElementById('prodPrice').value)||0, categoryId=document.getElementById('prodCatSel').value;
+    // P1-07: الخادم يدعم outletId منذ Phase 4 والواجهة لم تكن تسأل عنه، فكل
+    // المنتجات تُنشأ بلا منفذ ولا يعرف المشغّل لأي منفذ تنتمي في شريك
+    // متعدد المنافذ. الاختيار صريح الآن.
+    const outletId=(document.getElementById('prodOutletSel')||{}).value || null;
     if(!name_ar && !name_en) return;
-    try{ await api('POST','/api/admin/products',{categoryId,name_ar:name_ar||name_en,name_en:name_en||name_ar,basePrice},true); showToast(t('toast_prod')); await App.loadAdminAll(); }
+    try{ await api('POST','/api/admin/products',{categoryId,outletId:outletId||undefined,name_ar:name_ar||name_en,name_en:name_en||name_ar,basePrice},true); showToast(t('toast_prod')); await App.loadAdminAll(); }
     catch(e){ showErr(e.message); }
   },
   async toggleProdStatus(id,status){
@@ -1038,7 +1281,7 @@ window.App = App;
 
 /* ============================== RENDER ============================== */
 function statusBadge(status){
-  const map = { 'Created':['pending','st_created'],'Payment Pending':['pending','st_pending'],'Paid':['paid','st_paid'],
+  const map = { 'Created':['pending','st_created'],'Payment Pending':['pending','st_pending'],'Paid':['paid','st_paid'],'Confirmed':['paid','st_confirmed'],
     'Accepted':['paid','st_accepted'],'Preparing':['prep','st_preparing'],'Ready':['ready','st_ready'],
     'Out for Delivery':['out','st_out'],'Delivered':['delivered','st_delivered'],
     'Partially Ready':['ready','st_partially_ready'],'Partially Delivered':['out','st_partially_delivered'],
@@ -1123,6 +1366,10 @@ function renderTopBar(){
   const loggedIn = !!S.session;
   bar.innerHTML = `
     <div class="brand">${guestBrandMark()}</div>
+    <button class="themebtn" onclick="App.cycleTheme()" title="${S.lang==='ar'?'وضع العرض':'Display mode'}">${
+      S.theme==='light' ? (S.lang==='ar'?'☀ فاتح':'☀ Light')
+      : S.theme==='dark' ? (S.lang==='ar'?'☾ داكن':'☾ Dark')
+      : (S.lang==='ar'?'⌂ النظام':'⌂ System')}</button>
     <div class="spacer"></div>
     ${loggedIn ? `
       <div class="sessionpill">${S.session.user.username} <span class="rl">· ${S.session.user.role}</span></div>
@@ -1398,6 +1645,17 @@ function scrCheckout(){
   const t1 = App.computeTotals();
   const feat = S.qrContext.features || {};
   const walletCoverPreview = S.wallet ? Math.min(t1.total, S.wallet.remaining, S.wallet.policy?.perOrderCap ?? Infinity) : 0;
+  /* P1-04 -- الشاشة تعكس السياسة ولا تتجاوزها:
+       * لا تحصيل  -> كتلة وسائل الدفع تختفي كليًا. إظهارها معطّلة كان
+         سيترك الضيف يتساءل عمّا ينقصه؛ الغياب أوضح من التعطيل.
+       * تحصيل     -> تُعرض الوسائل المصرّح بها فقط. الإخفاء ليس إنفاذًا
+         (الإنفاذ على الخادم)، لكنه يمنع ضيفًا من اختيار طريق يُرفض.
+     غياب السياسة (تعذّر قراءتها) يسقط للسلوك التاريخي: بطاقة أونلاين. */
+  const pol = S.paymentPolicy;
+  const collects = !pol || pol.requiresGuestPayment !== false;
+  const allowed = (pol && pol.allowedMethods) || ['card','applepay','mada'];
+  const show = m => allowed.includes(m);
+  const showCard = show('card') || show('applepay') || show('mada');
   return `
   <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('cart')">${S.lang==='ar'?'→':'←'}</button><h3>${t('checkoutTitle')}</h3><div style="width:32px"></div></div></div>
   <div class="scrbody">
@@ -1418,9 +1676,16 @@ function scrCheckout(){
           </div>`:''}
       </div>` : ''}
 
+    ${!collects? `
+    <div class="loyaltybox" style="border-color:var(--sage-500)">
+      <div class="loyaltybox-head">✓ ${t('noPayTitle')}</div>
+      <div style="font-size:12px;color:var(--ink-400);margin-top:6px">${t('noPayBody')}</div>
+    </div>` : `
     <div class="formfield"><label>${t('payMethod')}</label>
-      <div class="paymethodrow ${S.payMethod==='card'?'sel':''}" onclick="App.setPayMethod('card')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='card'?'on':''}"></div>💳 ${t('card')}</div></div>
-      ${feat.corporateWallet? `
+      ${showCard? `<div class="paymethodrow ${S.payMethod==='card'?'sel':''}" onclick="App.setPayMethod('card')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='card'?'on':''}"></div>💳 ${t('card')}</div></div>`:''}
+      ${show('pos')? `<div class="paymethodrow ${S.payMethod==='pos'?'sel':''}" onclick="App.setPayMethod('pos')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='pos'?'on':''}"></div>🧾 ${t('pos')}</div></div>`:''}
+      ${show('cash')? `<div class="paymethodrow ${S.payMethod==='cash'?'sel':''}" onclick="App.setPayMethod('cash')"><div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='cash'?'on':''}"></div>💵 ${t('cash')}</div></div>`:''}
+      ${feat.corporateWallet && show('wallet')? `
       <div class="paymethodrow ${S.payMethod==='wallet'?'sel':''}" style="flex-direction:column;align-items:stretch;gap:8px" onclick="${S.wallet?"App.setPayMethod('wallet')":''}">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div style="display:flex;align-items:center;gap:8px"><div class="radiodot ${S.payMethod==='wallet'?'on':''}"></div>🏢 ${t('wallet')}</div>
@@ -1431,7 +1696,7 @@ function scrCheckout(){
             <button onclick="App.lookupWallet()" style="border:1px solid var(--ink-800);background:var(--white);border-radius:8px;padding:8px 12px;font-size:11.5px;font-weight:700">${S.lang==='ar'?'ربط':'Link'}</button>
           </div>` : `<div style="font-size:11px;color:var(--ink-400)">${S.lang==='ar'?'ستُغطّى':'Will cover'} ${money(walletCoverPreview)} ${unitCur()} ${S.lang==='ar'?'من إجمالي':'of'} ${money(t1.total)}</div>`}
       </div>`:''}
-    </div>
+    </div>`}
 
     <div class="totalsbox">
       <div class="totalline"><span>${t('subtotal')}</span><span>${money(t1.subtotal)}</span></div>
@@ -1441,15 +1706,17 @@ function scrCheckout(){
       <div class="totalline grand"><span>${t('total')}</span><span>${money(t1.total)} ${unitCur()}</span></div></div>
   </div>
   <div style="position:absolute;bottom:0;inset-inline:0;padding:14px 18px;background:var(--cream-050);border-top:1px solid var(--cream-200);display:flex;flex-direction:column;gap:8px;">
-    <button class="btn-primary" onclick="App.submitPayment()">${t('payNow')} · ${money(t1.total)} ${unitCur()}</button>
-    ${window.AlnadlDevTools && window.AlnadlDevTools.renderPaymentTestControl ? window.AlnadlDevTools.renderPaymentTestControl() : ''}
+    <button class="btn-primary" onclick="App.submitPayment()">${collects? `${t('payNow')} · ${money(t1.total)} ${unitCur()}` : t('confirmOrder')}</button>
+    ${collects && window.AlnadlDevTools && window.AlnadlDevTools.renderPaymentTestControl ? window.AlnadlDevTools.renderPaymentTestControl() : ''}
   </div>`;
 }
 
 function scrPaymentResult(){
   const o = S.currentOrder; const ok = o && o.status!=='Failed';
+  // طلب لم يُحصَّل لا يُقال عنه "تم الدفع بنجاح" -- الرسالة تتبع ما حدث فعلًا.
+  const noPay = S.paymentPolicy && S.paymentPolicy.requiresGuestPayment === false;
   return `<div class="resultwrap"><div class="resulticon ${ok?'ok':'fail'}">${ok?'✓':'✕'}</div>
-    <h2 style="margin:0">${ok?t('paySuccess'):t('payFail')}</h2>
+    <h2 style="margin:0">${ok? (noPay? t('orderConfirmed') : t('paySuccess')) : t('payFail')}</h2>
     ${ok? `<div class="orderno">${t('yourOrder')}${o.id}</div>`:`<p style="color:var(--ink-400);font-size:12.5px;max-width:260px">${S.lang==='ar'?'لم يتم إنشاء طلب مكرر — يمكنك إعادة المحاولة بأمان.':'No duplicate order was created — you can safely retry.'}</p>`}
     ${ok? `<button class="btn-primary" style="max-width:260px" onclick="App.goTrack()">${t('goTrack')}</button>` : `<button class="btn-primary" style="max-width:260px" onclick="App.retryPayment()">${t('retry')}</button>`}
   </div>`;
@@ -1457,8 +1724,11 @@ function scrPaymentResult(){
 
 function scrTracking(){
   const o=S.currentOrder; if(!o) return scrWelcome();
-  const order=['Paid','Accepted','Preparing','Ready','Out for Delivery','Delivered'];
-  const labels=['st_paid','st_accepted','st_preparing','st_ready','st_out','st_delivered'];
+  // P1-04: أول درجة في السلّم هي الحالة التي تخلّي الطلب فعلًا -- 'Paid'
+  // حين يُحصَّل، و'Confirmed' حين لا يُحصَّل. الرحلة بعدها واحدة.
+  const cleared = o.status==='Confirmed' || S.paymentPolicy?.requiresGuestPayment===false ? 'Confirmed' : 'Paid';
+  const order=[cleared,'Accepted','Preparing','Ready','Out for Delivery','Delivered'];
+  const labels=[cleared==='Confirmed'?'st_confirmed':'st_paid','st_accepted','st_preparing','st_ready','st_out','st_delivered'];
   // Partial states (Q04, multi-outlet orders) map onto the same 6-step
   // visual, but never claim more progress than genuinely happened —
   // "Partially Ready" sits at the Ready step, "Partially Delivered" at the
@@ -1639,6 +1909,7 @@ function navGroupsFor(role){
       ]},
       { id:'SA04', label:L('التجاري','Commercial'), items:[
         ['revenue', L('نماذج الإيراد','Revenue Models')],
+        ['paymentpolicy', L('سياسة التحصيل','Payment Policy')],
         ['settlements', t('revShareTitle')],
         ['refunds', L('الاسترجاعات','Refunds')],
         ['wallets', L('محافظ الشركات','Corporate Wallets')],
@@ -1682,6 +1953,7 @@ function navGroupsFor(role){
       ]},
       { id:'P-COM', label:L('التجاري','Commercial'), items:[
         ['revenue', L('نماذج الإيراد','Revenue Models')],
+        ['paymentpolicy', L('سياسة التحصيل','Payment Policy')],
         ['wallets', L('محافظ الشركات','Corporate Wallets')],
         ['billing', L('الباقة','Plan')],
       ]},
@@ -1701,12 +1973,12 @@ function renderStaffShell(){
   const navByRole = {
     Operator:[['kds', t('kds')]], SiteManager:[['live', S.lang==='ar'?'اللوحة الحية':'Live Dashboard'],['kds', t('kds')],['exceptions', S.lang==='ar'?'الاستثناءات':'Exceptions']],
     Runner:[['runnerq', t('runnerQ')]],
-    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')],['engagecontrol', S.lang==='ar'?'تحكّم Engage':'Engage Control'],['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
+    SuperAdmin:[['tenants', S.lang==='ar'?'الشركاء والباقات':'Tenants & Plans'],['portfolio', S.lang==='ar'?'محفظة المواقع':'Portfolio'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['paymentpolicy', S.lang==='ar'?'سياسة التحصيل':'Payment Policy'],['branding', S.lang==='ar'?'العلامة التجارية (White Label)':'White Label'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')],['engagecontrol', S.lang==='ar'?'تحكّم Engage':'Engage Control'],['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
     AlnadlFinance:[['revledger', S.lang==='ar'?'دفتر الإيراد':'Revenue Ledger'],['settlements', t('revShareTitle')],['refunds', S.lang==='ar'?'الاسترجاعات':'Refunds'],['audit', t('auditLog')]],
     PartnerViewer:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', t('partnerOverview')],['settlements', t('revShareTitle')],['billing', S.lang==='ar'?'الباقة':'Plan']],
     ProductAdmin:[['mechanics', S.lang==='ar'?'مختبر الآليات':'Mechanic Lab'],['engageoverview', S.lang==='ar'?'نظرة Engage':'Engage Overview']],
     SafetyReviewer:[['safety', S.lang==='ar'?'حوادث السلامة':'Safety Incidents'],['ledger', S.lang==='ar'?'سجل التجارب':'Experience Ledger']],
-    PartnerAdmin:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
+    PartnerAdmin:[['partnerengage', S.lang==='ar'?'Engage':'Engage'],['overview', S.lang==='ar'?'أداء الشريك':'Partner Performance'],['outlets', S.lang==='ar'?'المنافذ (Outlets)':'Outlets'],['revenue', S.lang==='ar'?'نماذج الإيراد':'Revenue Models'],['paymentpolicy', S.lang==='ar'?'سياسة التحصيل':'Payment Policy'],['zones', t('adminZones')],['catalog', t('adminCatalog')],['merchants', S.lang==='ar'?'الشركاء التجاريون':'Merchants'],['wallets', S.lang==='ar'?'محافظ الشركات':'Corporate Wallets'],['users', S.lang==='ar'?'المستخدمون':'Users'],['billing', S.lang==='ar'?'الباقة':'Plan']],
   };
   const nav = navByRole[role] || [];
   let inner = '';
@@ -1737,6 +2009,7 @@ function renderStaffShell(){
   else if(S.screen==='branding') inner = renderBranding();
   else if(S.screen==='refunds') inner = renderRefunds();
   else if(S.screen==='merchants') inner = renderMerchants();
+  else if(S.screen==='paymentpolicy') inner = renderPaymentPolicy();
   else if(S.screen==='wallets') inner = renderWallets();
   else inner = `<div class="empty-hint">—</div>`;
 
@@ -1765,6 +2038,10 @@ function renderStaffShell(){
     ? `<div class="admin-layout">
         <nav class="sidebar" aria-label="${S.lang==='ar'?'التنقل':'Navigation'}">
           <div class="sidebar-scope">${S.lang==='ar'?'النطاق الحالي':'Current scope'}<b>${S.session.user.username} · ${role}</b></div>
+          ${S.contextSwitchedFrom ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:8px 0;font-size:11px">
+            ${S.lang==='ar'?'أنت داخل سياق شريك':'You are inside a partner context'}
+            <button class="btn-small" style="margin-top:6px;width:100%" onclick="App.exitPartnerContext()">${S.lang==='ar'?'العودة لسياق المنصة':'Back to platform'}</button>
+          </div>`:''}
           ${groups.map(g=>`
             <div class="sidebar-group">
               <div class="sidebar-group-label">${g.label}</div>
@@ -1780,6 +2057,8 @@ function renderStaffShell(){
   ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}
   ${S.ui.refundFor? renderRefundModal():''}
   ${S.ui.statusChange? renderStatusChangeModal():''}
+  ${S.ui.activationHandoff? renderActivationHandoff():''}
+  ${S.ui.pointQr? renderPointQr():''}
   ${S.ui.proposeMechanic? renderProposeModal():''}
   ${S.ui.mechTransition? renderMechTransitionModal():''}
   ${S.ui.bulkPoints? renderBulkPointsModal():''}`;
@@ -2037,7 +2316,9 @@ function renderAdminZones(){
         const z=S.admin.zones.find(zz=>zz.id===p.zone_id);
         return `<div class="pointrow"><div class="qrmini">${Array.from({length:36}).map((_,i)=>{
             const h=((p.token||'0').charCodeAt(i%(p.token||'0').length)+i*7)%5; return `<div class="${h===0?'off':''}"></div>`; }).join('')}</div>
-          <div class="meta"><b>${p.label} — ${z?(S.lang==='ar'?z.name_ar:z.name_en):''}</b><span>${p.id} · token:${p.token}</span></div>
+          <div class="meta"><b>${p.label} — ${z?(S.lang==='ar'?z.name_ar:z.name_en):''}</b>
+            <span>${p.id}${p.active?'':' · '+(S.lang==='ar'?'موقوفة':'disabled')}</span></div>
+          <button class="btn-small brass" onclick="App.openPointQr('${esc(p.id)}')">${S.lang==='ar'?'رمز QR':'QR code'}</button>
           <button class="btn-small line" style="margin-inline-end:6px" onclick="App.viewQrAnalytics('${p.id}')">${S.lang==='ar'?'تحليلات':'Analytics'}</button>
           <button class="togglepill ${p.active?'active':'inactive'}" onclick="App.togglePoint('${p.id}',${!!p.active})">${p.active?t('active'):t('inactive')}</button></div>`;
       }).join('')}
@@ -2076,12 +2357,23 @@ function renderAdminCatalog(){
         <div class="darkfield"><label>${t('prodNameEn')}</label><input id="prodEn" placeholder="Iced Latte"></div>
         <div class="darkfield"><label>${t('prodPrice')}</label><input id="prodPrice" type="number" placeholder="20"></div>
         <div class="darkfield"><label>${t('prodCat')}</label><select id="prodCatSel">${S.admin.categories.map(c=>`<option value="${c.id}">${S.lang==='ar'?c.name_ar:c.name_en}</option>`).join('')}</select></div>
-      </div><button class="btn-small brass" onclick="App.addProduct()">+ ${t('addProd')}</button></div>
+      </div>
+      <div class="darkfield"><label>${S.lang==='ar'?'المنفذ':'Outlet'}</label>
+        <select id="prodOutletSel">
+          <option value="">${S.lang==='ar'?'— كل المنافذ (غير محدد) —':'— all outlets (unassigned) —'}</option>
+          ${(S.outlets||[]).map(o=>`<option value="${esc(o.id)}">${esc(S.lang==='ar'?o.name_ar:o.name_en)}</option>`).join('')}
+        </select>
+        <p class="ph" style="margin-top:4px">${S.lang==='ar'?'منتج بلا منفذ يظهر لكل منافذ العقار.':'A product with no outlet appears for every outlet in the property.'}</p></div>
+      <button class="btn-small brass" onclick="App.addProduct()">+ ${t('addProd')}</button></div>
     </div>
     <div class="panel"><h3>${t('currentCatalog')}</h3>
       ${S.admin.categories.map(c=>`<div class="section-sm">${S.lang==='ar'?c.name_ar:c.name_en}</div>
         ${S.admin.products.filter(p=>p.category_id===c.id).map(p=>`
-          <div class="prodlistrow"><div class="nm">${S.lang==='ar'?p.name_ar:p.name_en}</div>
+          <div class="prodlistrow"><div class="nm">${S.lang==='ar'?p.name_ar:p.name_en}
+            <span style="display:block;font-size:11px;color:var(--ink-400)">${(() => {
+              const o=(S.outlets||[]).find(x=>x.id===p.outlet_id);
+              return o ? esc(S.lang==='ar'?o.name_ar:o.name_en)
+                       : (S.lang==='ar'?'كل المنافذ':'All outlets'); })()}</span></div>
           <button class="togglepill ${p.status==='Active'?'active':'inactive'}" onclick="App.toggleProdStatus('${p.id}','${p.status}')">${p.status==='Active'?t('active'):t('inactive')}</button></div>`).join('')}`).join('')}
     </div></div>`;
 }
@@ -2160,6 +2452,26 @@ function engageEffectiveCard(st, isPartnerView){
    المبدأ: كشف قدرة خلفية مسموحة له اليوم، بلا أي توسيع صلاحية ودون
    تحويله إلى PartnerAdmin. كل عنصر هنا **يحتاج إجراءً** -- الشاشة ليست
    عرض بيانات إضافيًا، فاللوحة الحية تغطي ذلك أصلًا. */
+/* P1-08 — التنبيه كان يعرض رمز الحدث فقط: لا سبب ولا أولوية ولا إجراء،
+   فالرقم «تنبيهات 1» لا يقول للمشغّل ماذا يفعل. الترجمة هنا من رموز
+   الأحداث القائمة -- لا حقل جديد في قاعدة البيانات. */
+function notificationMeta(n, L){
+  const ev = String(n.event || n.type || '');
+  const MAP = {
+    sla_breach:        { type:L('تجاوز مهلة','SLA breach'), reason:L('تجاوز الطلب مهلة التجهيز','Order exceeded its prep window'), priority:L('عالٍ','High'), tone:'cancel', action:L('فتح الطلب','Open order') },
+    delivery_failed:   { type:L('تعذّر التسليم','Delivery failed'), reason:L('الراكض لم يتمكن من التسليم','The runner could not deliver'), priority:L('عالٍ','High'), tone:'cancel', action:L('فتح الطلب','Open order') },
+    payment_failed:    { type:L('فشل الدفع','Payment failed'), reason:L('لم تُحصَّل قيمة الطلب','The order was not captured'), priority:L('عالٍ','High'), tone:'cancel', action:L('فتح الطلب','Open order') },
+    order_created:     { type:L('طلب جديد','New order'), reason:L('طلب دخل الطابور','An order entered the queue'), priority:L('منخفض','Low'), tone:'ok', action:L('فتح الطلب','Open order') },
+    payment_success:   { type:L('دفع ناجح','Payment captured'), reason:L('حُصِّلت قيمة الطلب','The order was captured'), priority:L('منخفض','Low'), tone:'ok', action:L('فتح الطلب','Open order') },
+    order_delivered:   { type:L('تم التسليم','Delivered'), reason:L('اكتمل الطلب','The order completed'), priority:L('منخفض','Low'), tone:'ok', action:L('فتح الطلب','Open order') },
+    refund_issued:     { type:L('استرجاع','Refund'), reason:L('نُفِّذ استرجاع على الطلب','A refund was issued'), priority:L('متوسط','Medium'), tone:'pending', action:L('فتح الطلب','Open order') },
+  };
+  if (MAP[ev]) return MAP[ev];
+  // حدث غير معروف: يُعرض كما هو بدل إخفائه -- الصمت أسوأ من رمز خام.
+  return { type: ev || L('غير معروف','Unknown'), reason:L('حدث غير مصنَّف','Unclassified event'),
+           priority:L('متوسط','Medium'), tone:'pending', action:L('مراجعة','Review') };
+}
+
 function renderSiteExceptions(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const ex = S.siteExceptions;
@@ -2218,9 +2530,13 @@ function renderSiteExceptions(){
   <div class="panel">
     <h3>${L('تنبيهات الموقع','Site Notifications')}</h3>
     <p class="ph">${L('آخر ما أرسله النظام — للاطلاع، لا يحتاج إجراءً بذاته','Latest system notifications — informational, no action required by themselves')}</p>
-    ${notifs.length ? `<table class="datatable"><tr><th>${L('الحدث','Event')}</th><th>${L('الطلب','Order')}</th><th>${L('الوقت','When')}</th></tr>
-      ${notifs.slice(0,25).map(n=>`<tr><td>${esc(n.event||n.type||'')}</td><td>${esc(n.order_id||'—')}</td>
-        <td>${n.created_at?new Date(n.created_at).toLocaleString(S.lang==='ar'?'ar':'en'):'—'}</td></tr>`).join('')}</table>`
+    ${notifs.length ? `<table class="datatable"><tr><th>${L('النوع','Type')}</th><th>${L('السبب','Reason')}</th><th>${L('الطلب','Order')}</th><th>${L('الأولوية','Priority')}</th><th>${L('الوقت','When')}</th><th>${L('الإجراء','Action')}</th></tr>
+      ${notifs.slice(0,25).map(n=>{
+        const meta = notificationMeta(n, L);
+        return `<tr><td>${esc(meta.type)}</td><td>${esc(meta.reason)}</td><td>${esc(n.order_id||'—')}</td>
+        <td><span class="badge ${meta.tone}">${esc(meta.priority)}</span></td>
+        <td>${n.created_at?new Date(n.created_at).toLocaleString(S.lang==='ar'?'ar':'en'):'—'}</td>
+        <td>${n.order_id?`<button class="btn-small" onclick="App.openOrder('${esc(n.order_id)}')">${meta.action}</button>`:`<span class="ph">${esc(meta.action)}</span>`}</td></tr>`;}).join('')}</table>`
       : `<div class="statepanel on-dark" style="padding:16px 8px"><div class="glyph">—</div><p>${L('لا تنبيهات','No notifications')}</p></div>`}
   </div>`;
 }
@@ -2285,6 +2601,81 @@ function renderDeliveryGrouping(partnerId, L){
       </span></div>`).join('')}
     <p class="ph" style="margin-top:6px">${L('المُجمَّع: الراكض يستلم كل شيء بعد جهوزية الجميع. المنفصل: كل منفذ يُسلَّم فور جهوزيته.','Grouped: the runner collects everything once all outlets are ready. Separate: each outlet is delivered as soon as it is ready.')}</p>
   </div>`;
+}
+
+/* P0-02 — تسليم رابط التفعيل. يُعرض **مرة واحدة**: الرمز مُخزَّن مُجزَّأً
+   على الخادم ولا يمكن استرجاعه بعد إغلاق النافذة -- وهذا مقصود، والبديل
+   الوحيد هو إعادة إصدار رمز جديد. */
+/* P0-01 — نافذة رمز النقطة.
+   الشبكة الزخرفية في بطاقة النقطة تبقى كمؤشر بصري فقط؛ **الرمز الحقيقي
+   القابل للمسح يُعرض هنا** ويأتي من الخادم. الرابط المعروض هو نفسه الذي
+   يُرمَّز داخل الصورة ونفسه الذي يفتحه زر "فتح كضيف". */
+function renderPointQr(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.pointQr; if(!st) return '';
+  if(st.loading) return `<div class="ordmodal"><div class="ordsheet"><div class="skeleton skeleton-row"></div></div></div>`;
+
+  const close = `<button class="ghostbtn" onclick="App.dismissPointQr()">${t('close')}</button>`;
+  if(st.error) return `<div class="ordmodal" onclick="if(event.target===this) App.dismissPointQr()"><div class="ordsheet">
+    <h3>${L('رمز QR','QR code')}</h3><div class="errbox">${esc(st.error)}</div>
+    <div class="actrow">${close}</div></div></div>`;
+
+  const zoneName = st.zone ? esc(S.lang==='ar'?st.zone.name_ar:st.zone.name_en) : '';
+  const absUrl = st.guestUrl && st.guestUrl.startsWith('http') ? st.guestUrl : location.origin + (st.guestUrl||'');
+
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissPointQr()"><div class="ordsheet">
+    <h3>${esc(st.label||st.pointId)} ${zoneName?`<span class="ph">· ${zoneName}</span>`:''}</h3>
+
+    ${st.active ? '' : `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('هذه النقطة موقوفة. الرمز لن يفتح رحلة الضيف حتى تُفعَّل.','This point is disabled. The code will not open the guest journey until it is enabled.')}</div>`}
+
+    ${st.qrAvailable === false ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('مُولِّد الرموز غير مثبَّت في هذه البيئة. الرابط أدناه صحيح ويعمل، لكن الصورة تحتاج تثبيت الاعتماد في بيئة النشر.','The QR encoder is not installed in this environment. The link below is correct and works, but the image requires the dependency to be installed in the deployment environment.')}</div>`
+    : `<div style="text-align:center;background:#fff;border-radius:12px;padding:14px;margin:12px 0">
+        <img src="/api/admin/points/${esc(st.pointId)}/qr?format=svg&size=512" alt="QR"
+             style="width:260px;height:260px;display:block;margin:0 auto"
+             onerror="this.outerHTML='<p style=&quot;color:#a33&quot;>${L('تعذّر توليد الصورة','Could not render the image')}</p>'">
+      </div>`}
+
+    ${st.absoluteUrl === false ? `<p class="ph">${L('تنبيه: PUBLIC_BASE_URL غير مضبوط، فالرابط نسبي. اضبطه قبل طباعة رموز للتوزيع.','Note: PUBLIC_BASE_URL is not set, so the link is relative. Set it before printing codes for distribution.')}</p>`:''}
+
+    <div class="formfield"><label>${L('رابط الضيف','Guest link')}</label>
+      <input id="qrUrl" readonly value="${esc(absUrl)}" onclick="this.select()"></div>
+
+    <div class="actrow" style="flex-wrap:wrap">
+      <button class="btn-small brass" onclick="App.openAsGuest()">${L('فتح كضيف','Open as guest')}</button>
+      <button class="btn-small" onclick="App.copyGuestUrl()">${L('نسخ الرابط','Copy link')}</button>
+      <button class="btn-small" onclick="App.downloadQr()">${L('تنزيل','Download')}</button>
+      <button class="btn-small" onclick="App.printQr()">${L('طباعة','Print')}</button>
+      <button class="btn-small" onclick="App.setStaffScreen('qranalytics')">${L('تحليلات','Analytics')}</button>
+      <button class="btn-small ${st.active?'':'brass'}" ${st.active?'style="color:var(--red-500);border-color:var(--red-500)"':''}
+        onclick="App.togglePointActive('${esc(st.pointId)}',${!!st.active})">
+        ${st.active?L('إيقاف','Disable'):L('تفعيل','Enable')}</button>
+      ${close}
+    </div>
+  </div></div>`;
+}
+
+function renderActivationHandoff(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.activationHandoff; if(!st) return '';
+  if(!st.token) return '';
+  const exp = st.expiresAt ? new Date(st.expiresAt).toLocaleString(S.lang==='ar'?'ar':'en') : '—';
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissActivationHandoff()"><div class="ordsheet">
+    <h3>${st.reissued ? L('رابط تفعيل جديد','New activation link') : L('تم إنشاء الحساب','Account created')} — ${esc(st.username)}</h3>
+    <div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('هذا الرابط يظهر مرة واحدة فقط ولا يمكن استرجاعه. انسخه وسلّمه للمستخدم الآن.','This link is shown once and cannot be retrieved later. Copy it and hand it over now.')}
+    </div>
+    ${st.reissued ? `<p class="ph">${L('أي رابط سابق أُبطل، وكلمة المرور الحالية لم تعد صالحة.','Any earlier link is now void, and the current password no longer works.')}</p>`:''}
+    <div class="formfield"><label>${L('رابط التفعيل','Activation link')}</label>
+      <input id="actLink" readonly value="${esc(st.url)}" onclick="this.select()"></div>
+    <p class="ph">${L('صالح حتى','Valid until')}: ${exp}</p>
+    <p class="ph">${L('المستخدم يفتح الرابط ويضع كلمة مروره بنفسه — لا أحد غيره يعرفها.','The user opens the link and sets their own password — nobody else knows it.')}</p>
+    <div class="actrow">
+      <button class="btn-small brass" onclick="App.copyActivationLink()">${L('نسخ الرابط','Copy link')}</button>
+      <button class="ghostbtn" onclick="App.dismissActivationHandoff()">${t('close')}</button>
+    </div>
+  </div></div>`;
 }
 
 function renderPartnerStatusCard(partnerId){
@@ -2460,6 +2851,7 @@ function renderPartnerProfile(){
     <!-- Finance -->
     <div class="panel"><h3>${L('ملخّص مالي','Finance Summary')}</h3>
       ${line(L('تسويات','Settlements'), settlements.length)}
+      ${line(L('الشريك','Partner'), `${esc(S.lang==='ar'?partner.name_ar:partner.name_en)||'—'} <span class="ph">(${esc(pf.partnerId)})</span>`)}
       ${line(L('حصة الشريك (إجمالي)','Partner share (total)'), money2s(settlements.reduce((a,x)=>a+(x.partner_share||0),0)))}
       ${settlements.some(x=>x.status==='Disputed') ? `<div class="attentionrow high" style="margin-top:10px"><span class="dot"></span><span class="txt">${L('توجد تسوية متنازع عليها','A disputed settlement exists')}</span><span class="sev">${L('عالٍ','High')}</span></div>`:''}
       <div class="actrow"><button class="btn-small" onclick="App.setStaffScreen('settlements')">${L('التسويات','Settlements')}</button>
@@ -3141,7 +3533,76 @@ function renderRefunds(){
   </div>`:''}`;
 }
 
+function renderPaymentPolicy(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  /* P1-04 — الشاشة تُظهر ثلاثة مستويات في مكان واحد لأن الوراثة نفسها هي
+     المعلومة: مشغّل يرى "أونلاين" على منفذ دون معرفة أي مستوى فرضها سيغيّر
+     المستوى الخطأ ولا يتحرّك شيء. ولذلك يُعرض المصدر صراحةً بجانب النتيجة. */
+  const d = S.paymentPolicies;
+  if(!d) return `<div class="panel"><p class="ph">${L('جارٍ التحميل…','Loading…')}</p></div>`;
+  const POLICY_LABEL = {
+    ONLINE: L('تحصيل أونلاين','Collect online'),
+    POS_ON_DELIVERY: L('تحصيل عند التسليم (نقاط بيع/نقدًا)','Collect on delivery (POS/cash)'),
+    CORPORATE_WALLET: L('محفظة الشركة','Corporate wallet'),
+    NO_GUEST_PAYMENT: L('لا تحصيل من الضيف','No guest payment'),
+    MIXED: L('مختلط (وسائل مُحدَّدة)','Mixed (specific methods)'),
+  };
+  const ovFor = (type,id)=> (d.overrides||[]).find(o=>o.scope_type===type && o.scope_id===id) || null;
+  // النتيجة الفعّالة كما حلّها الخادم -- لا تُعاد حوسبتها هنا.
+  const eff = (type,id)=> (d.effectiveByScope||{})[`${type}:${id}`] || { policy:'ONLINE', source:'default' };
+  const methodsAll = (d.methodsByPolicy && d.methodsByPolicy.MIXED) || ['card','applepay','mada','pos','cash','wallet'];
+
+  const row = (type, id, name)=>{
+    const ov = ovFor(type,id);
+    const current = ov && ov.policy ? ov.policy : '__inherit__';
+    let mixed = [];
+    try{ mixed = ov && ov.allowed_methods_json ? JSON.parse(ov.allowed_methods_json) : []; }catch(e){ mixed=[]; }
+    return `<div class="prodlistrow" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div class="nm">${name}<span style="display:block">${type} · ${id}</span></div>
+        ${ov && ov.policy
+          ? `<span class="badge ready">${POLICY_LABEL[ov.policy]||ov.policy}</span>`
+          : `<span class="badge pending">${L('موروثة','Inherited')}: ${POLICY_LABEL[(eff(type,id).policy)]||eff(type,id).policy} ${L('من','from')} ${eff(type,id).source}</span>`}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <select id="pp_${type}_${id}" onchange="render()">
+          ${type!=='partner'? `<option value="__inherit__" ${current==='__inherit__'?'selected':''}>${L('وراثة من الأعلى','Inherit from above')}</option>`:''}
+          ${(d.policies||[]).map(pl=>`<option value="${pl}" ${current===pl?'selected':''}>${POLICY_LABEL[pl]||pl}</option>`).join('')}
+        </select>
+        <button class="btn-small brass" onclick="App.savePaymentPolicy('${type}','${id}')">${L('حفظ','Save')}</button>
+        ${ov? `<button class="btn-small line" onclick="App.clearPaymentPolicy('${type}','${id}')">${L('إزالة التجاوز','Clear override')}</button>`:''}
+      </div>
+      ${current==='MIXED'? `<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--ink-300)">
+        ${methodsAll.map(m=>`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" data-mixed="${type}_${id}" value="${m}" ${mixed.includes(m)?'checked':''}> ${m}</label>`).join('')}
+      </div>`:''}
+    </div>`;
+  };
+
+  const props = d.properties||[];
+  const outlets = d.outlets||[];
+
+  return `
+  <div class="panel"><p class="ph" style="margin:0">${L(
+    'الترتيب: المنفذ ثم العقار ثم الشريك، والافتراضي تحصيل أونلاين. المستوى الأدق يحسم. الإنفاذ على الخادم: إخفاء وسيلة من الشاشة لا يمنع طلبًا مصنوعًا يدويًا. «لا تحصيل من الضيف» يعني أن الطلب يحمل قيمته الكاملة في التقارير والتسويات لكنه لا يُحصَّل من الضيف — وليس مجانيًا.',
+    'Resolution order: Outlet, then Property, then Partner, defaulting to online collection. The most specific level wins. Enforcement is server-side: hiding a method from the screen does not stop a hand-crafted request. "No guest payment" means the order carries its full value into reports and settlement but is never collected from the guest — it is not free.')}</p></div>
+  <div class="panel"><h3>${L('السياسة الفعّالة على مستوى الشريك','Effective policy at partner level')}</h3>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+      <span class="badge ready">${POLICY_LABEL[d.effective.policy]||d.effective.policy}</span>
+      <span style="font-size:12px;color:var(--ink-300)">${L('المصدر','Source')}: ${d.effective.source}</span>
+      <span style="font-size:12px;color:var(--ink-300)">${L('الوسائل','Methods')}: ${(d.effective.allowedMethods||[]).join(', ') || L('لا شيء','none')}</span>
+    </div>
+  </div>
+  <div class="panel"><h3>${L('مستوى الشريك','Partner level')}</h3>${row('partner', d.partnerId, d.partnerId)}</div>
+  <div class="panel"><h3>${L('العقارات','Properties')}</h3>
+    ${props.length? props.map(pr=>row('property', pr.id, S.lang==='ar'?pr.name_ar:pr.name_en)).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${L('لا عقارات','No properties')}</div>`}
+  </div>
+  <div class="panel"><h3>${L('المنافذ','Outlets')}</h3>
+    ${outlets.length? outlets.map(o=>row('outlet', o.id, S.lang==='ar'?o.name_ar:o.name_en)).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${L('لا منافذ','No outlets')}</div>`}
+  </div>`;
+}
+
 function renderMerchants(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
   const rows = S.merchants || [];
   const featureOn = S.subscription ? S.subscription.features?.marketplace : true; // SuperAdmin has no single subscription context; PartnerAdmin's is loaded
   return `<div class="grid2"><div>
@@ -3153,8 +3614,22 @@ function renderMerchants(){
       <button class="btn-small brass" onclick="App.addMerchant()">+ ${S.lang==='ar'?'إضافة':'Add'}</button>
     </div></div>
     <div class="panel"><h3>${S.lang==='ar'?'الشركاء الحاليون':'Current merchants'}</h3>
-      ${rows.length? rows.map(m=>`<div class="prodlistrow"><div class="nm">${S.lang==='ar'?m.name_ar:m.name_en}<span style="display:block">${m.kind==='alnadl'?(S.lang==='ar'?'مُدار من النادل':'Alnadl-operated'):(S.lang==='ar'?`شريك · عمولة ${Math.round(m.commission_rate*100)}%`:`Partner · ${Math.round(m.commission_rate*100)}% commission`)}</span></div>
-        <span class="badge ${m.status==='Active'?'ready':'cancel'}">${m.status}</span></div>`).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا يوجد شركاء بعد':'No merchants yet'}</div>`}
+      ${rows.length? rows.map(m=>{
+        const st = (S.merchantStatuses||{})[m.id];
+        const badgeCls = m.status==='Active'?'ready':(m.status==='Inactive'?'pending':'cancel');
+        const label = { Active:L('نشط','Active'), Inactive:L('موقوف مؤقتًا','Inactive'), Closed:L('مغلق','Closed') }[m.status] || m.status;
+        return `<div class="prodlistrow" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div class="nm">${S.lang==='ar'?m.name_ar:m.name_en}<span style="display:block">${m.kind==='alnadl'?L('مُدار من النادل','Alnadl-operated'):(S.lang==='ar'?`شريك · عمولة ${Math.round(m.commission_rate*100)}%`:`Partner · ${Math.round(m.commission_rate*100)}% commission`)}</span></div>
+          <span class="badge ${badgeCls}">${label}</span>
+        </div>
+        ${st? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px">
+          ${st.openOrders>0? `<span style="font-size:11px;color:var(--ink-300)">${L('طلبات مفتوحة','Open orders')}: ${st.openOrders}</span>`:''}
+          ${st.allowedTransitions.map(to=>`<button class="btn-small line" onclick="App.setMerchantStatus('${m.id}','${to}')">→ ${({Active:L('تفعيل','Activate'),Inactive:L('إيقاف مؤقت','Set inactive'),Closed:L('إغلاق','Close')})[to]}</button>`).join('')}
+          ${st.blockedTransitions.map(b=>`<span style="font-size:11px;color:var(--brass-400,#C08A3E)" title="${b.remedy||''}">${L('الإغلاق محجوب','Close blocked')} — ${b.remedy||''}</span>`).join('')}
+          ${st.reopenRequiresSuperAdmin && S.session.user.role!=='SuperAdmin'? `<span style="font-size:11px;color:var(--ink-300)">${L('إعادة الفتح تتطلب SuperAdmin','Reopening requires SuperAdmin')}</span>`:''}
+        </div>`:''}
+        </div>`;}).join('') : `<div class="empty-hint" style="color:var(--ink-300)">${S.lang==='ar'?'لا يوجد شركاء بعد':'No merchants yet'}</div>`}
     </div></div>`;
 }
 
@@ -3197,11 +3672,24 @@ function renderUsers(){
       <div class="darkfield"><label>${S.lang==='ar'?'اسم المستخدم':'Username'}</label><input id="newUserName" placeholder="jane_operator"></div>
       <div class="darkfield"><label>${S.lang==='ar'?'الدور':'Role'}</label><select id="newUserRole">${roleOpts.map(r=>`<option value="${r}">${r}</option>`).join('')}</select></div>
       <button class="btn-small brass" onclick="App.createUser()">+ ${S.lang==='ar'?'إنشاء':'Create'}</button>
-      <p class="ph" style="margin-top:8px">${t('resetHint')}</p>
+      <p class="ph" style="margin-top:8px">${S.lang==='ar'
+        ? 'يُنشأ الحساب بلا كلمة مرور. سيظهر رابط تفعيل لمرة واحدة تُسلّمه للمستخدم ليضع كلمة مروره بنفسه.'
+        : 'The account is created with no password. A one-time activation link appears for you to hand over; the user sets their own password.'}</p>
     </div></div>
     <div class="panel"><h3>${S.lang==='ar'?'المستخدمون الحاليون':'Current users'}</h3>
-      ${rows.map(u=>`<div class="prodlistrow"><div class="nm">${u.username}<span style="display:block">${u.role}${u.last_login? ' · '+new Date(u.last_login).toLocaleDateString('en-US') : (S.lang==='ar'?' · لم يسجل دخول بعد':' · never logged in')}</span></div>
-        <button class="togglepill ${u.active?'active':'inactive'}" onclick="App.toggleUser('${u.id}',${!!u.active})">${u.active?t('active'):t('inactive')}</button></div>`).join('')}
+      ${rows.map(u=>{
+        const pending = u.status==='pending_activation';
+        const badge = pending ? (S.lang==='ar'?'بانتظار التفعيل':'Pending activation')
+                    : (u.status==='suspended'||!u.active) ? (S.lang==='ar'?'موقوف':'Suspended')
+                    : (S.lang==='ar'?'فعّال':'Active');
+        const tone = pending ? 'pending' : (u.status==='suspended'||!u.active) ? 'cancel' : 'ok';
+        return `<div class="prodlistrow"><div class="nm">${esc(u.username)}
+          <span style="display:block">${esc(u.role)}${u.partner_scope? ' · '+esc(u.partner_scope):''}${u.last_login? ' · '+new Date(u.last_login).toLocaleDateString('en-US') : (S.lang==='ar'?' · لم يسجل دخول بعد':' · never logged in')}</span></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span class="badge ${tone}">${badge}</span>
+            <button class="btn-small" onclick="App.reissueActivation('${esc(u.id)}','${esc(u.username)}')">${S.lang==='ar'?'رابط تفعيل':'Activation link'}</button>
+            <button class="togglepill ${u.active?'active':'inactive'}" onclick="App.toggleUser('${esc(u.id)}',${!!u.active})">${u.active?t('active'):t('inactive')}</button>
+          </div></div>`;}).join('')}
     </div></div>`;
 }
 
@@ -3218,6 +3706,10 @@ function renderUsers(){
 // in" — the mode IS whether dev-tools.js physically arrived.
 App.boot = async function(){
   document.documentElement.dir='rtl';
+  // P2: استعادة تفضيل السمة قبل أول تصيير، فلا يومض الوضع الافتراضي.
+  try{ App.applyTheme(localStorage.getItem('alnadl_theme') || 'system'); }
+  catch(e){ App.applyTheme('system'); }
+
   const params = new URLSearchParams(location.search);
   const tkn = params.get('t');
   if(tkn){ await App.loadQrContext(tkn); } else { render(); }
