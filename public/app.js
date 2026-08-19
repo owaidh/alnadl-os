@@ -127,7 +127,7 @@ const S = {
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, activationHandoff:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, activationHandoff:null, pointQr:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
   // token the server handed us plus eligibility — never any policy,
   // personality reasoning, or AI internals. `moment.payload` is the
@@ -449,6 +449,58 @@ const App = {
      ترميه**، فيُنشأ حساب بلا كلمة مرور ولا وسيلة لتفعيله ⇒ Invalid
      credentials حتمية. الخادم سليم منذ R1؛ الناقص كان توصيل الواجهة.
      الرمز يُعاد مرة واحدة فقط ولا يمكن استرجاعه، فيُعرض فورًا للنسخ. */
+  /* P0-01 — إجراءات نقطة QR. الرابط يأتي من الخادم (buildGuestUrl) ولا
+     يُبنى هنا: بناؤه في الواجهة يعني مسارًا ثانيًا ينحرف يومًا، فيفتح الزر
+     شيئًا ويقود الرمز المطبوع لشيء آخر. */
+  async openPointQr(pointId){
+    S.ui.pointQr = { pointId, loading:true }; render();
+    try{
+      const info = await api('GET', `/api/admin/points/${pointId}/qr`, null, true);
+      S.ui.pointQr = { ...info, pointId, loading:false };
+    }catch(e){ S.ui.pointQr = { pointId, loading:false, error:e.message }; }
+    render();
+  },
+  dismissPointQr(){ S.ui.pointQr=null; render(); },
+  openAsGuest(){
+    const st=S.ui.pointQr; if(!st||!st.guestUrl) return;
+    window.open(st.guestUrl, '_blank', 'noopener');
+  },
+  copyGuestUrl(){
+    const st=S.ui.pointQr; if(!st||!st.guestUrl) return;
+    const abs = st.guestUrl.startsWith('http') ? st.guestUrl : location.origin + st.guestUrl;
+    const done=()=>showToast(S.lang==='ar'?'نُسخ الرابط':'Link copied');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(abs).then(done).catch(()=>{
+        const i=document.getElementById('qrUrl'); if(i){ i.select(); document.execCommand('copy'); done(); }});
+    } else { const i=document.getElementById('qrUrl'); if(i){ i.select(); document.execCommand('copy'); done(); } }
+  },
+  downloadQr(){
+    const st=S.ui.pointQr; if(!st) return;
+    window.location.href = `/api/admin/points/${st.pointId}/qr?format=png&size=1024&download=1`;
+  },
+  printQr(){
+    const st=S.ui.pointQr; if(!st) return;
+    const w = window.open('', '_blank');
+    if(!w) return;
+    const label = (st.label||'').replace(/[<>&]/g,'');
+    const zone = ((S.lang==='ar'?st.zone&&st.zone.name_ar:st.zone&&st.zone.name_en)||'').replace(/[<>&]/g,'');
+    // الرمز يُحمَّل من نفس النقطة المركزية -- لا نسخة ثانية للطباعة.
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR ${label}</title>
+      <style>body{font-family:system-ui,sans-serif;text-align:center;padding:40px}
+      img{width:320px;height:320px}h2{margin:18px 0 4px}p{color:#666;margin:0}
+      @media print{@page{margin:12mm}}</style></head><body>
+      <img src="/api/admin/points/${st.pointId}/qr?format=png&size=1024" alt="QR">
+      <h2>${label}</h2><p>${zone}</p>
+      <script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script>
+      </body></html>`);
+    w.document.close();
+  },
+  async togglePointActive(pointId, active){
+    try{ await api('PATCH',`/api/admin/points/${pointId}`,{active:!active},true);
+         showToast(t('toast_saved')); await App.loadAdminAll();
+         if(S.ui.pointQr && S.ui.pointQr.pointId===pointId) await App.openPointQr(pointId);
+    }catch(e){ showErr(e.message); }
+  },
   async createUser(){
     const el=document.getElementById('newUserName'), roleEl=document.getElementById('newUserRole');
     const username=el.value.trim(), role=roleEl.value;
@@ -1818,6 +1870,7 @@ function renderStaffShell(){
   ${S.ui.refundFor? renderRefundModal():''}
   ${S.ui.statusChange? renderStatusChangeModal():''}
   ${S.ui.activationHandoff? renderActivationHandoff():''}
+  ${S.ui.pointQr? renderPointQr():''}
   ${S.ui.proposeMechanic? renderProposeModal():''}
   ${S.ui.mechTransition? renderMechTransitionModal():''}
   ${S.ui.bulkPoints? renderBulkPointsModal():''}`;
@@ -2075,7 +2128,9 @@ function renderAdminZones(){
         const z=S.admin.zones.find(zz=>zz.id===p.zone_id);
         return `<div class="pointrow"><div class="qrmini">${Array.from({length:36}).map((_,i)=>{
             const h=((p.token||'0').charCodeAt(i%(p.token||'0').length)+i*7)%5; return `<div class="${h===0?'off':''}"></div>`; }).join('')}</div>
-          <div class="meta"><b>${p.label} — ${z?(S.lang==='ar'?z.name_ar:z.name_en):''}</b><span>${p.id} · token:${p.token}</span></div>
+          <div class="meta"><b>${p.label} — ${z?(S.lang==='ar'?z.name_ar:z.name_en):''}</b>
+            <span>${p.id}${p.active?'':' · '+(S.lang==='ar'?'موقوفة':'disabled')}</span></div>
+          <button class="btn-small brass" onclick="App.openPointQr('${esc(p.id)}')">${S.lang==='ar'?'رمز QR':'QR code'}</button>
           <button class="btn-small line" style="margin-inline-end:6px" onclick="App.viewQrAnalytics('${p.id}')">${S.lang==='ar'?'تحليلات':'Analytics'}</button>
           <button class="togglepill ${p.active?'active':'inactive'}" onclick="App.togglePoint('${p.id}',${!!p.active})">${p.active?t('active'):t('inactive')}</button></div>`;
       }).join('')}
@@ -2328,6 +2383,56 @@ function renderDeliveryGrouping(partnerId, L){
 /* P0-02 — تسليم رابط التفعيل. يُعرض **مرة واحدة**: الرمز مُخزَّن مُجزَّأً
    على الخادم ولا يمكن استرجاعه بعد إغلاق النافذة -- وهذا مقصود، والبديل
    الوحيد هو إعادة إصدار رمز جديد. */
+/* P0-01 — نافذة رمز النقطة.
+   الشبكة الزخرفية في بطاقة النقطة تبقى كمؤشر بصري فقط؛ **الرمز الحقيقي
+   القابل للمسح يُعرض هنا** ويأتي من الخادم. الرابط المعروض هو نفسه الذي
+   يُرمَّز داخل الصورة ونفسه الذي يفتحه زر "فتح كضيف". */
+function renderPointQr(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.pointQr; if(!st) return '';
+  if(st.loading) return `<div class="ordmodal"><div class="ordsheet"><div class="skeleton skeleton-row"></div></div></div>`;
+
+  const close = `<button class="ghostbtn" onclick="App.dismissPointQr()">${t('close')}</button>`;
+  if(st.error) return `<div class="ordmodal" onclick="if(event.target===this) App.dismissPointQr()"><div class="ordsheet">
+    <h3>${L('رمز QR','QR code')}</h3><div class="errbox">${esc(st.error)}</div>
+    <div class="actrow">${close}</div></div></div>`;
+
+  const zoneName = st.zone ? esc(S.lang==='ar'?st.zone.name_ar:st.zone.name_en) : '';
+  const absUrl = st.guestUrl && st.guestUrl.startsWith('http') ? st.guestUrl : location.origin + (st.guestUrl||'');
+
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissPointQr()"><div class="ordsheet">
+    <h3>${esc(st.label||st.pointId)} ${zoneName?`<span class="ph">· ${zoneName}</span>`:''}</h3>
+
+    ${st.active ? '' : `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('هذه النقطة موقوفة. الرمز لن يفتح رحلة الضيف حتى تُفعَّل.','This point is disabled. The code will not open the guest journey until it is enabled.')}</div>`}
+
+    ${st.qrAvailable === false ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('مُولِّد الرموز غير مثبَّت في هذه البيئة. الرابط أدناه صحيح ويعمل، لكن الصورة تحتاج تثبيت الاعتماد في بيئة النشر.','The QR encoder is not installed in this environment. The link below is correct and works, but the image requires the dependency to be installed in the deployment environment.')}</div>`
+    : `<div style="text-align:center;background:#fff;border-radius:12px;padding:14px;margin:12px 0">
+        <img src="/api/admin/points/${esc(st.pointId)}/qr?format=svg&size=512" alt="QR"
+             style="width:260px;height:260px;display:block;margin:0 auto"
+             onerror="this.outerHTML='<p style=&quot;color:#a33&quot;>${L('تعذّر توليد الصورة','Could not render the image')}</p>'">
+      </div>`}
+
+    ${st.absoluteUrl === false ? `<p class="ph">${L('تنبيه: PUBLIC_BASE_URL غير مضبوط، فالرابط نسبي. اضبطه قبل طباعة رموز للتوزيع.','Note: PUBLIC_BASE_URL is not set, so the link is relative. Set it before printing codes for distribution.')}</p>`:''}
+
+    <div class="formfield"><label>${L('رابط الضيف','Guest link')}</label>
+      <input id="qrUrl" readonly value="${esc(absUrl)}" onclick="this.select()"></div>
+
+    <div class="actrow" style="flex-wrap:wrap">
+      <button class="btn-small brass" onclick="App.openAsGuest()">${L('فتح كضيف','Open as guest')}</button>
+      <button class="btn-small" onclick="App.copyGuestUrl()">${L('نسخ الرابط','Copy link')}</button>
+      <button class="btn-small" onclick="App.downloadQr()">${L('تنزيل','Download')}</button>
+      <button class="btn-small" onclick="App.printQr()">${L('طباعة','Print')}</button>
+      <button class="btn-small" onclick="App.setStaffScreen('qranalytics')">${L('تحليلات','Analytics')}</button>
+      <button class="btn-small ${st.active?'':'brass'}" ${st.active?'style="color:var(--red-500);border-color:var(--red-500)"':''}
+        onclick="App.togglePointActive('${esc(st.pointId)}',${!!st.active})">
+        ${st.active?L('إيقاف','Disable'):L('تفعيل','Enable')}</button>
+      ${close}
+    </div>
+  </div></div>`;
+}
+
 function renderActivationHandoff(){
   const L=(ar,en)=>S.lang==='ar'?ar:en;
   const st = S.ui.activationHandoff; if(!st) return '';

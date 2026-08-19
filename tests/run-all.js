@@ -39,6 +39,7 @@ const suites = [
   './trusted-proxy.js',
   './production-deployment.js',
   './browser-activation-journey.js',
+  './qr-flow.js',
 ];
 
 (async () => {

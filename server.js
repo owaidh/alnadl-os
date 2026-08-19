@@ -22,6 +22,7 @@ const { assertCanManageUser, assertNotLastSuperAdmin, assignableRoles, issueActi
 const { resolveEngageEnabled, getGlobalKillSwitchState, getAIGenerationGlobalKillSwitchState } = require('./lib/engage-flags.js');
 const partnerStatus = require('./lib/partner-status.js');
 const { resolveBranding, hasWhiteLabelEntitlement, validateOverridePayload, getOverride } = require('./lib/branding.js');
+const qrLib = require('./lib/qr.js');
 const { getWallet, quoteCoverage, commitSpend } = require('./lib/wallet.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
@@ -1761,6 +1762,64 @@ on('POST', '/api/admin/points', ['SuperAdmin', 'PartnerAdmin'], async (req, res,
    نفس التدقيق) -- لا منطق موازٍ يمكن أن ينحرف عنه لاحقًا. الحد 50 من
    التوثيق نفسه، ويُفرض على الخادم لا على الواجهة. */
 const BULK_POINTS_MAX = 50;
+
+/* --------- GUEST QR (P0-01) -----------------------------------------------
+   يُولَّد من الرابط حتميًا ولا يُخزَّن: صورة مخزَّنة نسخة ثانية قد تتقادم
+   بصمت عن الرمز الحقيقي في qr_tokens. ونفس buildGuestUrl تُستخدم لزر
+   "فتح كضيف"، فلا مساران ينحرفان. */
+function pointQrContext(pointId) {
+  return db.prepare(`
+    SELECT pt.id, pt.label, pt.active, q.token, z.id AS zone_id, z.name_ar AS zone_ar, z.name_en AS zone_en,
+           z.status AS zone_status, pr.id AS property_id, pr.partner_id
+    FROM points pt
+    JOIN zones z ON z.id = pt.zone_id
+    JOIN properties pr ON pr.id = z.property_id
+    LEFT JOIN qr_tokens q ON q.point_id = pt.id AND q.active = 1
+    WHERE pt.id = ?`).get(pointId);
+}
+
+on('GET', '/api/admin/points/:id/qr', ['SuperAdmin', 'PartnerAdmin', 'SiteManager'], async (req, res, p, query, session) => {
+  const ctx = pointQrContext(p.id);
+  if (!ctx) return sendJSON(res, 404, { error: 'Point not found' });
+  assertPartnerScope(session, ctx.partner_id);
+  if (!ctx.token) return sendJSON(res, 409, { error: 'This point has no active QR token' });
+
+  const format = (query.format || 'json').toLowerCase();
+  const guestUrl = qrLib.buildGuestUrl(ctx.token, { absolute: true });
+
+  if (format === 'json') {
+    return sendJSON(res, 200, {
+      pointId: ctx.id, label: ctx.label, active: !!ctx.active,
+      zone: { id: ctx.zone_id, name_ar: ctx.zone_ar, name_en: ctx.zone_en, status: ctx.zone_status },
+      propertyId: ctx.property_id, partnerId: ctx.partner_id,
+      guestUrl,
+      qrAvailable: qrLib.isAvailable(),
+      // الأصل غير مضبوط يعني رابطًا نسبيًا -- صالح للنقر، غير صالح للطباعة.
+      absoluteUrl: !!qrLib.publicBase(),
+    });
+  }
+  if (!['svg', 'png'].includes(format)) return sendJSON(res, 400, { error: 'format must be json, svg or png' });
+
+  try {
+    if (format === 'svg') {
+      const svg = await qrLib.toSvg(ctx.token, { width: query.size, ecc: query.ecc });
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(svg);
+    }
+    const png = await qrLib.toPngBuffer(ctx.token, { width: query.size, ecc: query.ecc });
+    const download = query.download === '1';
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'no-store',
+      ...(download ? { 'Content-Disposition': `attachment; filename="qr-${ctx.id}.png"` } : {}),
+    });
+    return res.end(png);
+  } catch (e) {
+    // غياب الاعتماد ليس خطأ خادم: يُبلَّغ بوضوح ليعرف المشغّل ما ينقص.
+    if (e.code === 'QR_DEPENDENCY_MISSING') return sendJSON(res, 503, { error: e.message, code: e.code });
+    throw e;
+  }
+});
 
 on('POST', '/api/admin/points/bulk', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
   const b = await readBody(req);
