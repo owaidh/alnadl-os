@@ -127,7 +127,7 @@ const S = {
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
   portfolio:null, live:null, users:[], settlements:[], merchants:[], wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
-  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
+  ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, activationHandoff:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
   // token the server handed us plus eligibility — never any policy,
   // personality reasoning, or AI internals. `moment.payload` is the
@@ -445,11 +445,48 @@ const App = {
   async loadPortfolio(){ S.portfolio = await api('GET','/api/admin/portfolio',null,true); render(); },
   async loadLive(){ try{ S.live = await api('GET',`/api/manager/live?propertyId=${S.PROPERTY_ID}`,null,true); }catch(e){} render(); },
   async loadUsers(){ S.users = await api('GET','/api/admin/users',null,true); render(); },
+  /* P0-02 — دورة التفعيل: كانت النقطة تُرجع activationToken **والواجهة
+     ترميه**، فيُنشأ حساب بلا كلمة مرور ولا وسيلة لتفعيله ⇒ Invalid
+     credentials حتمية. الخادم سليم منذ R1؛ الناقص كان توصيل الواجهة.
+     الرمز يُعاد مرة واحدة فقط ولا يمكن استرجاعه، فيُعرض فورًا للنسخ. */
   async createUser(){
-    const username=document.getElementById('newUserName').value.trim(), role=document.getElementById('newUserRole').value;
-    if(!username) return;
-    try{ await api('POST','/api/admin/users',{username,role,partner_scope:S.PARTNER_ID},true); showToast(t('toast_saved')); await App.loadUsers(); }
-    catch(e){ showErr(e.message); }
+    const el=document.getElementById('newUserName'), roleEl=document.getElementById('newUserRole');
+    const username=el.value.trim(), role=roleEl.value;
+    if(!username){ showErr(S.lang==='ar'?'اسم المستخدم مطلوب':'Username is required'); return; }
+    try{
+      const r = await api('POST','/api/admin/users',{username,role,partner_scope:S.PARTNER_ID},true);
+      el.value='';
+      S.ui.activationHandoff = {
+        username: r.username || username, role,
+        token: r.activationToken, expiresAt: r.expiresAt,
+        url: `${location.origin}/activate.html?token=${encodeURIComponent(r.activationToken||'')}`,
+      };
+      await App.loadUsers();
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  dismissActivationHandoff(){ S.ui.activationHandoff=null; render(); },
+  async reissueActivation(userId, username){
+    try{
+      const r = await api('POST',`/api/admin/users/${userId}/activation`,{},true);
+      S.ui.activationHandoff = {
+        username, reissued:true, token:r.activationToken, expiresAt:r.expiresAt,
+        url: `${location.origin}/activate.html?token=${encodeURIComponent(r.activationToken||'')}`,
+      };
+      await App.loadUsers();
+      render();
+    }catch(e){ showErr(e.message); }
+  },
+  copyActivationLink(){
+    const st=S.ui.activationHandoff; if(!st) return;
+    const done=()=>showToast(S.lang==='ar'?'نُسخ الرابط':'Link copied');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(st.url).then(done).catch(()=>{
+        const i=document.getElementById('actLink'); if(i){ i.select(); document.execCommand('copy'); done(); }
+      });
+    } else {
+      const i=document.getElementById('actLink'); if(i){ i.select(); document.execCommand('copy'); done(); }
+    }
   },
   async toggleUser(id,active){ try{ await api('PATCH',`/api/admin/users/${id}`,{active:!active},true); await App.loadUsers(); }catch(e){ showErr(e.message); } },
 
@@ -1780,6 +1817,7 @@ function renderStaffShell(){
   ${S.ui.deliveryFailFor? renderDeliveryFailModal(S.ui.deliveryFailFor):''}
   ${S.ui.refundFor? renderRefundModal():''}
   ${S.ui.statusChange? renderStatusChangeModal():''}
+  ${S.ui.activationHandoff? renderActivationHandoff():''}
   ${S.ui.proposeMechanic? renderProposeModal():''}
   ${S.ui.mechTransition? renderMechTransitionModal():''}
   ${S.ui.bulkPoints? renderBulkPointsModal():''}`;
@@ -2285,6 +2323,31 @@ function renderDeliveryGrouping(partnerId, L){
       </span></div>`).join('')}
     <p class="ph" style="margin-top:6px">${L('المُجمَّع: الراكض يستلم كل شيء بعد جهوزية الجميع. المنفصل: كل منفذ يُسلَّم فور جهوزيته.','Grouped: the runner collects everything once all outlets are ready. Separate: each outlet is delivered as soon as it is ready.')}</p>
   </div>`;
+}
+
+/* P0-02 — تسليم رابط التفعيل. يُعرض **مرة واحدة**: الرمز مُخزَّن مُجزَّأً
+   على الخادم ولا يمكن استرجاعه بعد إغلاق النافذة -- وهذا مقصود، والبديل
+   الوحيد هو إعادة إصدار رمز جديد. */
+function renderActivationHandoff(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const st = S.ui.activationHandoff; if(!st) return '';
+  if(!st.token) return '';
+  const exp = st.expiresAt ? new Date(st.expiresAt).toLocaleString(S.lang==='ar'?'ar':'en') : '—';
+  return `<div class="ordmodal" onclick="if(event.target===this) App.dismissActivationHandoff()"><div class="ordsheet">
+    <h3>${st.reissued ? L('رابط تفعيل جديد','New activation link') : L('تم إنشاء الحساب','Account created')} — ${esc(st.username)}</h3>
+    <div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:10px 0">
+      ${L('هذا الرابط يظهر مرة واحدة فقط ولا يمكن استرجاعه. انسخه وسلّمه للمستخدم الآن.','This link is shown once and cannot be retrieved later. Copy it and hand it over now.')}
+    </div>
+    ${st.reissued ? `<p class="ph">${L('أي رابط سابق أُبطل، وكلمة المرور الحالية لم تعد صالحة.','Any earlier link is now void, and the current password no longer works.')}</p>`:''}
+    <div class="formfield"><label>${L('رابط التفعيل','Activation link')}</label>
+      <input id="actLink" readonly value="${esc(st.url)}" onclick="this.select()"></div>
+    <p class="ph">${L('صالح حتى','Valid until')}: ${exp}</p>
+    <p class="ph">${L('المستخدم يفتح الرابط ويضع كلمة مروره بنفسه — لا أحد غيره يعرفها.','The user opens the link and sets their own password — nobody else knows it.')}</p>
+    <div class="actrow">
+      <button class="btn-small brass" onclick="App.copyActivationLink()">${L('نسخ الرابط','Copy link')}</button>
+      <button class="ghostbtn" onclick="App.dismissActivationHandoff()">${t('close')}</button>
+    </div>
+  </div></div>`;
 }
 
 function renderPartnerStatusCard(partnerId){
@@ -3197,11 +3260,24 @@ function renderUsers(){
       <div class="darkfield"><label>${S.lang==='ar'?'اسم المستخدم':'Username'}</label><input id="newUserName" placeholder="jane_operator"></div>
       <div class="darkfield"><label>${S.lang==='ar'?'الدور':'Role'}</label><select id="newUserRole">${roleOpts.map(r=>`<option value="${r}">${r}</option>`).join('')}</select></div>
       <button class="btn-small brass" onclick="App.createUser()">+ ${S.lang==='ar'?'إنشاء':'Create'}</button>
-      <p class="ph" style="margin-top:8px">${t('resetHint')}</p>
+      <p class="ph" style="margin-top:8px">${S.lang==='ar'
+        ? 'يُنشأ الحساب بلا كلمة مرور. سيظهر رابط تفعيل لمرة واحدة تُسلّمه للمستخدم ليضع كلمة مروره بنفسه.'
+        : 'The account is created with no password. A one-time activation link appears for you to hand over; the user sets their own password.'}</p>
     </div></div>
     <div class="panel"><h3>${S.lang==='ar'?'المستخدمون الحاليون':'Current users'}</h3>
-      ${rows.map(u=>`<div class="prodlistrow"><div class="nm">${u.username}<span style="display:block">${u.role}${u.last_login? ' · '+new Date(u.last_login).toLocaleDateString('en-US') : (S.lang==='ar'?' · لم يسجل دخول بعد':' · never logged in')}</span></div>
-        <button class="togglepill ${u.active?'active':'inactive'}" onclick="App.toggleUser('${u.id}',${!!u.active})">${u.active?t('active'):t('inactive')}</button></div>`).join('')}
+      ${rows.map(u=>{
+        const pending = u.status==='pending_activation';
+        const badge = pending ? (S.lang==='ar'?'بانتظار التفعيل':'Pending activation')
+                    : (u.status==='suspended'||!u.active) ? (S.lang==='ar'?'موقوف':'Suspended')
+                    : (S.lang==='ar'?'فعّال':'Active');
+        const tone = pending ? 'pending' : (u.status==='suspended'||!u.active) ? 'cancel' : 'ok';
+        return `<div class="prodlistrow"><div class="nm">${esc(u.username)}
+          <span style="display:block">${esc(u.role)}${u.partner_scope? ' · '+esc(u.partner_scope):''}${u.last_login? ' · '+new Date(u.last_login).toLocaleDateString('en-US') : (S.lang==='ar'?' · لم يسجل دخول بعد':' · never logged in')}</span></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span class="badge ${tone}">${badge}</span>
+            <button class="btn-small" onclick="App.reissueActivation('${esc(u.id)}','${esc(u.username)}')">${S.lang==='ar'?'رابط تفعيل':'Activation link'}</button>
+            <button class="togglepill ${u.active?'active':'inactive'}" onclick="App.toggleUser('${esc(u.id)}',${!!u.active})">${u.active?t('active'):t('inactive')}</button>
+          </div></div>`;}).join('')}
     </div></div>`;
 }
 

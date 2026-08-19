@@ -38,6 +38,7 @@ const suites = [
   './white-label.js',
   './trusted-proxy.js',
   './production-deployment.js',
+  './browser-activation-journey.js',
 ];
 
 (async () => {

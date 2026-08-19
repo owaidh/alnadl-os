@@ -21,6 +21,22 @@ COPY migrations ./migrations
 # at /app so the database survives container restarts/redeploys:
 #   docker run -v alnadl-data:/app/data -e SQLITE_PATH=/app/data/data.sqlite ...
 # (see db.js — DB_PATH honors this if you set it; default is ./data.sqlite)
+# Release identification — تُمرَّر وقت البناء ولا تُستنتج من محتوى الحاوية.
+# استنتاجها من الملفات يجعل الحاوية "تصف نفسها" بما قد لا يطابق ما بُني منه
+# فعلًا؛ والقيمة الوحيدة الموثوقة هي ما حقنه خط البناء صراحةً.
+#
+#   docker build \
+#     --build-arg BUILD_VERSION="$(git describe --tags --abbrev=0)" \
+#     --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" \
+#     --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+#     -t alnadl:production .
+ARG BUILD_VERSION=unknown
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ENV BUILD_VERSION=$BUILD_VERSION
+ENV BUILD_COMMIT=$BUILD_COMMIT
+ENV BUILD_TIME=$BUILD_TIME
+
 ENV NODE_ENV=production
 ENV PORT=8787
 EXPOSE 8787

@@ -183,8 +183,30 @@ function bucketForPublicRoute(method, pattern) {
                 database and reports 503 when it cannot serve.
    Neither reveals secrets, versions of dependencies, connection strings or
    internal paths (§4.1: "لا تكشف endpoints أسرارًا"). */
+/* Release identification.
+   لم يكن هناك أي معرّف بناء في وقت التشغيل، فكان إثبات "ما هو المنشور"
+   مستحيلًا -- وهو ما أنتج التباسًا حقيقيًا في تقرير التشغيل: بدا أن سلوكًا
+   قديمًا يعني نشرًا قديمًا، بينما كان الخلل في الواجهة نفسها.
+
+   القيم تُحقن عند البناء (ARG/ENV) ولا تُستنتج من ملفات الحاوية: حاوية
+   تصف نفسها بقراءة محتواها قد تُبلّغ عن شيء لم تُبنَ منه. القيمة الموثوقة
+   الوحيدة هي ما كتبه خط البناء.
+
+   عامة عمدًا وللقراءة فقط: لا تكشف سرًا ولا مسارًا ولا تبعية -- وهي لازمة
+   لأي فحص خارجي يقارن الإنتاج بالحزمة المسلَّمة. */
+const RELEASE = Object.freeze({
+  version: process.env.BUILD_VERSION || 'unknown',
+  commit: process.env.BUILD_COMMIT || 'unknown',
+  buildTime: process.env.BUILD_TIME || 'unknown',
+  environment: process.env.NODE_ENV || 'development',
+});
+
+on('GET', '/version', null, async (req, res) => {
+  sendJSON(res, 200, RELEASE);
+});
+
 on('GET', '/health', null, async (req, res) => {
-  sendJSON(res, 200, { status: 'ok', uptimeSec: Math.floor(process.uptime()) });
+  sendJSON(res, 200, { status: 'ok', uptimeSec: Math.floor(process.uptime()), release: RELEASE });
 });
 on('GET', '/ready', null, async (req, res) => {
   const checks = {};
@@ -2807,7 +2829,7 @@ const server = http.createServer(async (req, res) => {
 
   // /health and /ready are registered routes, not static assets — they must
   // reach the dispatcher below rather than being looked up on disk.
-  const OPS_ROUTES = new Set(['/health', '/ready']);
+  const OPS_ROUTES = new Set(['/health', '/ready', '/version']);
   if (!pathname.startsWith('/api/') && !OPS_ROUTES.has(pathname)) return serveStatic(req, res, pathname);
 
   for (const r of routes) {
