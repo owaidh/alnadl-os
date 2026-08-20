@@ -32,6 +32,7 @@ COPY public ./public
 # and then died on "no such table: engage_outbox" with 37 tables instead of
 # 63 -- every table added after the initial schema was simply absent.
 COPY migrations ./migrations
+COPY scripts ./scripts
 
 # data.sqlite is created on first boot inside the container. Mount a volume
 # at /app so the database survives container restarts/redeploys:
