@@ -33,6 +33,7 @@ COPY public ./public
 # 63 -- every table added after the initial schema was simply absent.
 COPY migrations ./migrations
 COPY scripts ./scripts
+COPY tests ./tests
 
 # data.sqlite is created on first boot inside the container. Mount a volume
 # at /app so the database survives container restarts/redeploys:
