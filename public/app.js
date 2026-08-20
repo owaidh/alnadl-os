@@ -4,9 +4,41 @@
    ========================================================================== */
 
 const API = '';
+/* يستخرج الشريك المستهدَف من طلب كتابة، إن كان مُصرَّحًا به.
+   يقتصر على ما يحمل partnerId صراحةً: الاشتقاق التخميني من كل مسار كان
+   سيمنع عمليات مشروعة داخل السياق -- ومنعٌ خاطئ يدفع المشغّل للخروج من
+   السياق دائمًا، فيُفقد التدقيق قيمته. */
+function crossTenantTargetOf(method, path, body){
+  if (!['POST','PUT','PATCH','DELETE'].includes(String(method).toUpperCase())) return null;
+  if (String(path).startsWith('/api/admin/acting-context')) return null; // حدثا الدخول والخروج نفسهما
+  if (body && typeof body === 'object' && body.partnerId) return String(body.partnerId);
+  const m = /[?&]partnerId=([^&]+)/.exec(String(path));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 async function api(method, path, body, auth) {
   const headers = { 'Content-Type': 'application/json' };
   if (auth && S.session) headers['Authorization'] = 'Bearer ' + S.session.token;
+  /* Acting Context — **بيانات وصفية للتدقيق لا صلاحية**.
+     تُرسل مركزيًا من هنا لا من كل استدعاء: نقطة واحدة تضمن أن كل إجراء
+     يقع أثناء السياق يحمل إطاره، وأن أي شاشة تُضاف لاحقًا ترثه تلقائيًا
+     بدل أن تُنسى. الخادم يتجاهلها من غير SuperAdmin. */
+  if (auth && S.contextSwitchedFrom && S.PARTNER_ID) {
+    headers['X-Acting-Partner-Id'] = S.PARTNER_ID;
+    /* حارس العبور أثناء السياق: كتابة تستهدف شريكًا غير الذي أُعلن السياق
+       له تُمنع **من الواجهة**. السبب أن الخادم لن يمنعها -- SuperAdmin
+       يملك الصلاحية على الاثنين بحق -- فالخطأ هنا ليس خرق صلاحية بل
+       إجراءٌ يقع على جهة لا ينظر إليها المشرف، وهو أصعب اكتشافًا.
+       والقدرة تبقى كاملة: يكفي العودة لمستوى المنصة. */
+    const targeted = crossTenantTargetOf(method, path, body);
+    if (targeted && targeted !== S.PARTNER_ID) {
+      const e = new Error(S.lang==='ar'
+        ? `عملية موجَّهة لشريك آخر أثناء العمل داخل سياق ${actingPartnerName()}. اخرج إلى سياق المنصة أولًا.`
+        : `This action targets a different partner while acting in ${actingPartnerName()} context. Return to platform context first.`);
+      e.code = 'CROSS_TENANT_IN_CONTEXT';
+      throw e;
+    }
+  }
   const res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -133,7 +165,7 @@ const S = {
   adminPlans:null, theme:'system', contextSwitchedFrom:null, partnerProfile:null, properties:null, simResult:null, partnerStatusInfo:null, siteExceptions:null, orderRefunds:null, engageState:null, killSwitch:null, policyOverrides:null, partnerEngage:null, revenueLedger:null, mechanics:null, engageOverview:null, safetyIncidents:null, engageLedger:null,
   ops:{ queue:null, error:null }, runnerQ:null, runnerError:null, runnerLastRefresh:null, admin:{ zones:[], points:[], categories:[], products:[] },
   partner:{ overview:null, settlement:null }, audit:[], tenants:[], plans:[], subscription:null,
-  portfolio:null, live:null, users:[], settlements:[], merchants:[], merchantStatuses:{}, paymentPolicies:null, wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
+  portfolio:null, live:null, users:[], settlements:[], merchants:[], merchantStatuses:{}, paymentPolicies:null, brandMedia:null, wallets:[], outlets:[], revenueLedger:[], revenueModels:{}, branding:null,
   refundLookupOrder:null, refundLookupRefunds:[], refundOrderIdInput:'',
   ui:{ openOrder:null, cancelFor:null, deliveryFailFor:null, refundFor:null, statusChange:null, activationHandoff:null, pointQr:null, proposeMechanic:null, mechTransition:null, bulkPoints:null, err:null }, toast:null,
   // UX-5 (spec §11): Engage guest state. `pass` holds ONLY the capability
@@ -220,6 +252,13 @@ const App = {
     const addonList = def.addons.filter(a=>ap.addons[a.id]);
     const unit = def.base_price + (variant?variant.price_delta:0) + addonList.reduce((s,a)=>s+a.price,0);
     S.cart.push({ key:'ci'+Math.random().toString(36).slice(2), productId:def.id, ar:def.name_ar, en:def.name_en, imageUrl:def.image_url||null,
+      /* المنفذ يُثبَّت على السطر لحظة الإضافة. كشفه اختبار المتصفح:
+         استنتاجه لاحقًا من S.catalog يفشل بمجرّد أن يبدّل الضيف المنفذ --
+         لأن القائمة المحمَّلة تصير قائمة المنفذ الجديد، فتصير أصناف المنفذ
+         السابق بلا منفذ معروف. وهذا هو جوهر السلّة الموحّدة: أصناف من
+         منافذ مختلفة تتعايش، ولا يجوز أن تعتمد هويتها على آخر شاشة زارها
+         الضيف. */
+      outletId: def.outlet_id || S.activeOutletId || null,
       variantId: variant?variant.id:null, variantLabel: variant?{ar:variant.name_ar,en:variant.name_en}:null,
       addonIds: addonList.map(a=>a.id), addonLabels: addonList.map(a=>({ar:a.name_ar,en:a.name_en})),
       notes:ap.notes, qty:ap.qty, unit, lineTotal:unit*ap.qty });
@@ -689,7 +728,88 @@ const App = {
   },
 
   /* ---- white label branding (Phase 4 §11/§12) ---- */
-  async loadBranding(){ S.branding = await api('GET',`/api/admin/branding?partnerId=${S.PARTNER_ID}`,null,true); render(); },
+  async loadBranding(){
+    S.branding = await api('GET',`/api/admin/branding?partnerId=${S.PARTNER_ID}`,null,true);
+    await App.loadBrandMedia();
+  },
+
+  /* Scope 2 — النطاقات المتاحة للهوية، وأحدها مختار. الشريك التجاري يظهر
+     كنطاق مستقل لأن هويته مستقلة، لكنه يبقى داخل نطاق الشريك المضيف --
+     لا دور إداري جديد له في هذه الجولة. */
+  async loadBrandMedia(){
+    const pid = S.PARTNER_ID;
+    const [properties, outlets, merchants] = await Promise.all([
+      api('GET','/api/admin/properties',null,true).catch(()=>[]),
+      api('GET','/api/admin/outlets',null,true).catch(()=>[]),
+      api('GET','/api/admin/merchants',null,true).catch(()=>[]),
+    ]);
+    const L=(ar,en)=>S.lang==='ar'?ar:en;
+    const scopes = [{ type:'partner', id:pid, label:pid }];
+    for(const pr of properties) scopes.push({ type:'property', id:pr.id, label:S.lang==='ar'?pr.name_ar:pr.name_en });
+    for(const m of merchants) scopes.push({ type:'merchant', id:m.id, label:S.lang==='ar'?m.name_ar:m.name_en });
+    for(const o of outlets) scopes.push({ type:'outlet', id:o.id, label:S.lang==='ar'?o.name_ar:o.name_en });
+    const selected = (S.brandMedia && S.brandMedia.selectedScope) || `partner:${pid}`;
+    S.brandMedia = { scopes, selectedScope: selected, effective: await App.fetchEffectiveBrand(selected) };
+    render();
+  },
+
+  /* الهوية الفعّالة تُطلب من الخادم لكل نطاق. لا تُحسب في الواجهة: حساب
+     الوراثة هنا كان سيُنشئ نسخة ثانية من القاعدة تنحرف عن المُحلِّل يومًا،
+     والانحراف صامت لأن الشاشتين تبدوان متطابقتين. */
+  async fetchEffectiveBrand(scopeKey){
+    const [type, id] = String(scopeKey||'').split(':');
+    const q = new URLSearchParams({ partnerId: S.PARTNER_ID });
+    if(type==='property') q.set('propertyId', id);
+    if(type==='outlet') q.set('outletId', id);
+    // الشريك التجاري يُحلّ عبر منفذ يتبعه -- المُحلِّل يشتقّه من
+    // outlets.merchant_id ولا يقبله مباشرة، وهو الضمان بأن هوية المنفذ
+    // مصدرها واحد.
+    if(type==='merchant'){
+      const outlets = await api('GET','/api/admin/outlets',null,true).catch(()=>[]);
+      const via = outlets.find(o=>o.merchant_id===id);
+      if(via){ q.set('propertyId', via.property_id); q.set('outletId', via.id); }
+    }
+    try{ return await api('GET',`/api/admin/branding/effective?${q}`,null,true); }
+    catch(e){ return {}; }
+  },
+
+  async selectBrandScope(key){
+    S.brandMedia.selectedScope = key;
+    S.brandMedia.effective = await App.fetchEffectiveBrand(key);
+    render();
+  },
+
+  async uploadBrandAsset(assetType){
+    const input = document.getElementById('upl_'+assetType);
+    const file = input && input.files && input.files[0];
+    if(!file) return showErr(S.lang==='ar'?'اختر ملفًا أولًا':'Pick a file first');
+    const [type, id] = S.brandMedia.selectedScope.split(':');
+    const fd = new FormData();
+    fd.append('assetType', assetType);
+    fd.append('file', file);
+    try{
+      const r = await fetch(`/api/admin/brand-assets/${type}/${id}`, {
+        method:'POST',
+        headers:{ Authorization:'Bearer '+S.session.token }, // لا Content-Type: المتصفح يضبط الحدّ بنفسه
+        body: fd,
+      });
+      const data = await r.json().catch(()=>({}));
+      if(!r.ok) return showErr(data.error || 'Upload failed');
+      showToast(t('toast_saved'));
+      await App.loadBrandMedia();
+    }catch(e){ showErr(e.message); }
+  },
+
+  async deleteBrandAssetAt(assetType){
+    const key = { logo:'logo_asset_id', banner:'banner_asset_id', favicon:'favicon_asset_id' }[assetType];
+    const assetId = S.brandMedia.effective && S.brandMedia.effective[key];
+    if(!assetId) return;
+    try{
+      await api('DELETE',`/api/admin/brand-assets/${assetId}`,null,true);
+      showToast(t('toast_saved'));
+      await App.loadBrandMedia();
+    }catch(e){ showErr(e.message); }
+  },
   async saveBranding(){
     const mode = document.getElementById('brMode').value;
     const payload = {
@@ -1144,14 +1264,42 @@ const App = {
       S.selectedPartnerId = partnerId;
       S.PARTNER_ID = partnerId; S.PROPERTY_ID = prop.id;
       // الهوية تبقى SuperAdmin -- هذا تبديل سياق لا انتحال دور.
-      S.contextSwitchedFrom = S.contextSwitchedFrom || { role: S.session.user.role };
+      /* اسم الشريك يُلتقط لحظة الدخول ويُخزَّن مع السياق.
+         الاعتماد على S.tenants وحده كان يعرض المعرّف الخام حين يُدخَل
+         السياق من مسار لم يُحمّل القائمة -- ومعرّف خام لا يخبر المشغّل
+         داخل أي جهة يعمل، وهو بالضبط الغموض الذي نغلقه. */
+      let ptName = null;
+      const known = (S.tenants || []).find(x => x.id === partnerId);
+      if (known) ptName = S.lang==='ar' ? known.name_ar : known.name_en;
+      if (!ptName) {
+        try {
+          const all = await api('GET','/api/admin/partners',null,true);
+          const found = (all || []).find(x => x.id === partnerId);
+          if (found) ptName = S.lang==='ar' ? found.name_ar : found.name_en;
+        } catch(e) { /* الاسم تحسين عرضي، لا يمنع الدخول */ }
+      }
+      S.contextSwitchedFrom = S.contextSwitchedFrom || { role: S.session.user.role, partnerId, partnerName: ptName };
+      // حدث دخول مستقل يُؤطّر ما بعده في السجل.
+      try { await api('POST','/api/admin/acting-context/enter',{ partnerId },true); } catch(e) { /* التدقيق لا يمنع العمل */ }
       await App.loadAdminAll();
       showToast(S.lang==='ar'?'دخلت سياق الشريك':'Entered partner context');
       render();
     }catch(e){ showErr(e.message); }
   },
-  exitPartnerContext(){
+  async exitPartnerContext(){
+    const leaving = S.PARTNER_ID;
+    try { await api('POST','/api/admin/acting-context/exit',{ partnerId: leaving },true); } catch(e) { /* لا يمنع الخروج */ }
+    /* الخروج يجب أن يُزيل **كل** ما وضعه الدخول.
+       كان يمسح المؤشّر (contextSwitchedFrom) ويترك S.PARTNER_ID و
+       S.PROPERTY_ID على الشريك السابق: أي أن اللافتة تختفي بينما النطاق
+       باقٍ. والنتيجة أخطر من بقاء اللافتة -- المشغّل يظن أنه عاد لمستوى
+       المنصة، وأي شاشة تقرأ S.PARTNER_ID (العلامة التجارية، سياسة
+       التحصيل، وسائط الهوية، الاشتراك) تكتب على شريك لا ينظر إليه أصلًا.
+       SuperAdmin يملك الصلاحية على الشريكين، فلا حاجز خادميّ يمنع الخطأ:
+       الحارس الوحيد هو أن تكون الحالة صادقة. */
     S.contextSwitchedFrom = null; S.selectedPartnerId = null;
+    S.PARTNER_ID = null; S.PROPERTY_ID = null;
+    S.branding = null; S.brandMedia = null; S.paymentPolicies = null; S.subscription = null;
     S.screen = 'tenants';
     App.loadTenants(); render();
   },
@@ -1308,10 +1456,8 @@ function elapsedStr(ts){ const d=Date.now()-ts; const m=Math.floor(d/60000), s=M
    تُستبدل بالهوية الفعّالة حين تكون مُفعّلة، وبصياغة محايدة خلاف ذلك.
    تصميم الشخصيات الخمس ومنطق Engage لم يُمسّا. */
 function engageInviteLabel(){
-  const b = S.qrContext && S.qrContext.branding;
-  if (b && b.whiteLabelActive && b.logo_text) {
-    return S.lang === 'ar' ? `لحظة من ${esc(b.logo_text)}` : `A moment from ${esc(b.logo_text)}`;
-  }
+  const name = brandName();
+  if (name) return S.lang === 'ar' ? `لحظة من ${esc(name)}` : `A moment from ${esc(name)}`;
   return S.lang === 'ar' ? 'لحظة من النادل' : 'A moment from Alnadl';
 }
 
@@ -1321,33 +1467,203 @@ function engageInviteLabel(){
    تكون مُفعّلة، وتبقى كما هي خلاف ذلك. اكتشفه التحقق البصري لا المراجعة. */
 function outletOperatorLabel(operator){
   if (operator === 'partner') return S.lang === 'ar' ? 'شريك' : 'Partner';
-  const b = S.qrContext && S.qrContext.branding;
-  if (b && b.whiteLabelActive && b.logo_text) {
-    return S.lang === 'ar' ? `مُشغَّل من ${esc(b.logo_text)}` : `Operated by ${esc(b.logo_text)}`;
-  }
+  const name = brandName();
+  if (name) return S.lang === 'ar' ? `مُشغَّل من ${esc(name)}` : `Operated by ${esc(name)}`;
   return S.lang === 'ar' ? 'مُشغَّل من النادل' : 'Alnadl-operated';
 }
 
-function guestBrandMark(){
+/* ===========================================================================
+   Brand Shell — مصدر واحد للهوية الفعّالة في كل واجهات الضيف (Scope 2).
+
+   قبل هذا، كانت كل شاشة تقرأ S.qrContext.branding وتقرّر بنفسها -- خمسة
+   مواضع، كلٌّ يفحص whiteLabelActive بطريقته. أي شاشة تُضاف لاحقًا وتنسى
+   الفحص تعرض هوية ALNADL داخل تجربة عميل، وهو خلل يراه الضيف ولا يظهر في
+   اختبار وحدة.
+
+   الآن: `activeBrand()` تجيب عن سؤال «ما الهوية الآن؟» وحدها، وكل شاشة
+   تسألها. لا منطق وراثة في الواجهة إطلاقًا -- الوراثة تُحسب في
+   lib/branding.js على الخادم وتصل محلولة.
+=========================================================================== */
+
+/* الهوية الفعّالة في اللحظة الحالية.
+
+   القاعدة (§8): في سياق متعدد المنافذ -- سلّة تضمّ أكثر من منفذ -- يبقى
+   الـShell على هوية الشريك/العقار، وتُعرض هوية كل منفذ **داخل قسمه** فقط.
+   تبديل الشعار العام بين منتجَين في سلّة واحدة يربك الضيف عمّن يقدّم ماذا،
+   ويجعل الهوية تومض مع كل تعديل في السلّة. */
+function activeBrand(){
   const staff = !!(S.session && S.session.user);
-  if (staff) return '<span class="mark">ن</span> ALNADL';
-  const b = S.qrContext && S.qrContext.branding;
-  if (!b || !b.whiteLabelActive) return '<span class="mark">ن</span> ALNADL';
-  const label = esc(b.logo_text || '');
-  const markChar = label ? esc(label.charAt(0).toUpperCase()) : 'ن';
-  const mark = b.logo_url
-    ? `<img src="${esc(b.logo_url)}" alt="${label}" class="mark" style="object-fit:contain;background:transparent" onerror="this.outerHTML='<span class=&quot;mark&quot;>${markChar}</span>'">`
+  if (staff || !S.qrContext) return null;
+  const shellBrand = S.qrContext.branding || null;
+  /* شاشة اختيار المنفذ = المستوى الرئيسي بحكم التعريف: الضيف لم يختر
+     منفذًا بعد، أو رجع فألغى اختياره. كشفه اختبار المتصفح -- كان
+     S.activeOutletId يبقى محفوظًا بعد العودة، فتظل هوية المقهى معروضة في
+     شاشة تعرض منافذ الفندق كلها.
+     الإصلاح هنا في نقطة القرار الوحيدة لا في شاشة الـhub: قاعدة "أي هوية
+     الآن؟" يجب أن تبقى مُجابة في مكان واحد، وإلا عادت الحال إلى خمسة
+     مواضع يقرّر كلٌّ منها بطريقته. */
+  if (S.screen === 'hub') return shellBrand;
+  // سلّة موزّعة على أكثر من منفذ ⇒ هوية عامة
+  if (cartOutletIds().length > 1) return shellBrand;
+  // منفذ نشط واحد ⇒ هويته (وفيها طبقة شريكه التجاري، محلولة على الخادم)
+  const outletBrand = activeOutletBrand();
+  return outletBrand || shellBrand;
+}
+
+/** هوية المنفذ النشط كما حلّها الخادم. لا يُعاد بناء أي وراثة هنا. */
+function activeOutletBrand(){
+  if (!S.qrContext) return null;
+  const id = S.activeOutletId || (S.qrContext.outlet && S.qrContext.outlet.id);
+  if (!id) return null;
+  if (S.qrContext.outlet && S.qrContext.outlet.id === id && S.qrContext.outlet.brand) return S.qrContext.outlet.brand;
+  const found = (S.qrContext.outlets || []).find(o => o.id === id);
+  return (found && found.brand) || null;
+}
+
+/** معرّفات المنافذ الممثَّلة في السلّة الحالية. */
+function cartOutletIds(){
+  const ids = new Set();
+  for (const c of (S.cart || [])) {
+    const oid = c.outletId
+      || (((S.catalog && S.catalog.products || []).find(pr => pr.id === c.productId) || {}).outlet_id);
+    if (oid) ids.add(oid);
+  }
+  return [...ids];
+}
+
+/** هل الهوية البيضاء فعّالة الآن؟ سؤال واحد لا يُكرَّر فحصه في كل شاشة. */
+function brandActive(){ const b = activeBrand(); return !!(b && b.whiteLabelActive); }
+
+/** الاسم المعروض. */
+function brandName(){ const b = activeBrand(); return (b && b.whiteLabelActive && b.logo_text) ? b.logo_text : null; }
+
+/** مصدر الشعار -- يفضّل الأصل المرفوع، ويسقط إلى المسار النصّي القديم.
+    الخادم يحسم هذا في logo_src، فلا تتكرر القاعدة هنا. */
+function brandLogoSrc(){ const b = activeBrand(); return (b && b.whiteLabelActive && b.logo_src) ? b.logo_src : null; }
+function brandBannerSrc(){ const b = activeBrand(); return (b && b.whiteLabelActive && b.banner_src) ? b.banner_src : null; }
+
+/** متغيّرات الألوان. تُطبَّق على طبقة brass-* القائمة بدل إجبار كل خلفية
+    على لون العميل -- الوضعان الفاتح والداكن يبقيان سليمين، وهذا شرط §17. */
+function brandThemeVars(){
+  const b = activeBrand();
+  if (!b || !b.whiteLabelActive || !b.primary_color) return '';
+  const p = b.primary_color;
+  const secondary = b.secondary_color || null;
+  return `--brass-300:color-mix(in srgb, ${p} 55%, white);--brass-500:${p};--brass-600:${p};`
+       + `--brass-700:color-mix(in srgb, ${p} 80%, black);--brand-primary:${p};`
+       + (secondary ? `--brand-secondary:${secondary};` : '');
+}
+
+/** علامة الهوية في الترويسة: شعار مرفوع، أو حرف أول، أو ALNADL. */
+function brandMark(opts){
+  const compact = !(opts && opts.large);
+  const name = brandName();
+  if (!brandActive() || !name) return '<span class="mark">ن</span> ALNADL';
+  const label = esc(name);
+  const markChar = esc(name.charAt(0).toUpperCase());
+  const src = brandLogoSrc();
+  // onerror: أصل محذوف أو ملف مفقود لا يترك أيقونة مكسورة -- يسقط إلى
+  // الحرف الأول. شرط §16 صراحةً.
+  const mark = src
+    ? `<img src="${esc(src)}" alt="${label}" class="mark" style="object-fit:contain;background:transparent" onerror="this.outerHTML='<span class=&quot;mark&quot;>${markChar}</span>'">`
     : `<span class="mark">${markChar}</span>`;
-  return `${mark} ${label}`;
+  return compact ? `${mark} ${label}` : `${mark} <strong>${label}</strong>`;
+}
+
+/* ── فصل الهوية عن سياق الموقع ─────────────────────────────────────────
+   Brand           = هوية المنفذ / الشريك التجاري (العلامة الفعّالة)
+   Location Context = الشريك الرئيسي / العقار / المنطقة / النقطة
+
+   السبب: اسم الشريك الرئيسي أو العقار حين يُعرض بنفس بروز العلامة يبدو
+   **كأنه** العلامة الفعّالة. كشفته المراجعة البصرية: عنوان يحمل اسم الجهة
+   الرئيسية فوق شعار علامة مستقلة -- شاشة واحدة بهويتين.
+
+   الفصل هنا في Brand Shell لا في الشاشات: قاعدة واحدة تُجيب "ما العلامة؟"
+   وأخرى تُجيب "أين الضيف؟"، وكل شاشة تسأل بدل أن تقرّر. */
+
+/** سياق الموقع -- معلومة مفيدة للضيف، وليست هوية تجارية. */
+function locationContextLabel(){
+  if (!S.qrContext) return '';
+  const c = S.qrContext;
+  const site = S.lang==='ar' ? (c.property && c.property.name_ar) : (c.property && c.property.name_en);
+  const zone = S.lang==='ar' ? (c.zone && c.zone.name_ar) : (c.zone && c.zone.name_en);
+  const point = c.point && c.point.label;
+  return [site, zone, point].filter(Boolean).join(' — ');
+}
+
+/** هل اسم العلامة الفعّالة يختلف عن اسم الجهة الرئيسية؟ يُستخدم لتقرير
+    عرض سطر الموقع بوضوح حين تكون العلامة مستقلة. */
+function brandDiffersFromSite(){
+  const c = S.qrContext;
+  if (!c || !brandActive()) return false;
+  const site = S.lang==='ar' ? (c.partner && c.partner.name_ar) : (c.partner && c.partner.name_en);
+  return !!brandName() && brandName() !== site;
+}
+
+/** العنوان الرئيسي للشاشة: **العلامة الفعّالة** حين تكون مفعّلة، وإلا اسم
+    الجهة الرئيسية. كان يعرض اسم الشريك الرئيسي دائمًا، فيبدو اسم الجهة
+    المضيفة وكأنه اسم العلامة داخل منفذ علامة مستقلة. */
+function brandHeadingLabel(){
+  const c = S.qrContext;
+  if (!c) return '';
+  if (brandActive() && brandName()) return brandName();
+  const site = S.lang==='ar' ? c.partner.name_ar : c.partner.name_en;
+  const zone = S.lang==='ar' ? (c.zone && c.zone.name_ar) : (c.zone && c.zone.name_en);
+  return [site, zone].filter(Boolean).join(' — ');
+}
+
+/** سياسة «مدعوم من النادل». */
+function brandShowsPoweredBy(){
+  const b = activeBrand();
+  if (!b || !b.whiteLabelActive) return false; // ALNADL هي الهوية أصلًا
+  return b.show_powered_by === 1 || b.show_powered_by === true;
+}
+
+/* ── هوية العمل الحالية (تدقيق تبديل السياق) ────────────────────────────
+   القرار المُثبَت بالتدقيق: تبديل السياق **لا يغيّر الهوية**. الرمز نفسه،
+   والدور نفسه، ولا مفهوم للسياق على الخادم إطلاقًا -- الصلاحية تأتي من
+   هوية SuperAdmin لا من السياق. وهذا تصميم مقصود لدور يدير المنصة كلها.
+
+   ولذلك يجب أن تقول الواجهة ذلك صراحةً: «SuperAdmin يعمل داخل سياق فلان»
+   لا «دخل كـPartnerAdmin». الغموض هنا خطر عملي: مشغّل يظن نفسه مُقيَّدًا
+   بينما إجراءاته تصل كل المستأجرين. */
+function actingPartnerName(){
+  const pid = S.PARTNER_ID;
+  if (!pid) return '';
+  if (S.contextSwitchedFrom && S.contextSwitchedFrom.partnerName) return S.contextSwitchedFrom.partnerName;
+  const pt = (S.tenants || []).find(x => x.id === pid)
+    || (S.partners || []).find(x => x.id === pid);
+  const nm = pt ? (S.lang==='ar' ? pt.name_ar : pt.name_en) : null;
+  return nm || pid;
+}
+
+function actingScopeLabel(){
+  const u = S.session && S.session.user;
+  if (!u) return '';
+  const base = `${u.username} · ${u.role}`;
+  if (u.role !== 'SuperAdmin' || !S.contextSwitchedFrom) return base;
+  return S.lang==='ar'
+    ? `${base} — يعمل داخل سياق ${actingPartnerName()}`
+    : `${base} — acting in ${actingPartnerName()} context`;
+}
+
+/* الشاشات التي لا معنى لها داخل سياق شريك: إدارة المنصة نفسها.
+   إخفاؤها داخل السياق يمنع التباسًا حقيقيًا -- شاشة «الشركاء والباقات»
+   تعرض كل المستأجرين، فظهورها داخل سياق شريك يوحي بأن السياق لم يُقيّد
+   شيئًا. وهي تبقى متاحة كاملةً بمجرّد العودة لمستوى المنصة. */
+const PLATFORM_ONLY_SCREENS = ['plans', 'tenants', 'portfolio'];
+
+function guestBrandMark(){
+  // صار غلافًا رقيقًا فوق Brand Shell: نقطة قرار واحدة لا خمس.
+  return brandMark();
 }
 
 /* عنوان الصفحة والأيقونة — يتبعان الهوية الفعّالة.
    يُستدعى من render()، ويُعيد قيم المنصة حين لا تكون الهوية فعّالة، فلا
    يبقى أثر من جلسة سابقة. */
 function applyGuestBrandChrome(){
-  const staff = !!(S.session && S.session.user);
-  const b = S.qrContext && S.qrContext.branding;
-  const active = !staff && b && b.whiteLabelActive;
+  const b = activeBrand();
+  const active = brandActive();
   const title = active
     ? (S.lang === 'ar' ? (b.page_title_ar || b.logo_text) : (b.page_title_en || b.logo_text))
     : 'Alnadl Hospitality OS';
@@ -1355,7 +1671,9 @@ function applyGuestBrandChrome(){
 
   const icon = document.querySelector('link[rel="icon"]');
   if (icon) {
-    const href = active && b.logo_url ? b.logo_url : '/icons/icon-192.png';
+    // الأيقونة المرفوعة أولًا، ثم الشعار، ثم أيقونة المنصة -- سقوط متدرّج
+    // لا صورة مكسورة.
+    const href = (active && (b.favicon_src || b.logo_src)) || '/icons/icon-192.png';
     if (icon.getAttribute('href') !== href) icon.setAttribute('href', href);
   }
 }
@@ -1437,9 +1755,8 @@ function renderCustomerShell(){
   // element ONLY via an inline CSS custom property — it never touches the
   // admin/staff top bar (renderTopBar), and an Outlet's own branding_json
   // (Increment 1) is completely independent of this and never overridden.
-  const branding = S.qrContext.branding;
-  const themeStyle = (branding && branding.whiteLabelActive && branding.primary_color)
-    ? `style="--brass-300:color-mix(in srgb, ${branding.primary_color} 55%, white);--brass-500:${branding.primary_color};--brass-600:${branding.primary_color};--brass-700:color-mix(in srgb, ${branding.primary_color} 80%, black);"` : '';
+  const vars = brandThemeVars();
+  const themeStyle = vars ? `style="${vars}"` : '';
   return `<div class="fohshell"><div class="phone" ${themeStyle}>${inner}${S.activeProduct?renderProductModal():''}</div></div>`;
 }
 
@@ -1505,21 +1822,40 @@ function scrWelcome(){
   const c = S.qrContext;
   const nm = S.lang==='ar'?c.partner.name_ar:c.partner.name_en;
   const zn = S.lang==='ar'?c.zone.name_ar:c.zone.name_en;
-  const branding = c.branding;
-  // White Label: يُقرأ من نتيجة المُحلِّل بدل استنتاجه من mode محليًا --
-  // المُحلِّل هو من يعرف بوابة الميزة والوراثة معًا.
-  const isWhiteLabel = !!(branding && branding.whiteLabelActive);
-  const crestLetter = isWhiteLabel && branding.logo_text ? branding.logo_text.charAt(0).toUpperCase() : 'ن';
-  const welcomeTitle = isWhiteLabel && (S.lang==='ar'?branding.welcome_text_ar:branding.welcome_text_en) || nm;
-  const showPoweredBy = !branding || branding.show_powered_by !== 0;
+  // كل قرارات الهوية من Brand Shell: لا فحص whiteLabelActive في الشاشة.
+  const branding = activeBrand();
+  const isWhiteLabel = brandActive();
+  const crestLetter = brandName() ? brandName().charAt(0).toUpperCase() : 'ن';
+  /* العنوان يتبع الهوية الفعّالة لا اسم الشريك المضيف.
+     كشفته المراجعة البصرية: في منفذ شريك تجاري كان الشعار والزر بهوية
+     المقهى بينما العنوان يقول اسم الفندق -- شاشة واحدة بهويتين، وهو
+     التناقض الذي جاء §6 ليمنعه. الترتيب: نصّ ترحيبي مخصّص، ثم اسم الهوية
+     الفعّالة، ثم اسم الشريك كقاع أخير. */
+  const welcomeTitle = (isWhiteLabel && (S.lang==='ar'?branding.welcome_text_ar:branding.welcome_text_en))
+    || brandName() || nm;
+  const showPoweredBy = brandShowsPoweredBy();
+  const logo = brandLogoSrc();
+  const banner = brandBannerSrc();
+  /* §2: البانر يظهر كبيرًا في شاشة البداية وحدها، والصفحات الداخلية تكتفي
+     بترويسة خفيفة تحمل الشعار -- لا تستهلك مساحة الشاشة على كل خطوة.
+     onerror يُخفي البانر بدل ترك أيقونة مكسورة (§16). */
+  const hero = banner
+    ? `<img src="${esc(banner)}" alt="" class="brandbanner"
+         onerror="this.style.display='none'">`
+    : '';
+  const crest = logo
+    ? `<img src="${esc(logo)}" alt="${esc(brandName()||'')}" class="crest crestimg"
+         onerror="this.outerHTML='<div class=&quot;crest&quot;>${esc(crestLetter)}</div>'">`
+    : `<div class="crest">${crestLetter}</div>`;
   return `
   <div class="welcome">
-    <div class="crest">${crestLetter}</div>
-    <div class="locpill">${t('youAreAt')}: ${nm} — ${zn} — ${c.point.label}</div>
+    ${hero}
+    ${crest}
+    <div class="locpill">${t('youAreAt')}: ${esc(locationContextLabel())}</div>
     <div class="etarow"><span class="dot"></span>${t('serviceOn')}</div>
     <h2>${welcomeTitle}</h2>
     <button class="btn-primary" style="max-width:260px" onclick="App.goScreen('menu')">${t('startOrder')}</button>
-    ${isWhiteLabel && showPoweredBy? `<div style="font-size:10px;color:var(--ink-400);margin-top:6px">${S.lang==='ar'?'مقدَّم من':'Powered by'} ALNADL</div>`:''}
+    ${showPoweredBy? `<div class="poweredby">${S.lang==='ar'?'مقدَّم من':'Powered by'} ALNADL</div>`:''}
   </div>`;
 }
 
@@ -1541,7 +1877,9 @@ function scrMenu(){
     prodBlocks = Object.entries(byMerchant).map(([mid, list])=>{
       const m = merchantOf(mid);
       const label = m ? (S.lang==='ar'?m.name_ar:m.name_en) : '';
-      return `${m && m.kind!=='alnadl'? `<div class="merchant-header"><span class="merchant-dot"></span>${label}<span class="merchant-tag">${S.lang==='ar'?'شريك':'Partner'}</span></div>` : (merchants.length>1? `<div class="merchant-header"><span class="merchant-dot brass"></span>${label}</div>`:'')}
+      /* منتج بلا شريك تجاري يُعرض **بلا ترويسة مجموعة**: هو منتج المنفذ
+         المباشر، ونسبته إلى مجموعة فارغة كانت ستطبع ترويسة بلا اسم. */
+      return `${!m? '' : (m.kind!=='alnadl'? `<div class="merchant-header"><span class="merchant-dot"></span>${label}<span class="merchant-tag">${S.lang==='ar'?'شريك':'Partner'}</span></div>` : (merchants.length>1? `<div class="merchant-header"><span class="merchant-dot brass"></span>${label}</div>`:''))}
         <div class="prodgrid">${list.map(prodCard).join('')}</div>`;
     }).join('');
   } else {
@@ -1549,7 +1887,10 @@ function scrMenu(){
   }
   return `
   <div class="scrhead">
-    <div class="top"><h3>${S.lang==='ar'?c.partner.name_ar:c.partner.name_en} — ${S.lang==='ar'?c.zone.name_ar:c.zone.name_en}</h3>
+    <div class="top"><div style="min-width:0">
+      <h3>${esc(brandHeadingLabel())}</h3>
+      ${brandDiffersFromSite()? `<div class="loccontext">${t('youAreAt')}: ${esc(locationContextLabel())}</div>`:''}
+      </div>
       ${S.qrContext.hub? `<button class="btn-small line" style="border:1px solid var(--ink-800);background:none" onclick="App.goScreen('hub')">${S.lang==='ar'?'منافذ أخرى':'Other outlets'}</button>` : (S.loyalty && S.loyalty.pointsBalance>0? `<div class="ptsbadge" onclick="App.goScreen('loyalty')">★ ${S.loyalty.pointsBalance}</div>` : '<div style="width:32px"></div>')}</div>
     <div class="cattabs">${cats.map(cat=>`<button class="${S.activeCatId===cat.id?'active':''}" onclick="App.setCat('${cat.id}')">${S.lang==='ar'?cat.name_ar:cat.name_en}</button>`).join('')}</div>
   </div>
@@ -1607,12 +1948,65 @@ function renderProductModal(){
   </div></div>`;
 }
 
+/* §8 — سلّة متعددة المنافذ: هوية كل منفذ **داخل قسمه** فقط.
+
+   الـShell العام يبقى على هوية الشريك/العقار (يتكفّل بذلك activeBrand)،
+   لأن تبديل الشعار العام بين منتجَين في سلّة واحدة يجعل الهوية تومض مع كل
+   تعديل، ويربك الضيف عمّن يقدّم ماذا. أما داخل السلّة فكل منفذ يحمل شعاره
+   واسمه فوق أصنافه، فلا يلتبس مصدر أي صنف.
+
+   وحين تكون السلّة من منفذ واحد لا يُعرض قسم إطلاقًا: ترويسة لمجموعة
+   واحدة ضوضاء بلا معلومة. */
+function cartGroupedByOutlet(){
+  const items = S.cart || [];
+  // المنفذ من السطر نفسه أولًا -- لا يعتمد على القائمة المحمَّلة حاليًا.
+  const outletOf = (c) => c.outletId
+    || (((S.catalog && S.catalog.products || []).find(pr => pr.id === c.productId) || {}).outlet_id)
+    || null;
+  const ids = cartOutletIds();
+  if (ids.length <= 1) return [{ header: '', items }];
+
+  const brandOf = (oid) => {
+    const o = (S.qrContext.outlets || []).find(x => x.id === oid);
+    return o ? { brand: o.brand, name: S.lang==='ar' ? o.name_ar : o.name_en } : null;
+  };
+  const groups = [];
+  for (const oid of ids) {
+    const info = brandOf(oid);
+    const name = info ? info.name : (S.lang==='ar' ? 'منفذ' : 'Outlet');
+    const b = info && info.brand;
+    // الشعار يُعرض فقط حين تكون هوية المضيف مفعّلة -- بوابة واحدة تحكم
+    // كل المستويات، فلا يظهر شعار شريك تجاري داخل تجربة غير مُهوَّية.
+    /* الشعار والاسم المعروضان يخصّان **المنفذ** لا ما ورثه.
+       كشفته المراجعة البصرية: منفذ بلا هوية مستقلة كان يعرض اسم العلامة
+       الموروثة، فتصير ترويسة القسم نسخة من ترويسة الصفحة ولا تخبر الضيف
+       بشيء. القاعدة: هوية مستقلة (من المنفذ أو شريكه التجاري) تُعرض،
+       وغيابها يعني اسم المنفذ نفسه -- وهو ما يميّز الأقسام فعلًا. */
+    const own = b && b.whiteLabelActive && ['outlet', 'merchant'].includes(b.sources && b.sources.logo_text);
+    const ownLogo = b && b.whiteLabelActive && ['outlet', 'merchant'].includes(b.sources && b.sources.logo_asset_id);
+    const logo = ownLogo ? b.logo_src : null;
+    const display = own ? b.logo_text : name;
+    groups.push({
+      header: `<div class="outletsection">
+        ${logo? `<img src="${esc(logo)}" alt="" onerror="this.style.display='none'">`:''}
+        <span class="nm">${esc(display)}</span></div>`,
+      items: items.filter(c => outletOf(c) === oid),
+    });
+  }
+  // أصناف بلا منفذ معروف تبقى في مجموعة بلا ترويسة بدل إخفائها.
+  const orphans = items.filter(c => !outletOf(c));
+  if (orphans.length) groups.push({ header: '', items: orphans });
+  return groups;
+}
+
 function scrCart(){
   const t1 = App.computeTotals();
   return `
   <div class="scrhead"><div class="top"><button class="back" onclick="App.goScreen('menu')">${S.lang==='ar'?'→':'←'}</button><h3>${t('yourCart')}</h3><div style="width:32px"></div></div></div>
   <div class="scrbody">
-    ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : S.cart.map(c=>{
+    ${S.cart.length===0? `<div class="empty-hint">${t('emptyCart')}</div>` : cartGroupedByOutlet().map(group=>`
+      ${group.header}
+      ${group.items.map(c=>{
       const cName = S.lang==='ar'?c.ar:c.en;
       const cMedia = c.imageUrl
         ? `<img src="${c.imageUrl}" alt="${cName}" loading="lazy" onerror="this.outerHTML='<div class=&quot;media-placeholder sm&quot; style=&quot;font-size:16px&quot;>${esc(productMonogram(cName))}</div>'">`
@@ -1623,7 +2017,7 @@ function scrCart(){
         <p class="opt">${[c.variantLabel?(S.lang==='ar'?c.variantLabel.ar:c.variantLabel.en):null, ...c.addonLabels.map(a=>S.lang==='ar'?a.ar:a.en)].filter(Boolean).join(' · ')||'&nbsp;'}</p>
         <div class="stepper" style="display:flex;align-items:center;gap:8px"><button onclick="App.cartStep('${c.key}',-1)">–</button><span>${c.qty}</span><button onclick="App.cartStep('${c.key}',1)">+</button></div>
       </div><div style="text-align:end"><div class="price">${money(c.lineTotal)}</div><button class="rm" onclick="App.cartRemove('${c.key}')">${S.lang==='ar'?'حذف':'Remove'}</button></div></div>`;
-    }).join('')}
+      }).join('')}`).join('')}
     ${S.cart.length? `
       <div class="promorow" style="display:flex;gap:8px;margin:14px 0;">
         <input id="promoInput" placeholder="${t('promo')}" value="${S.promo?S.promo.code:''}" style="flex:1;border:1px solid var(--cream-200);border-radius:9px;padding:9px 12px;font-size:12.5px;background:var(--white);">
@@ -2037,16 +2431,22 @@ function renderStaffShell(){
   const body = groups
     ? `<div class="admin-layout">
         <nav class="sidebar" aria-label="${S.lang==='ar'?'التنقل':'Navigation'}">
-          <div class="sidebar-scope">${S.lang==='ar'?'النطاق الحالي':'Current scope'}<b>${S.session.user.username} · ${role}</b></div>
+          <div class="sidebar-scope">${S.lang==='ar'?'النطاق الحالي':'Current scope'}<b>${actingScopeLabel()}</b></div>
           ${S.contextSwitchedFrom ? `<div class="notebox" style="background:var(--amber-100);color:var(--amber-500);margin:8px 0;font-size:11px">
-            ${S.lang==='ar'?'أنت داخل سياق شريك':'You are inside a partner context'}
+            ${S.lang==='ar'
+              ? `تعمل داخل سياق: <b>${esc(actingPartnerName())}</b><br>صلاحياتك ما زالت SuperAdmin كاملة — البيانات التشغيلية وحدها مُقيَّدة بهذا السياق.`
+              : `Acting in context: <b>${esc(actingPartnerName())}</b><br>Your authority is still full SuperAdmin — only operational data is scoped to this context.`}
             <button class="btn-small" style="margin-top:6px;width:100%" onclick="App.exitPartnerContext()">${S.lang==='ar'?'العودة لسياق المنصة':'Back to platform'}</button>
           </div>`:''}
-          ${groups.map(g=>`
+          ${groups.map(g=>{
+            // داخل سياق شريك تُحجب شاشات إدارة المنصة (انظر PLATFORM_ONLY_SCREENS)
+            const items = S.contextSwitchedFrom ? g.items.filter(([id]) => !PLATFORM_ONLY_SCREENS.includes(id)) : g.items;
+            if (!items.length) return '';
+            return `
             <div class="sidebar-group">
               <div class="sidebar-group-label">${g.label}</div>
-              ${g.items.map(([id,lbl])=>`<button class="sidebar-link ${S.screen===id?'active':''}" onclick="App.setStaffScreen('${id}')">${lbl}</button>`).join('')}
-            </div>`).join('')}
+              ${items.map(([id,lbl])=>`<button class="sidebar-link ${S.screen===id?'active':''}" onclick="App.setStaffScreen('${id}')">${lbl}</button>`).join('')}
+            </div>`;}).join('')}
         </nav>
         <div class="bohshell"><div class="bohwrap">${shellInner}</div></div>
       </div>`
@@ -3495,6 +3895,92 @@ function renderBranding(){
       </div>
     </div>
     <button class="btn-small brass" onclick="App.saveBranding()">${t('save')}</button>
+  </div>
+  ${renderBrandMediaPanel()}`;
+}
+
+/* ── Scope 2: وسائط الهوية ومصادر الوراثة ──────────────────────────────
+   المتطلَّب الصريح (§13): لا تكفي كلمة «موروثة» -- يجب أن يُقرأ المستوى
+   بالاسم. مشغّل يرى «موروثة» ولا يعرف من أين لا يستطيع تغيير شيء: يعدّل
+   المستوى الخطأ ولا يتحرك شيء، ثم يظن أن النظام معطّل. */
+function brandScopeLabel(src){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  return {
+    outlet:   L('المنفذ','Outlet'),
+    merchant: L('الشريك التجاري','Commercial Partner'),
+    property: L('العقار','Property'),
+    partner:  L('الشريك الرئيسي','Main Partner'),
+    default:  L('افتراضي ALNADL','ALNADL Default'),
+  }[src] || src;
+}
+
+function renderBrandMediaPanel(){
+  const L=(ar,en)=>S.lang==='ar'?ar:en;
+  const d = S.brandMedia;
+  if (!d) return `<div class="panel"><p class="ph">${L('جارٍ تحميل الوسائط…','Loading media…')}</p></div>`;
+
+  const scopes = d.scopes || [];
+  const cur = d.selectedScope || (scopes[0] && `${scopes[0].type}:${scopes[0].id}`) || null;
+  const eff = d.effective || {};
+  const sources = eff.sources || {};
+
+  const assetRow = (key, assetType, label) => {
+    const src = eff[key];
+    const srcLevel = sources[`${assetType}_asset_id`] || 'default';
+    const ownedHere = cur && srcLevel !== 'default' && cur.startsWith(srcLevel);
+    return `<div class="prodlistrow" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div class="nm">${label}</div>
+        <span class="badge ${ownedHere?'ready':'pending'}">
+          ${srcLevel==='default'? L('غير مضبوط','Not set') : `${ownedHere? L('مضبوط هنا','Set here') : L('موروث من','Inherited from')} ${ownedHere?'':brandScopeLabel(srcLevel)}`}
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        ${src
+          ? `<img src="${esc(src)}" alt="${label}" style="max-height:52px;max-width:180px;object-fit:contain;background:var(--ink-800);border-radius:8px;padding:6px"
+               onerror="this.outerHTML='<span class=&quot;ph&quot;>${L('الملف مفقود','File missing')}</span>'">`
+          : `<span class="ph">${L('لا صورة','No image')}</span>`}
+        <input type="file" id="upl_${assetType}" accept="image/png,image/jpeg,image/webp" style="font-size:11px">
+        <button class="btn-small brass" onclick="App.uploadBrandAsset('${assetType}')">${src? L('استبدال','Replace') : L('رفع','Upload')}</button>
+        ${ownedHere? `<button class="btn-small line" onclick="App.deleteBrandAssetAt('${assetType}')">${L('حذف','Remove')}</button>`:''}
+      </div>
+    </div>`;
+  };
+
+  const textRow = (field, label) => {
+    const lvl = sources[field] || 'default';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0">
+      <span style="font-size:12px">${label}: <strong>${esc(eff[field] == null ? '—' : String(eff[field]))}</strong></span>
+      <span class="badge ${lvl==='default'?'pending':'ready'}">${brandScopeLabel(lvl)}</span>
+    </div>`;
+  };
+
+  return `
+  <div class="panel">
+    <h3>${L('وسائط الهوية والوراثة','Brand media & inheritance')}</h3>
+    <p class="ph">${L(
+      'الترتيب: المنفذ ← الشريك التجاري ← العقار ← الشريك الرئيسي ← افتراضي ALNADL. الوراثة حقلًا بحقل: تغيير البانر وحده يُبقي الشعار موروثًا. حذف العنصر يعيده تلقائيًا إلى المستوى الأعلى.',
+      'Order: Outlet, then Commercial Partner, then Property, then Main Partner, then ALNADL default. Inheritance is field-by-field: changing only the banner leaves the logo inherited. Removing an item returns it to the level above.')}</p>
+    <div class="darkfield" style="max-width:420px">
+      <label>${L('النطاق','Scope')}</label>
+      <select onchange="App.selectBrandScope(this.value)">
+        ${scopes.map(sc=>`<option value="${sc.type}:${sc.id}" ${cur===`${sc.type}:${sc.id}`?'selected':''}>${brandScopeLabel(sc.type)} — ${esc(sc.label)}</option>`).join('')}
+      </select>
+    </div>
+    ${assetRow('logo_src','logo', L('الشعار','Logo'))}
+    ${assetRow('banner_src','banner', L('البانر / الغلاف','Banner / Hero'))}
+    ${assetRow('favicon_src','favicon', L('أيقونة المتصفح','Favicon'))}
+    <div class="section-sm">${L('القيم الفعّالة ومصدر كل منها','Effective values and the source of each')}</div>
+    ${textRow('primary_color', L('اللون الأساسي','Primary color'))}
+    ${textRow('secondary_color', L('اللون الثانوي','Secondary color'))}
+    ${textRow('logo_text', L('اسم العلامة','Brand name'))}
+    ${textRow('page_title_ar', L('عنوان الصفحة (AR)','Page title (AR)'))}
+    ${textRow('show_powered_by', L('إظهار «مقدَّم من ALNADL»','Show powered-by'))}
+    ${eff.gatedBy? `<div class="empty-hint" style="color:var(--brass-400,#C08A3E);margin-top:10px">${
+      eff.gatedBy==='plan_entitlement'
+        ? L('الهوية البيضاء غير مشمولة في باقة الشريك — لن تظهر للضيف مهما ضُبطت.','White label is not included in this partner\'s plan — nothing will reach the guest.')
+        : L('الوضع ما زال «علامة النادل» — غيّره أعلاه لتفعيل الهوية.','Mode is still Alnadl branding — change it above to activate the identity.')
+    }</div>`:''}
   </div>`;
 }
 

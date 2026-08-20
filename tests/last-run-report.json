@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-19T16:16:53.145Z",
+  "timestamp": "2026-08-20T14:43:11.068Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -122,6 +122,22 @@
       "status": "PASS"
     },
     {
+      "suite": "./brand-media.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./direct-outlet-products.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./context-switch-audit.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./context-switch-audit.js",
+      "status": "PASS"
+    },
+    {
       "suite": "./operational-closure-b.js",
       "status": "PASS"
     },
@@ -134,11 +150,19 @@
       "status": "PASS"
     },
     {
+      "suite": "./production-persistence.js",
+      "status": "PASS"
+    },
+    {
       "suite": "./browser-activation-journey.js",
       "status": "PASS"
     },
     {
       "suite": "./browser-payment-policy.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./browser-brand-identity.js",
       "status": "PASS"
     },
     {

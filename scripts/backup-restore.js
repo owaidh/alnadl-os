@@ -24,7 +24,10 @@ const os = require('os');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
-const DEFAULT_DB = process.env.SQLITE_PATH || path.join(__dirname, '..', 'data.sqlite');
+// P0 Persistence: المسار يأتي من نفس مُحلِّل db.js لا من نسخة ثانية للقاعدة.
+// نسخة ثانية تعني -- عند أول اختلاف -- أداة تنسخ ملفًا غير الذي يخدم
+// الإنتاج، وتُصدر تقرير نجاح عن نسخة احتياطية فارغة.
+const { DB_PATH: DEFAULT_DB } = require('../db.js');
 const DEFAULT_OUT = process.env.BACKUP_DIR || path.join(__dirname, '..', 'backups');
 const RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || '14', 10);
 

@@ -123,3 +123,11 @@
 | **ملف `package-lock.json`** | **Implemented – Awaiting Environment Verification** | `scripts/generate-lockfile.sh` جاهز | **وصول إلى registry.npmjs.org** | تشغيل السكربت على جهاز متصل ثم إيداع الملف |
 | **صور QR (SVG/PNG · طباعة · مسح بجهاز)** | **Implemented – Awaiting Environment Verification** | منطق الرمز مُختبَر بالكامل في `tests/qr-flow.js` — الصورة وحدها غير مُتحقَّقة | **npm + جهاز حقيقي** | `npm ci && npm run verify:qr` ثم مسح رمز مطبوع بجهازين |
 | **بناء وتشغيل صورة Docker** | **Implemented – Awaiting Environment Verification** | `tests/production-deployment.js` — 27 تأكيدًا تبني الشجرة من `COPY` وتُشغّلها فعليًا | **مُشغِّل حاويات** | `bash scripts/docker-verify.sh` |
+
+### P0 لاحق — ثبات البيانات في الإنتاج (2026-08-19)
+
+| Requirement | Status | Evidence / Test | External Dependency | Remaining Action |
+|---|---|---|---|---|
+| **`SQLITE_PATH` إلزامي في الإنتاج (Fail-Fast)** | **Implemented & Verified** | `tests/production-persistence.js` — 32 تأكيدًا، منها البقاء عبر إعادة التشغيل وإعادة إنشاء الحاوية | — | لا شيء |
+| **`SESSION_SECRET` ثابت عبر إعادة التشغيل** | **Implemented & Verified** | نفس المجموعة، البند 9 — لم يُمسّ منطق الأمان، أُثبتت الخاصية فقط | — | لا شيء |
+| فحوص البقاء داخل Docker حقيقي | **Implemented – Awaiting Environment Verification** | أُضيفت إلى `scripts/docker-verify.sh` | **مُشغِّل حاويات** | `bash scripts/docker-verify.sh` |

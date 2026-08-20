@@ -36,11 +36,17 @@ const suites = [
   './corrective-closure.js',
   './r3-gap-closure.js',
   './white-label.js',
+  './brand-media.js',
+  './direct-outlet-products.js',
+  './context-switch-audit.js',
+  './context-switch-audit.js',
   './operational-closure-b.js',
   './trusted-proxy.js',
   './production-deployment.js',
+  './production-persistence.js',
   './browser-activation-journey.js',
   './browser-payment-policy.js',
+  './browser-brand-identity.js',
   './qr-flow.js',
 ];
 

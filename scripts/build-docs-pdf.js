@@ -26,6 +26,7 @@ const DOCS = [
   { file: 'docs/R4A_PRODUCTION_READINESS_AUDIT.md', category: 'تدقيق النظام · System Audit', landscape: true },
   { file: 'docs/R4B_CLOSURE_REPORT.md', category: 'سجل التسليم · Delivery Record', landscape: true },
   { file: 'docs/OPERATIONAL_CLOSURE_REPORT.md', category: 'سجل التسليم · Delivery Record', landscape: true },
+  { file: 'docs/FINAL_CLOSURE_REPORT.md', category: 'سجل التسليم · Delivery Record', landscape: true },
   { file: 'docs/P0_ENTRY_FLOWS_CLOSURE.md', category: 'سجل التسليم · Delivery Record', landscape: true },
   { file: 'docs/DOCKER_VERIFICATION_README.md', category: 'سجل التسليم · Delivery Record' },
   { file: 'docs/POSTGRESQL_MIGRATION_PLAN.md', category: 'جاهزية الإطلاق · Go-Live Readiness' },

@@ -26,6 +26,8 @@ const qrLib = require('./lib/qr.js');
 const { getWallet, quoteCoverage, commitSpend, findWalletForPartner, assertWalletBelongsToPartner } = require('./lib/wallet.js');
 const paymentPolicy = require('./lib/payment-policy.js');
 const merchantStatus = require('./lib/merchant-status.js');
+const brandMedia = require('./lib/brand-media.js');
+const brandingLib = require('./lib/branding.js');
 const { getActiveModel, computeAmounts, recordOrderRevenue, recordRefundRevenue } = require('./lib/revenue-engine.js');
 const { processOutboxOnce, startEngageWorker, stopEngageWorker } = require('./lib/engage-worker.js');
 const { startSession, serveNextMoment, submitResponse, endSession } = require('./lib/engage-session.js');
@@ -67,9 +69,144 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
-function audit(actor, role, action, entity, before, after, reason) {
-  db.prepare(`INSERT INTO audit_log (actor,role,action,entity,before,after,reason,ts) VALUES (?,?,?,?,?,?,?,?)`)
-    .run(actor, role, action, entity, before != null ? JSON.stringify(before) : null, after != null ? JSON.stringify(after) : null, reason || null, Date.now());
+/* قارئ multipart/form-data لملف واحد. مكتوب هنا لأن المشروع بلا اعتماديات
+   وقت تشغيل، ولأن الحاجة ضيقة: حقل ملف واحد وحقول نصّية قليلة.
+
+   الحدّ الصلب يُفرض **أثناء الاستقبال** لا بعده: انتظار اكتمال الجسم ثم
+   قياسه يعني أن مرسِلًا واحدًا يستطيع دفع مئات الميغابايتات إلى ذاكرة
+   الخادم قبل أن نقول "كبير جدًا". القطع عند تجاوز الحدّ يجعل الهجوم
+   مستحيلًا لا مكلفًا فقط. */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // فوق أكبر حدّ نوعي (البانر 3MB) بهامش الترويسات
+
+function readMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const ctype = req.headers['content-type'] || '';
+    const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(ctype);
+    if (!/multipart\/form-data/i.test(ctype) || !m) {
+      const e = new Error('Expected multipart/form-data'); e.status = 400; return reject(e);
+    }
+    const boundary = Buffer.from('--' + (m[1] || m[2]).trim());
+    const chunks = []; let total = 0; let aborted = false;
+    req.on('data', (c) => {
+      if (aborted) return;
+      total += c.length;
+      if (total > MAX_UPLOAD_BYTES) {
+        aborted = true;
+        const e = new Error('Upload exceeds the maximum allowed size');
+        e.status = 413; e.code = 'TOO_LARGE';
+        req.destroy();
+        return reject(e);
+      }
+      chunks.push(c);
+    });
+    req.on('error', (err) => { if (!aborted) reject(err); });
+    req.on('end', () => {
+      if (aborted) return;
+      const buf = Buffer.concat(chunks);
+      const fields = {}; let file = null;
+      let idx = buf.indexOf(boundary);
+      while (idx !== -1) {
+        const partStart = idx + boundary.length;
+        if (buf.slice(partStart, partStart + 2).toString() === '--') break; // الحدّ الختامي
+        const headerEnd = buf.indexOf('\r\n\r\n', partStart);
+        if (headerEnd === -1) break;
+        const headers = buf.slice(partStart, headerEnd).toString('utf8');
+        const next = buf.indexOf(boundary, headerEnd);
+        if (next === -1) break;
+        // -2 لإسقاط CRLF السابق للحدّ التالي
+        const body = buf.slice(headerEnd + 4, next - 2);
+        const nameM = /name="([^"]*)"/i.exec(headers);
+        const fileM = /filename="([^"]*)"/i.exec(headers);
+        if (nameM) {
+          if (fileM && fileM[1]) {
+            // اسم الملف يُنقل كما وصل ولا يُستخدم في أي مسار على القرص --
+            // المفتاح يولّده الخادم. الاسم للعرض فقط.
+            file = { field: nameM[1], filename: fileM[1], buffer: body };
+          } else {
+            fields[nameM[1]] = body.toString('utf8');
+          }
+        }
+        idx = next;
+      }
+      resolve({ fields, file });
+    });
+  });
+}
+
+/* ---------------------------------------------------------------------------
+   Acting Context — **بيانات وصفية بحتة، لا صلاحية**.
+
+   الغرض واحد: أن يقول سجل التدقيق «SuperAdmin س عدّل سياسة الشريك أ **وهو
+   يعمل داخل سياق أ**» بدل «SuperAdmin س عدّل سياسة». الفاعل كان معروفًا
+   والهدف كذلك، والمفقود هو نيّة العمل -- وهي ما يُسأل عنه أول ما تُراجَع
+   حادثة.
+
+   حدود صارمة، وكل واحدة مقصودة:
+     · لا تمنح صلاحية ولا تغيّر دورًا ولا تدخل أي قرار RBAC إطلاقًا.
+     · تُقبل من SuperAdmin وحده. من غيره **تُتجاهل بصمت**: رفض الطلب كان
+       سيحوّل ترويسة تجميلية إلى سطح هجوم جديد (منع الخدمة بترويسة)، بينما
+       التجاهل يُلغي أثرها تمامًا وهو المطلوب.
+     · يجب أن تشير إلى شريك **قائم فعلًا**، وإلا فقيمة مخترعة تلوّث السجل
+       بسياق لا وجود له.
+
+   ولا جلسة خادمية للسياق: الهدف ربط تدقيقي لا مصادقة، وبناء جلسة سياق كان
+   سيعني حالة خادمية تُدار وتُبطل وتُزامن -- كلفة معمارية بلا مقابل هنا.
+--------------------------------------------------------------------------- */
+const { AsyncLocalStorage } = require('node:async_hooks');
+const requestContext = new AsyncLocalStorage();
+
+function attachActingContext(session, req) {
+  if (!session) return;
+  session.actingPartnerId = null;
+  const raw = req && req.headers && req.headers['x-acting-partner-id'];
+  if (!raw) return;
+  // دور غير SuperAdmin: تُتجاهل بلا أثر على السجل ولا على النطاق.
+  if (session.role !== 'SuperAdmin') return;
+  const pid = String(raw).trim();
+  if (!pid) return;
+  if (!db.prepare('SELECT 1 FROM partners WHERE id = ?').get(pid)) return; // شريك غير موجود
+  session.actingPartnerId = pid;
+}
+
+/* المستأجر الذي مسّه الإجراء فعلًا. يُشتقّ من الكيان نفسه لا يُصرَّح به،
+   فلا يستطيع العميل أن يدّعي هدفًا غير الذي لمسه. */
+function resolveTargetPartner(entity) {
+  if (!entity) return null;
+  const raw = String(entity);
+  const id = raw.includes(':') ? raw.split(':').pop() : raw;
+  try {
+    if (db.prepare('SELECT 1 FROM partners WHERE id = ?').get(id)) return id;
+    const prop = db.prepare('SELECT partner_id FROM properties WHERE id = ?').get(id);
+    if (prop) return prop.partner_id;
+    const outlet = db.prepare('SELECT property_id FROM outlets WHERE id = ?').get(id);
+    if (outlet) return propertyPartnerId(outlet.property_id);
+    const mer = db.prepare('SELECT property_id FROM merchants WHERE id = ?').get(id);
+    if (mer) return propertyPartnerId(mer.property_id);
+    const ord = db.prepare('SELECT partner_id FROM orders WHERE id = ?').get(id);
+    if (ord) return ord.partner_id;
+    const wal = db.prepare('SELECT partner_id FROM wallet_accounts WHERE id = ?').get(id);
+    if (wal) return wal.partner_id;
+  } catch (e) { /* الاشتقاق تحسين للسجل، لا يجوز أن يُسقط الإجراء */ }
+  return null;
+}
+
+/* التوقيع يقبل الجلسة اختياريًا كوسيط أخير. الاستدعاءات القديمة تعمل كما
+   هي بلا تعديل -- إجبار كل نقطة على التمرير كان سيعني تغيير عشرات المواضع
+   في تغيير غرضه التدقيق وحده. */
+/* السياق يُحمل عبر AsyncLocalStorage لا عبر متغيّر عام: الطلبات تتداخل عند
+   كل await، ومتغيّر عام واحد كان سينسب إجراء طلبٍ إلى سياق طلبٍ آخر --
+   وهو تلويث للسجل أسوأ من غيابه، لأنه يبدو صحيحًا. البديل (تمرير الجلسة
+   يدويًا في عشرات المواضع) كان يضمن نسيان موضع أو اثنين. */
+function audit(actor, role, action, entity, before, after, reason, session) {
+  const ctx = session || (requestContext.getStore() || {}).session;
+  const actingPartnerId = ctx && ctx.actingPartnerId ? ctx.actingPartnerId : null;
+  const targetPartnerId = resolveTargetPartner(entity);
+  db.prepare(`INSERT INTO audit_log (actor,role,action,entity,before,after,reason,ts,acting_partner_id,target_partner_id)
+              VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(actor, role, action, entity,
+      before != null ? JSON.stringify(before) : null,
+      after != null ? JSON.stringify(after) : null,
+      reason || null, Date.now(), actingPartnerId, targetPartnerId);
 }
 // QR analytics (§5): records a raw scan/order event per token. Deliberately
 // NOT deduplicated or throttled here — a real "unique visitor" definition
@@ -326,7 +463,24 @@ on('GET', '/api/catalog', null, async (req, res, p, query) => {
   // own Alnadl-operated merchant always shows.
   const visibleMerchants = marketplaceOn ? merchants : merchants.filter(m => m.kind === 'alnadl');
   const visibleMerchantIds = new Set(visibleMerchants.map(m => m.id));
-  sendJSON(res, 200, { categories: cats, products: products.filter(p => visibleMerchantIds.has(p.merchant_id)), merchants: visibleMerchants });
+  /* منتج بلا شريك تجاري = منتج **مباشر** للمنفذ/الشريك الرئيسي، لا منتج
+     بلا هوية. الشريك التجاري حالة اختيارية تنشأ حين يوجد طرف تجاري آخر
+     داخل المنفذ، وليس شرطًا ليبيع الشريك الرئيسي منتجاته بنفسه.
+
+     الخلل الذي أُغلق: هذا الفلتر بوابة marketplace -- غرضه إخفاء منتجات
+     شركاء تجاريين عن باقة لا تشملهم. لكن `Set.has(null)` تساوي false،
+     فكان يُسقط المنتج المباشر أيضًا **بلا قصد**: منتج صالح للطلب فعلًا
+     (تُقبل طلباته وتُحسب إيراداته) لكنه لا يظهر لأحد.
+
+     والدليل أن الاستبعاد لم يكن قاعدة تجارية: عولج العَرَض نفسه في P0-2
+     بجعل نقطة الإنشاء **تملأ** merchant_id افتراضيًا (انظر أدناه)، وسُجّل
+     حينها أن الطلب المباشر للمنتج كان يعمل بينما لا يظهر في الكتالوج --
+     أي أن النظام يعدّه صالحًا، والفلتر وحده هو من يخفيه. عولج المُنتِج ولم
+     يُعالَج الفلتر، فبقي الخلل لكل منتج يصل بمسار آخر.
+
+     البوابة الآن تُطبَّق على من يخضع لها فقط: من له شريك تجاري. */
+  const visibleProducts = products.filter(p => !p.merchant_id || visibleMerchantIds.has(p.merchant_id));
+  sendJSON(res, 200, { categories: cats, products: visibleProducts, merchants: visibleMerchants });
 });
 
 /* ------------------------------ LOYALTY (Phase 3 §15; Go-Live P0 §3.4-§3.8) ---------
@@ -2697,18 +2851,29 @@ on('GET', '/api/service-hub/:token', null, async (req, res, p) => {
   // بعد اختيار الضيف، فالوراثة في هذه اللحظة Property -> Partner -> default.
   // بوابة الميزة داخل المُحلِّل نفسه، فلا حاجة لفحصها هنا.
   const branding = resolveBranding({ partnerId: property.partner_id, propertyId: property.id });
+  /* Scope 2 — هوية كل منفذ تُحلّ على الخادم وتُرفق بصفّه.
+     السبب: الواجهة يجب ألا تُعيد بناء الوراثة. لو حسبت الشاشة الهوية
+     بنفسها لصارت نسخة ثانية من قاعدة الوراثة، وأول اختلاف بينها وبين
+     المُحلِّل خللٌ صامت يراه الضيف ولا يظهر في اختبار.
+     والشريك التجاري يُشتقّ داخل المُحلِّل من outlets.merchant_id حصرًا. */
+  const withBrand = (o) => o ? {
+    ...o,
+    brand: resolveBranding({ partnerId: property.partner_id, propertyId: property.id, outletId: o.id }),
+  } : null;
   const base = { partner, property, zone, point, token: p.token, features, branding };
   if (outlets.length <= 1) {
     // Single (or zero, defensively — falls back to base context) outlet: skip the hub entirely.
-    return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] || null });
+    // §7: رمز مرتبط بمنفذ واحد يسلّم هوية ذلك المنفذ (ومعه شريكه التجاري)
+    // من نقطة الدخول، فلا يرى الضيف هوية المضيف ثم تتحوّل.
+    return sendJSON(res, 200, { ...base, hub: false, outlet: withBrand(outlets[0]) || null });
   }
   if (!features.multiOutlet) {
     // Property has multiple outlet rows but the partner's plan doesn't include
     // multiOutlet — degrade gracefully to the first one rather than error,
     // since this is a display capability, not a chargeable action.
-    return sendJSON(res, 200, { ...base, hub: false, outlet: outlets[0] });
+    return sendJSON(res, 200, { ...base, hub: false, outlet: withBrand(outlets[0]) });
   }
-  sendJSON(res, 200, { ...base, hub: true, outlets });
+  sendJSON(res, 200, { ...base, hub: true, outlets: outlets.map(withBrand) });
 });
 
 /* ------------------------------ WHITE LABEL / MULTI-TENANT BRANDING (§11, §12) --------------------------------- */
@@ -2735,23 +2900,169 @@ on('GET', '/api/admin/branding', ['SuperAdmin', 'PartnerAdmin'], async (req, res
        على الخادم: أن تكون الميزة مُفعّلة للشريك، وأن يكون النطاق ضمن
        نطاق الفاعل. */
 function brandingScopePartner(scopeType, scopeId) {
+  // Scope 2 — مستوى الشريك يدخل النموذج العام. الحقول الجديدة (الوسائط،
+  // اللون الثانوي، عنوان الصفحة) تسكن branding_overrides وحدها ولا تُضاف
+  // إلى partner_branding، فلا يزداد الازدواج القائم بين الجدولين.
+  if (scopeType === 'partner') {
+    return db.prepare('SELECT id FROM partners WHERE id = ?').get(scopeId) ? scopeId : null;
+  }
   if (scopeType === 'property') return propertyPartnerId(scopeId);
   if (scopeType === 'outlet') {
     const row = db.prepare(`SELECT property_id FROM outlets WHERE id = ?`).get(scopeId);
+    return row ? propertyPartnerId(row.property_id) : null;
+  }
+  /* الشريك التجاري ينتمي إلى عقار، والعقار إلى شريك مضيف -- ومن هنا يُشتقّ
+     المستأجر. لا يملك الشريك التجاري مستأجرًا مستقلًا ولا اشتراكًا، ولذلك
+     لا دور إداري جديد له في هذه الجولة (قرار صاحب المنتج): يديره
+     PartnerAdmin للشريك المضيف ضمن نطاقه واستحقاقه. */
+  if (scopeType === 'merchant') {
+    const row = db.prepare(`SELECT property_id FROM merchants WHERE id = ?`).get(scopeId);
     return row ? propertyPartnerId(row.property_id) : null;
   }
   return null;
 }
 
 function assertBrandingScope(session, scopeType, scopeId) {
-  if (!['property', 'outlet'].includes(scopeType)) {
-    const e = new Error('scopeType must be property or outlet'); e.status = 400; throw e;
+  if (!['partner', 'property', 'outlet', 'merchant'].includes(scopeType)) {
+    const e = new Error('scopeType must be partner, property, outlet or merchant'); e.status = 400; throw e;
   }
   const partnerId = brandingScopePartner(scopeType, scopeId);
   if (!partnerId) { const e = new Error('Scope not found'); e.status = 404; throw e; }
   assertTenantWrite(session, partnerId);
   return partnerId;
 }
+
+/* ------------------------------ ADMIN ACTING CONTEXT (Governance) ---------------------
+   حدثان مستقلان يؤطّران ما بينهما. الغرض ربط تدقيقي لا مصادقة: لا جلسة
+   خادمية تُنشأ، ولا صلاحية تُمنح، ولا دور يتغيّر -- الرمز نفسه قبل الحدث
+   وبعده. القيمة أن قارئ السجل يرى «دخل سياق أ … عدّل … خرج» كسردٍ واحد
+   بدل إجراءات معلّقة بلا إطار. */
+on('POST', '/api/admin/acting-context/enter', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const pid = b && b.partnerId ? String(b.partnerId).trim() : '';
+  if (!pid || !db.prepare('SELECT 1 FROM partners WHERE id = ?').get(pid)) {
+    return sendJSON(res, 400, { error: 'A valid partnerId is required' });
+  }
+  audit(session.username, session.role, 'ADMIN_CONTEXT_ENTERED', `partner:${pid}`, null, { partnerId: pid }, b.reason || null,
+    { actingPartnerId: pid });
+  sendJSON(res, 200, { ok: true, actingPartnerId: pid });
+});
+
+on('POST', '/api/admin/acting-context/exit', ['SuperAdmin'], async (req, res, p, q, session) => {
+  const b = await readBody(req);
+  const pid = b && b.partnerId ? String(b.partnerId).trim() : (session.actingPartnerId || null);
+  // الخروج يُسجَّل حتى لو لم يُعرف الشريك: غياب حدث خروج يترك السرد مفتوحًا
+  // ويوحي بأن المشرف ما زال داخل السياق.
+  audit(session.username, session.role, 'ADMIN_CONTEXT_EXITED', pid ? `partner:${pid}` : 'platform', { partnerId: pid }, null, null,
+    { actingPartnerId: pid });
+  sendJSON(res, 200, { ok: true });
+});
+
+/* ------------------------------ BRAND MEDIA (Scope 2) ---------------------------------
+   رفع وسائط الهوية وتقديمها وحذفها. الأصل يُربط بنطاق (partner/property/
+   outlet/merchant) ويُختم بالمستأجر المالك، وكل مسار يمرّ بفحص واحد لا
+   يمكن نسيانه (lib/brand-media.js). */
+on('POST', '/api/admin/brand-assets/:scopeType/:scopeId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  let partnerId;
+  try { partnerId = assertBrandingScope(session, p.scopeType, p.scopeId); }
+  catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message }); }
+  // نفس بوابة الاستحقاق التي تحكم بقية الهوية: من لا يملك White Label لا
+  // يرفع وسائط له. الفحص هنا لا في الواجهة.
+  try { requireFeature(partnerId, 'whiteLabel'); }
+  catch (e) { return sendJSON(res, e.status || 403, { error: e.message, gate: e.gate }); }
+
+  let parsed;
+  try { parsed = await readMultipart(req); }
+  catch (e) { return sendJSON(res, e.status || 400, { error: e.message, code: e.code }); }
+  if (!parsed.file || !parsed.file.buffer || !parsed.file.buffer.length) {
+    return sendJSON(res, 400, { error: 'No file received' });
+  }
+  const assetType = parsed.fields.assetType || parsed.file.field;
+  let asset;
+  try {
+    asset = brandMedia.storeAsset({
+      scopeType: p.scopeType, scopeId: p.scopeId, partnerId, assetType,
+      buffer: parsed.file.buffer, originalName: parsed.file.filename, username: session.username,
+    });
+  } catch (e) { if (!e.status) throw e; return sendJSON(res, e.status, { error: e.message, code: e.code }); }
+
+  /* الربط بالهوية يقع في العملية نفسها: أصل مرفوع بلا ربط يبقى ملفًا
+     يتيمًا يستهلك مساحة ولا يظهر لأحد، والمستخدم يظن أنه ضبط شعارًا. */
+  const col = { logo: 'logo_asset_id', banner: 'banner_asset_id', favicon: 'favicon_asset_id' }[assetType];
+  const existing = brandingLib.getOverride(p.scopeType, p.scopeId);
+  const previousAssetId = existing ? existing[col] : null;
+  if (existing) {
+    db.prepare(`UPDATE branding_overrides SET ${col} = ?, updated_at = ?, updated_by = ?
+                WHERE scope_type = ? AND scope_id = ?`)
+      .run(asset.id, Date.now(), session.username, p.scopeType, p.scopeId);
+  } else {
+    db.prepare(`INSERT INTO branding_overrides (id,scope_type,scope_id,${col},updated_at,updated_by)
+                VALUES (?,?,?,?,?,?)`)
+      .run(uid('br'), p.scopeType, p.scopeId, asset.id, Date.now(), session.username);
+  }
+  // الاستبدال يحذف السابق: تركه يعني تراكمًا صامتًا لملفات لا يشير إليها
+  // شيء، وهو تسريب مساحة يظهر بعد أشهر لا بعد دقائق.
+  if (previousAssetId && previousAssetId !== asset.id) {
+    try { brandMedia.deleteAsset(previousAssetId); } catch (e) { /* الحذف لا يُسقط رفعًا ناجحًا */ }
+  }
+  audit(session.username, session.role, 'brand_asset_upload', `${p.scopeType}:${p.scopeId}`,
+    previousAssetId ? { assetId: previousAssetId } : null,
+    { assetId: asset.id, assetType, mime: asset.mime_type, bytes: asset.size_bytes }, null);
+  sendJSON(res, 201, {
+    id: asset.id, assetType, url: `/api/brand-assets/${asset.id}`,
+    mime: asset.mime_type, size: asset.size_bytes, width: asset.width, height: asset.height,
+  });
+});
+
+on('DELETE', '/api/admin/brand-assets/:assetId', ['SuperAdmin', 'PartnerAdmin'], async (req, res, p, q, session) => {
+  const asset = brandMedia.getAsset(p.assetId);
+  // نفس الرد للأصل غير الموجود وللأصل الذي يخصّ مستأجرًا آخر -- معرّفات
+  // الأصول لا تصلح لاستكشاف ما لدى الشركاء الآخرين.
+  if (!asset) return sendJSON(res, 404, { error: 'Asset not found' });
+  if (session.role !== 'SuperAdmin' && asset.partner_id !== session.scope) {
+    return sendJSON(res, 404, { error: 'Asset not found' });
+  }
+  brandMedia.deleteAsset(p.assetId);
+  audit(session.username, session.role, 'brand_asset_delete', `${asset.scope_type}:${asset.scope_id}`,
+    { assetId: p.assetId, assetType: asset.asset_type }, null, null);
+  // الحذف يُعيد الحقل إلى الوراثة تلقائيًا (deleteAsset يُفرّغ الإشارات)،
+  // فلا يبقى حقل يشير إلى أصل غير موجود -- أي لا صورة مكسورة للضيف.
+  sendJSON(res, 200, { ok: true, inherits: true });
+});
+
+/* تقديم الصورة. **عامّة عمدًا**: الشعار يظهر لضيف بلا جلسة، وحمايته خلف
+   مصادقة كانت ستمنع رحلة الضيف نفسها. ما ليس عامًّا هو الرفع والاستبدال
+   والحذف وقائمة الأصول -- وهي محكومة بالمستأجر أعلاه. */
+on('GET', '/api/brand-assets/:assetId', null, async (req, res, p) => {
+  const asset = brandMedia.getAsset(p.assetId);
+  if (!asset) return sendJSON(res, 404, { error: 'Not found' });
+  let buf;
+  try { buf = brandMedia.getStorageBuffer(asset); }
+  catch (e) {
+    // ملف مفقود على القرص: لا نُرجع صورة مكسورة ولا 500. 404 نظيف يجعل
+    // الواجهة تسقط إلى الوراثة كما لو لم يُضبط شعار أصلًا.
+    return sendJSON(res, 404, { error: 'Not found' });
+  }
+  res.writeHead(200, {
+    'Content-Type': asset.mime_type,
+    'Content-Length': buf.length,
+    // الأصل غير قابل للتغيير: المفتاح يتغيّر مع كل رفع، فالتخزين الطويل
+    // آمن ويُلغي طلبًا لكل صفحة في رحلة الضيف.
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'inline',
+  });
+  res.end(buf);
+});
+
+on('GET', '/api/admin/brand-assets', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
+  if (session.role !== 'SuperAdmin' && query.partnerId && query.partnerId !== session.scope) {
+    return sendJSON(res, 403, { error: 'Forbidden: cannot read another partner\'s assets' });
+  }
+  const partnerId = session.role === 'SuperAdmin' ? query.partnerId : session.scope;
+  if (!partnerId) return sendJSON(res, 400, { error: 'partnerId is required' });
+  sendJSON(res, 200, { assets: brandMedia.listAssets(partnerId) });
+});
 
 on('GET', '/api/admin/branding/effective', ['SuperAdmin', 'PartnerAdmin', 'PartnerViewer'], async (req, res, p, query, session) => {
   // كشفه الاختبار: تجاهل partnerId المخالف صامتًا كان يُرجع 200 ببيانات
@@ -3183,7 +3494,72 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
 // block, not a general template engine) because it is the one thing
 // that must differ between the two HTML responses.
 const DEV_ONLY_BLOCK = /<!--DEV-ONLY-->[\s\S]*?<!--\/DEV-ONLY-->\n?/;
-function serveStatic(req, res, pathname) {
+/* Scope 2 — حقن الهوية في HTML **قبل أول رسم**.
+
+   المشكلة التي يحلّها: الهوية كانت تُطبَّق بعد عودة /api/service-hub، أي
+   بعد تحميل الصفحة وتنفيذ JS وطلب شبكة إضافي. النتيجة وميض يرى فيه الضيف
+   هوية ALNADL ثم تتحوّل إلى هوية العميل -- وهو بالضبط ما يكسر الإحساس
+   بأنه دخل واجهة الجهة نفسها.
+
+   الحل: رمز QR موجود في `?t=` أي أن الخادم يستطيع حلّ السياق **قبل أن يرسل
+   بايتًا واحدًا**. نحقن العنوان والأيقونة ولون الهوية ووسم الشعار في
+   الترويسة نفسها، فيحمل أول رسم هوية العميل بلا انتظار JS إطلاقًا.
+
+   ما لا يُحقن: أي شيء يعتمد على اختيار الضيف لاحقًا (المنفذ). ذلك يتغيّر
+   داخل الجلسة ويتولاه Brand Shell. */
+function escapeHtml(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function brandingForToken(token) {
+  if (!token) return null;
+  try {
+    const row = db.prepare(`
+      SELECT pt.id AS point_id, z.property_id, pr.partner_id
+      FROM qr_tokens q JOIN points pt ON pt.id = q.point_id
+      JOIN zones z ON z.id = pt.zone_id JOIN properties pr ON pr.id = z.property_id
+      WHERE q.token = ? AND q.active = 1`).get(token);
+    if (!row) return null;
+    /* منفذ مرتبط مباشرة بالرمز: حين تحمل المنطقة منفذًا واحدًا فعّالًا،
+       يُحلّ سياق المنفذ (ومعه الشريك التجاري) من نقطة الدخول نفسها. هذا هو
+       متطلَّب §7: رمز يخصّ مقهًى مستقلًا يجب أن يُظهر هويته من أول رسم، لا
+       هوية الفندق ثم تتحول. */
+    const outlets = db.prepare(`SELECT id FROM outlets WHERE property_id = ? AND status = 'Active'`).all(row.property_id);
+    const outletId = outlets.length === 1 ? outlets[0].id : null;
+    return brandingLib.resolveBranding({
+      partnerId: row.partner_id, propertyId: row.property_id, outletId,
+    });
+  } catch (e) { return null; }
+}
+
+function injectBranding(html, token) {
+  const b = brandingForToken(token);
+  if (!b || !b.whiteLabelActive) return html;
+  let out = html;
+  const title = b.page_title_ar || b.logo_text;
+  if (title) out = out.replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeHtml(title)}</title>`);
+  if (b.favicon_src) {
+    out = out.replace(/<link rel="icon"[^>]*>/, `<link rel="icon" href="${escapeHtml(b.favicon_src)}">`);
+  }
+  /* اللون يُحقن كمتغيّر CSS على :root قبل أي ورقة أنماط، فيُطبَّق مع أول
+     رسم. والقيمة مرّت بتحقق hex على الخادم (lib/branding.js) قبل تخزينها،
+     فلا تحمل محارف تكسر السياق -- ومع ذلك تُهرَّب هنا أيضًا: دفاع في العمق
+     على قيمة تدخل <style>. */
+  const seed = {
+    primary: b.primary_color || null, logoText: b.logo_text || null,
+    logoSrc: b.logo_src || null, bannerSrc: b.banner_src || null,
+    showPoweredBy: b.show_powered_by, whiteLabelActive: true,
+  };
+  const style = seed.primary ? `<style>:root{--brand-primary:${escapeHtml(seed.primary)}}</style>` : '';
+  // البذرة تُقرأ من JSON داخل script type="application/json" -- لا تُنفَّذ،
+  // فحتى لو تسرّبت قيمة غريبة لا تصبح شيفرة.
+  const seedTag = `<script type="application/json" id="brand-seed">${JSON.stringify(seed).replace(/</g, '\\u003c')}</script>`;
+  return out.replace('</head>', `${style}${seedTag}</head>`);
+}
+
+function serveStatic(req, res, pathname, query) {
   if (pathname === '/dev-tools.js' && process.env.NODE_ENV === 'production') {
     res.writeHead(404); return res.end('Not found');
   }
@@ -3191,10 +3567,18 @@ function serveStatic(req, res, pathname) {
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    if (filePath === path.join(PUBLIC_DIR, 'index.html') && process.env.NODE_ENV === 'production') {
-      data = Buffer.from(data.toString('utf8').replace(DEV_ONLY_BLOCK, ''), 'utf8');
+    const isIndex = filePath === path.join(PUBLIC_DIR, 'index.html');
+    if (isIndex) {
+      let html = data.toString('utf8');
+      if (process.env.NODE_ENV === 'production') html = html.replace(DEV_ONLY_BLOCK, '');
+      html = injectBranding(html, query && query.t);
+      data = Buffer.from(html, 'utf8');
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream',
+      // الصفحة تتغيّر بتغيّر الرمز، فلا تُخزَّن بين رموز مختلفة.
+      ...(isIndex ? { 'Cache-Control': 'no-cache' } : {}),
+    });
     res.end(data);
   });
 }
@@ -3207,7 +3591,7 @@ const server = http.createServer(async (req, res) => {
   // /health and /ready are registered routes, not static assets — they must
   // reach the dispatcher below rather than being looked up on disk.
   const OPS_ROUTES = new Set(['/health', '/ready', '/version']);
-  if (!pathname.startsWith('/api/') && !OPS_ROUTES.has(pathname)) return serveStatic(req, res, pathname);
+  if (!pathname.startsWith('/api/') && !OPS_ROUTES.has(pathname)) return serveStatic(req, res, pathname, parsed.query);
 
   for (const r of routes) {
     if (r.method !== req.method) continue;
@@ -3238,8 +3622,9 @@ const server = http.createServer(async (req, res) => {
       let session = null;
       if (r.roles) {
         session = requireRole(authenticate(req), r.roles);
+        attachActingContext(session, req);
       }
-      await r.handler(req, res, params, parsed.query, session);
+      await requestContext.run({ session }, () => r.handler(req, res, params, parsed.query, session));
       const ms = Date.now() - startedAt;
       // Only slow requests are logged at info on the happy path -- logging
       // every 200 on a polling KDS would bury the signal in noise.

@@ -5,8 +5,102 @@
 const { DatabaseSync } = require('node:sqlite');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 
-const DB_PATH = process.env.SQLITE_PATH || path.join(__dirname, 'data.sqlite');
+/* ---------------------------------------------------------------------------
+   P0 — Production Data Persistence.
+
+   كان المسار `process.env.SQLITE_PATH || <مجلد التطبيق>/data.sqlite`. في
+   حاوية إنتاجية هذا الافتراض الصامت **يفقد كل البيانات**: مجلد التطبيق جزء
+   من طبقة الصورة، وأي restart أو redeploy يعيده كما كان. والأسوأ أن العطل
+   لا يُصدر صوتًا -- التطبيق يقلع، ويعمل، ويخدم الطلبات، ثم يعود يومًا إلى
+   الصفر وقد ضاعت طلبات وشركاء وحسابات مفعّلة. هذا ما وقع فعلًا في أول نشر:
+   المستخدم دخل، ثم حدّث الصفحة فوجد كلمة مروره الصحيحة مرفوضة، لأن حسابه
+   لم يعد موجودًا.
+
+   القرار: في الإنتاج **لا افتراض إطلاقًا**. المسار يُطلب صراحةً من البيئة
+   أو يرفض التطبيق الإقلاع.
+
+   ولماذا لا نفترض `/data` أو أي مسار "معقول" في الإنتاج: مسار التركيب قرار
+   بنية تحتية يملكه المشغّل ويختلف بين المزودين. افتراض مسار يعني أن نشرًا
+   على مزوّد آخر سيعمل بصمت على قاعدة مؤقتة -- وهو بالضبط العطل الذي نغلقه.
+   الكود لا يعرف Railway ولا `/data`؛ يعرف أنه يحتاج مسارًا دائمًا صريحًا.
+--------------------------------------------------------------------------- */
+function resolveDbPath() {
+  const provided = process.env.SQLITE_PATH;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (!isProduction) {
+    // التطوير والاختبار: الافتراض المحلي يبقى، فالبيئة الرملية تعمل بلا إعداد.
+    return provided || path.join(__dirname, 'data.sqlite');
+  }
+
+  if (!provided || !String(provided).trim()) {
+    console.error('\n❌ FATAL: NODE_ENV=production requires SQLITE_PATH to be set to an');
+    console.error('   absolute path on a PERSISTENT volume, e.g. /mnt/data/alnadl.sqlite');
+    console.error('   Refusing to start on an implicit path inside the application');
+    console.error('   directory: that directory lives in the container image layer, so');
+    console.error('   every restart or redeploy would silently discard the database.');
+    console.error('   The mount path is yours to choose -- this application does not');
+    console.error('   assume one, because it differs between hosting providers.\n');
+    process.exit(1);
+  }
+
+  const resolved = path.resolve(String(provided).trim());
+  const dir = path.dirname(resolved);
+
+  // المجلد يجب أن يكون موجودًا: إنشاؤه تلقائيًا كان سيُخفي الخطأ الأصلي --
+  // مسار مكتوب غلطًا يُنشئ مجلدًا جديدًا على القرص المؤقت ويبدو ناجحًا.
+  if (!fs.existsSync(dir)) {
+    console.error(`\n❌ FATAL: SQLITE_PATH directory does not exist: ${dir}`);
+    console.error('   The directory is NOT created automatically. A mistyped path would');
+    console.error('   otherwise create a fresh directory on ephemeral storage and look');
+    console.error('   like a successful start. Mount the volume, then set the path.\n');
+    process.exit(1);
+  }
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+  } catch (e) {
+    console.error(`\n❌ FATAL: SQLITE_PATH directory is not writable: ${dir}`);
+    console.error('   SQLite needs write access to the DIRECTORY, not just the file:');
+    console.error('   WAL mode creates sibling -wal and -shm files next to the database.\n');
+    process.exit(1);
+  }
+  return resolved;
+}
+
+const DB_PATH = resolveDbPath();
+
+/* تحذير -- لا إيقاف -- حين تبدو القاعدة على نفس نظام الملفات الذي يحمل
+   التطبيق. المقارنة بمعرّف الجهاز (st_dev) إشارة حقيقية: الحجم المركّب
+   يظهر بجهاز مختلف عن طبقة الصورة.
+
+   ولماذا تحذير لا `exit`: الإشارة **ليست قاطعة**. تشغيل على خادم فعلي أو
+   آلة افتراضية -- حيث الجذر كله دائم -- يعطي نفس الجهاز وهو إعداد سليم
+   تمامًا. الإيقاف هنا كان سيرفض نشرًا صحيحًا، وهو ثمن أفدح من تحذير يُقرأ.
+   قاعدة عامة في هذا المشروع: نُوقف على يقين، ونُحذّر على ترجيح. */
+function warnIfLikelyEphemeral(dbPath) {
+  if (process.env.NODE_ENV !== 'production') return;
+  try {
+    const dbDev = fs.statSync(path.dirname(dbPath)).dev;
+    const appDev = fs.statSync(__dirname).dev;
+    if (dbDev === appDev) {
+      console.warn('\n⚠️  WARNING: the database directory is on the same filesystem as the');
+      console.warn('   application code. If this is a container, that filesystem is the');
+      console.warn('   image layer and the database will NOT survive a restart.');
+      console.warn(`   Database: ${dbPath}`);
+      console.warn('   This is a warning, not a failure: on a plain server or VM a shared');
+      console.warn('   filesystem is perfectly normal. Verify persistence explicitly by');
+      console.warn('   writing a record, restarting, and confirming it is still there.\n');
+    }
+  } catch (e) { /* لا يجوز أن يمنع فحصٌ استشاري الإقلاع */ }
+}
+warnIfLikelyEphemeral(DB_PATH);
+
+// المسار الفعلي يُطبع دائمًا عند الإقلاع. المسار ليس سرًّا، وغيابه من السجل
+// هو ما جعل هذا العطل يمرّ: لا أحد كان يرى أين تُكتب القاعدة فعلًا.
+console.log(`[db] SQLite database: ${DB_PATH}`);
+
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA foreign_keys = ON;');
 // WAL mode (Write-Ahead Logging): allows readers to proceed concurrently
@@ -532,4 +626,7 @@ if (migrationResults.length) {
   console.log(`Applied ${migrationResults.length} migration(s): ${migrationResults.map(r => r.id).join(', ')}`);
 }
 
-module.exports = { db, uid, hash, hashPbkdf2, verifyPassword };
+// DB_PATH يُصدَّر ليكون **مصدرًا واحدًا** للمسار: النسخ الاحتياطي وأي أداة
+// أخرى تقرأ منه بدل إعادة حساب القاعدة بنفسها -- إعادة الحساب هي ما يُنتج
+// أداة تنسخ قاعدة غير التي يستخدمها الإنتاج.
+module.exports = { db, uid, hash, hashPbkdf2, verifyPassword, DB_PATH };

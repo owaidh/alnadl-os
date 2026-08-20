@@ -473,6 +473,80 @@ else
   echo "$MULTI_LOG" | tail -6 | sed 's/^/       /'
 fi
 
+# =============================================================================
+# P0 Production Data Persistence — SQLITE_PATH إلزامي، والبيانات تنجو
+# من إعادة إنشاء الحاوية على نفس الحجم.
+#
+# لماذا هذه الفحوص هنا تحديدًا: العطل الذي تُغلقه **لا يظهر في أي فحص
+# ثابت**. حاوية تكتب على قرص مؤقت تقلع وتعمل وتردّ 200 على كل شيء؛ لا
+# يظهر الخلل إلا حين تُعاد الحاوية وتُسأل عن سجل كُتب قبلها.
+# =============================================================================
+MISSING_LOG=$(docker run --rm \
+  -e NODE_ENV=production -e PORT=8787 \
+  -e SESSION_SECRET="$SESSION_SECRET" \
+  -e ADMIN_BOOTSTRAP_USERNAME="$ADMIN_USER" -e ADMIN_BOOTSTRAP_PASSWORD="$ADMIN_PASS" \
+  "$IMAGE" 2>&1)
+MISSING_CODE=$?
+if [ "$MISSING_CODE" -ne 0 ] && echo "$MISSING_LOG" | grep -q "SQLITE_PATH"; then
+  ok "production refuses to start without SQLITE_PATH"
+  ev "container exit code=$MISSING_CODE"
+  echo "$MISSING_LOG" | grep -E "FATAL|SQLITE_PATH|persistent" | sed 's/^/       /'
+else
+  bad "production started WITHOUT SQLITE_PATH — it would run on ephemeral storage"
+  ev "exit=$MISSING_CODE"
+  echo "$MISSING_LOG" | tail -6 | sed 's/^/       /'
+fi
+
+BADDIR_LOG=$(docker run --rm -v "${VOL_DATA}:/data" \
+  -e NODE_ENV=production -e PORT=8787 -e SQLITE_PATH=/data/missing-dir/app.sqlite \
+  -e SESSION_SECRET="$SESSION_SECRET" \
+  -e ADMIN_BOOTSTRAP_USERNAME="$ADMIN_USER" -e ADMIN_BOOTSTRAP_PASSWORD="$ADMIN_PASS" \
+  "$IMAGE" 2>&1)
+BADDIR_CODE=$?
+if [ "$BADDIR_CODE" -ne 0 ] && echo "$BADDIR_LOG" | grep -qi "does not exist"; then
+  ok "a non-existent SQLITE_PATH directory fails the boot instead of being created"
+  ev "exit=$BADDIR_CODE — a mistyped path must not silently create ephemeral storage"
+else
+  bad "a non-existent SQLITE_PATH directory did not stop the boot"
+  ev "exit=$BADDIR_CODE"
+fi
+
+# البقاء الحقيقي: اكتب سجلًا، **احذف الحاوية**، أنشئ أخرى على نفس الحجم.
+PERSIST_MARK="persist_$(date +%s)"
+docker exec "$APP" node -e "
+  const { db } = require('/app/db.js');
+  db.prepare(\"INSERT INTO partners (id,name_ar,name_en,legal_name,contract_ref,status) VALUES (?,?,?,?,?,'Active')\")
+    .run('$PERSIST_MARK','$PERSIST_MARK','$PERSIST_MARK','$PERSIST_MARK','C-$PERSIST_MARK');
+" >/dev/null 2>&1
+docker rm -f "$APP" >/dev/null 2>&1
+start_app
+if wait_ready; then
+  FOUND=$(docker exec "$APP" node -e "
+    const { db } = require('/app/db.js');
+    process.stdout.write(String(db.prepare('SELECT COUNT(*) c FROM partners WHERE id = ?').get('$PERSIST_MARK').c));
+  " 2>/dev/null)
+  MIG_AFTER=$(docker exec "$APP" node -e "
+    const { db } = require('/app/db.js');
+    process.stdout.write(String(db.prepare('SELECT COUNT(*) c FROM schema_migrations').get().c));
+  " 2>/dev/null)
+  STRAY=$(docker exec "$APP" sh -c 'ls /app/data.sqlite 2>/dev/null | wc -l')
+  if [ "$FOUND" = "1" ]; then
+    ok "data survives container recreation on the same volume"
+    ev "record $PERSIST_MARK written before removal, found after — migrations applied: $MIG_AFTER"
+  else
+    bad "data did NOT survive container recreation"
+    ev "record $PERSIST_MARK not found (found=$FOUND) — the database is on ephemeral storage"
+  fi
+  if [ "$STRAY" = "0" ]; then
+    ok "no second database was created inside /app"
+    ev "writes and reads go to one database, not two"
+  else
+    bad "a stray /app/data.sqlite exists alongside the volume database"
+  fi
+else
+  bad "the recreated container never became ready"
+fi
+
 RUNNING_STATE=$(docker inspect -f '{{.State.Status}}' "$APP" 2>/dev/null)
 APP_INST=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$APP" 2>/dev/null | grep '^APP_INSTANCES=')
 if [ "$RUNNING_STATE" = "running" ] && [ "$APP_INST" = "APP_INSTANCES=1" ]; then

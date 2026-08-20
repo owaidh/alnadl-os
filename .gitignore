@@ -23,3 +23,9 @@ docs/pdf/
 # ناتج تشغيل أداة التدقيق — يُعاد توليده بـscripts/cross-system-audit.js
 audit-findings.json
 audit-run.sqlite*
+
+# وسائط الهوية في التطوير (lib/storage.js) — تُنشأ وقت التشغيل ولا تُسلَّم
+.local-media/
+
+# ناتج scripts/verify-qr.js — صور تُولَّد لإعادة المسح
+qr-verify-output/

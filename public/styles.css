@@ -174,7 +174,18 @@ input, select, textarea{ font-family:inherit; }
 .welcome{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:34px 26px; text-align:center; gap:18px; }
 .welcome .crest{ width:64px;height:64px;border-radius:18px; background:linear-gradient(155deg,var(--brass-300),var(--brass-700)); display:flex; align-items:center; justify-content:center; color:var(--ink-950); font-weight:900; font-size:24px; box-shadow:var(--shadow-2); }
 .welcome h2{ margin:0; font-size:22px; color:var(--ink-900); font-family:var(--display); font-weight:800; }
-.locpill{ background:var(--ink-900); color:var(--cream-050); padding:9px 16px; border-radius:999px; font-size:12.5px; font-weight:600; }
+/* سياق الموقع (§3): مقروء في الوضعين، وثانوي بصريًا عن العلامة.
+   كان الحدّ `--ink-900` خلفيةً و`--cream-050` نصًّا -- وهو زوج صالح في
+   الوضع الداكن وحده. بعد إضافة طبقة السمات صار `--ink-900` في الوضع
+   الفاتح لونًا شبه أبيض، فأصبح النص أبيض على أبيض: نسبة تباين ≈ 1.0،
+   أي غير مرئي إطلاقًا. كشفه قياس التباين في اللقطة لا التأكيدات.
+   الزوج الآن مشتقّ من نفس طبقة ink فينقلب مع السمة ويحفظ التباين. */
+.locpill{
+  background:color-mix(in srgb, var(--ink-500) 10%, transparent);
+  color:var(--ink-500);
+  border:1px solid color-mix(in srgb, var(--ink-500) 18%, transparent);
+  padding:8px 15px; border-radius:999px; font-size:12px; font-weight:600;
+}
 .etarow{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--sage-500); font-weight:700; }
 .etarow .dot{ width:7px;height:7px;border-radius:50%;background:var(--sage-500); }
 .qrpicklist{ display:flex; flex-direction:column; gap:8px; width:100%; max-width:300px; }
@@ -702,3 +713,30 @@ html[data-theme="light"] .sub, html[data-theme="system"] .sub { color:var(--ink-
 html[data-theme="light"] label, html[data-theme="system"] label { color:var(--ink-300); }
 /* عناصر داخل بطاقات ملوّنة تبقى كما هي: الشارات والأزرار النحاسية مصمَّمة
    بتباينها الخاص ولا تتبع السطح. */
+
+/* ── Brand Shell (Scope 2) ─────────────────────────────────────────────
+   الهوية تُطبَّق على طبقة brass-* القائمة، لا بإجبار كل خلفية على لون
+   العميل: الوضعان الفاتح والداكن يبقيان مقروءين، وهو شرط §17. */
+.brandbanner{
+  width:100%; max-height:132px; object-fit:cover; border-radius:14px;
+  margin-bottom:14px; display:block;
+}
+.crestimg{
+  object-fit:contain; background:transparent; padding:6px;
+}
+/* «مقدَّم من» يبقى ثانويًا دائمًا: يُنسب دون أن يطغى على هوية العميل (§19-F). */
+.poweredby{
+  font-size:10px; color:var(--ink-400); margin-top:6px; opacity:.75; letter-spacing:.02em;
+}
+/* قسم المنفذ داخل سلّة متعددة المنافذ (§8): الشعار يعيش هنا لا في الترويسة. */
+.outletsection{
+  display:flex; align-items:center; gap:8px; margin:14px 0 6px;
+  padding-bottom:6px; border-bottom:1px solid var(--ink-800);
+}
+.outletsection img{ width:22px; height:22px; object-fit:contain; border-radius:6px; }
+.outletsection .nm{ font-weight:600; font-size:13px; }
+/* سياق الموقع: ثانوي بصريًا بالقياس لا بالانطباع -- لا يُخلط بالعلامة. */
+.loccontext{
+  font-size:10.5px; color:var(--ink-400); margin-top:2px; font-weight:400;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
