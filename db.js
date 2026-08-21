@@ -532,22 +532,215 @@ function seedOrders(propId, partnerId) {
 // — this must NEVER run in production. A real deployment needs exactly one
 // admin account to bootstrap from, created from environment variables, with
 // zero demo partners/products/orders alongside it.
-function bootstrapProductionIfEmpty() {
-  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-  if (userCount > 0) return; // already bootstrapped or migrated from an existing deployment
+/* P0 — الدخول بعد النشر.
+
+   العطل الذي أُغلق: كان الشرط `if (userCount > 0) return;` -- أي أن التهيئة
+   تسأل «هل توجد مستخدمون؟» بينما السؤال الذي يهمّ هو «هل يوجد SuperAdmin
+   صالح للدخول؟». والفرق بينهما هو الفرق بين نظام يعمل ونظام مقفل:
+
+     قاعدة فيها أي مستخدم (نشر أقدم، حساب شريك، حساب مشغّل) تجعل التهيئة
+     تعود **بصمت**، فلا يُنشأ الحساب المذكور في متغيرات البيئة، ويعود
+     /api/auth/login بـ401 بلا سطر واحد في السجل يشرح السبب.
+
+   وهذه الحالة ليست نادرة: تقع كلما غُيّرت بيانات الاعتماد بعد أول نشر،
+   أو رُكّب حجم دائم على قاعدة أُنشئت سابقًا -- وهو بالضبط ما حدث بعد
+   إغلاق P0 Persistence.
+
+   والأسوأ منها: قاعدة فيها مستخدمون بلا **أي** SuperAdmin صالح (مُوقَف،
+   أو لم يُفعّل بعد، أو حُذف). حينها لا أحد يستطيع الدخول ولا توجد وسيلة
+   استرجاع إطلاقًا -- قفل دائم يحتاج تدخلًا يدويًا في قاعدة الإنتاج.
+
+   القاعدة الآن: **لا يُقلع الإنتاج وهو بلا SuperAdmin صالح.**
+*/
+
+/** «صالح للدخول» -- مُطابِق حرفيًا لما يرفضه lib/auth.js:login().
+    كل شرط هنا يقابل سطرًا هناك، ولا يُضاف ولا يُحذف شرط:
+
+      login: WHERE username = ? AND active = 1     → active = 1
+      login: if (!user.password_hash)              → NULL **و** السلسلة الفارغة
+      login: if (user.status === 'pending_activation') → هذه الحالة وحدها
+
+    الخلل الذي أُغلق هنا: كان الشرط `password_hash IS NOT NULL`، وهو يعدّ
+    السلسلة الفارغة تجزئةً صالحة بينما `!user.password_hash` في الدخول
+    ترفضها. أي أن حسابًا بـ`password_hash = ''` كان يُحتسب SuperAdmin صالحًا
+    فلا يقع الاسترجاع، بينما لا أحد يستطيع الدخول به فعلًا -- نفس القفل
+    الصامت الذي جاء هذا العمل كله لإغلاقه، بصيغة أضيق.
+
+    وكان الشرط الآخر `status = 'active'` **أضيق** من الدخول: حساب بحالة
+    أخرى (وليست pending_activation) يقبله الدخول ويرفضه هذا الفحص، فيُطلق
+    استرجاعًا لا داعي له. المطابقة الحرفية تمنع الانحرافين معًا.
+
+    ملاحظة مسجَّلة: الدخول يستشير أيضًا حالة الشريك حين يكون
+    `partner_scope` مضبوطًا. لا يُستنسخ ذلك هنا تجنّبًا لاستيراد دائري عند
+    تحميل الوحدة؛ وحساب SuperAdmin بنطاق شريك ليس شكلًا يُنشئه النظام. */
+function usableSuperAdmins() {
+  const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+  const statusClause = cols.includes('status') ? ` AND (status IS NULL OR status <> 'pending_activation')` : '';
+  return db.prepare(
+    `SELECT id, username FROM users
+     WHERE role = 'SuperAdmin' AND active = 1
+       AND password_hash IS NOT NULL AND password_hash <> ''${statusClause}`
+  ).all();
+}
+
+/** هل استُهلك معرّف الاسترجاع هذا من قبل؟ */
+function recoveryConsumed(resetId) {
+  try {
+    return !!db.prepare('SELECT 1 FROM bootstrap_recovery WHERE reset_id = ?').get(resetId);
+  } catch (e) { return false; } // الجدول غير موجود بعد (قاعدة أقدم من 023)
+}
+
+/* يرمي عند الفشل ولا يبتلعه: ابتلاعه هو ما كان يسمح بالحالة النصفية --
+   كلمة مرور تغيّرت ومعرّف لم يُستهلك، فيتكرر الاسترجاع مع كل إقلاع. */
+function markRecoveryConsumed(resetId, username, outcome) {
+  db.prepare(`INSERT INTO bootstrap_recovery (reset_id,username,outcome,consumed_at) VALUES (?,?,?,?)`)
+    .run(resetId, username, outcome, Date.now());
+}
+
+/* strict = true داخل معاملة الاسترجاع: هناك التدقيق **جزء من العملية**
+   لا ملحق بها -- استرجاع بلا أثر مُدقَّق تغييرٌ صامت لكلمة مرور إدارية.
+   وخارجها يبقى متسامحًا كما كان، فلا يمنع فشلُ سجلٍّ استرجاعًا اضطراريًا
+   حين يكون النظام مقفلًا أصلًا. */
+function bootstrapAudit(action, username, detail, strict) {
+  try {
+    db.prepare(`INSERT INTO audit_log (actor,role,action,entity,before,after,reason,ts)
+                VALUES (?,?,?,?,?,?,?,?)`)
+      .run('system:bootstrap', 'System', action, `user:${username}`, null,
+        JSON.stringify(detail || {}), 'production bootstrap', Date.now());
+  } catch (e) {
+    if (strict) throw e;
+    /* غير الصارم: التدقيق لا يجوز أن يمنع استرجاع الدخول */
+  }
+}
+
+function writeSuperAdmin(username, password, existing) {
+  const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+  const hasStatus = cols.includes('status');
+  if (existing) {
+    // إصلاح حساب قائم: الدور والتفعيل وكلمة المرور. الحساب قد يكون موقوفًا
+    // أو بدور أقل أو بلا تجزئة (لم يُفعّل)، وكلها حالات تمنع الدخول.
+    db.prepare(`UPDATE users SET password_hash = ?, role = 'SuperAdmin', partner_scope = NULL, active = 1${hasStatus ? ", status = 'active'" : ''} WHERE id = ?`)
+      .run(hashPbkdf2(password), existing.id);
+    return 'repaired';
+  }
+  db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at${hasStatus ? ',status' : ''})
+              VALUES (?,?,?,?,?,1,?${hasStatus ? ",'active'" : ''})`)
+    .run(uid('u'), username, hashPbkdf2(password), 'SuperAdmin', null, Date.now());
+  return 'created';
+}
+
+function ensureBootstrapSuperAdmin() {
   const username = process.env.ADMIN_BOOTSTRAP_USERNAME;
   const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
-  if (!username || !password || password.length < 12) {
-    console.error('\n❌ FATAL: NODE_ENV=production with an empty database requires');
-    console.error('   ADMIN_BOOTSTRAP_USERNAME and ADMIN_BOOTSTRAP_PASSWORD (12+ chars)');
-    console.error('   to create the first SuperAdmin account. No demo data is seeded in');
-    console.error('   production. See docs/DEPLOYMENT.md "Production Bootstrap".\n');
+  const resetId = String(process.env.ADMIN_BOOTSTRAP_RESET_ID || '').trim();
+  const legacyBoolean = String(process.env.ADMIN_BOOTSTRAP_RESET || '').trim();
+  const usable = usableSuperAdmins();
+  const named = username
+    ? db.prepare('SELECT * FROM users WHERE username = ?').get(username)
+    : null;
+
+  /* الحالة (1): لا SuperAdmin صالح إطلاقًا -- سواء كانت القاعدة فارغة أو
+     مليئة بمستخدمين لا يستطيع أحد منهم الدخول. الاسترجاع هنا **إلزامي**،
+     وليس امتيازًا: بدونه النظام مقفل بلا مخرج. */
+  if (usable.length === 0) {
+    if (!username || !password || password.length < 12) {
+      console.error('\n❌ FATAL: no usable SuperAdmin account exists in this database.');
+      console.error('   NODE_ENV=production requires ADMIN_BOOTSTRAP_USERNAME and');
+      console.error('   ADMIN_BOOTSTRAP_PASSWORD (12+ chars) so the first — or a recovery —');
+      console.error('   SuperAdmin can be created. No demo data is seeded in production.');
+      console.error('   A "usable" account means: role SuperAdmin, active, with a password');
+      console.error('   set and not awaiting activation.');
+      console.error('   See docs/DEPLOYMENT.md "Production Bootstrap".\n');
+      process.exit(1);
+    }
+    const how = writeSuperAdmin(username, password, named);
+    bootstrapAudit('bootstrap_superadmin', username, { how, reason: 'no usable SuperAdmin existed' });
+    console.log(`Production bootstrap: ${how} SuperAdmin account "${username}" — no usable SuperAdmin existed.`);
+    return;
+  }
+
+  /* الحالة (2): يوجد SuperAdmin صالح، وطُلب إعادة تعيين صراحةً.
+     خيار معلن لا سلوك ضمني: من يملك متغيرات البيئة يملك النشر أصلًا، لكن
+     إعادة تعيين كلمة مرور حساب قائم يجب أن تكون قرارًا مقصودًا ومُدقَّقًا
+     لا أثرًا جانبيًا لإقلاع. */
+  /* العلم المنطقي القديم لم يعد مدعومًا: كان دائمًا بطبيعته، فيعيد تعيين
+     كلمة المرور مع كل إقلاع حتى يُحذف يدويًا. يُرفض صراحةً بدل تجاهله --
+     تجاهله كان سيترك المشغّل يظن أن الاسترجاع جارٍ وهو لا يقع. */
+  if (legacyBoolean && !resetId) {
+    console.error('\n❌ FATAL: ADMIN_BOOTSTRAP_RESET is no longer supported.');
+    console.error('   A boolean flag is permanent by nature: left in place it would reset');
+    console.error('   the password on every restart, silently discarding any password');
+    console.error('   changed since. Use a one-time recovery id instead:');
+    console.error('');
+    console.error('       ADMIN_BOOTSTRAP_RESET_ID=<any unique value, e.g. a uuid>');
+    console.error('');
+    console.error('   It is consumed exactly once and recorded in the database, so leaving');
+    console.error('   it configured is harmless and no post-deploy cleanup is required.\n');
     process.exit(1);
   }
-  db.prepare(`INSERT INTO users (id,username,password_hash,role,partner_scope,active,created_at) VALUES (?,?,?,?,?,1,?)`)
-    .run(uid('u'), username, hashPbkdf2(password), 'SuperAdmin', null, Date.now());
-  console.log(`Production bootstrap: created initial SuperAdmin account "${username}". No demo data seeded.`);
+
+  if (resetId) {
+    if (recoveryConsumed(resetId)) {
+      /* المسار الطبيعي لكل إقلاع بعد الاسترجاع: المتغيّر باقٍ في الإعدادات
+         ولا أثر له. هذا هو جوهر «مرة واحدة»: لا خطوة تنظيف بعد النشر. */
+      console.log(`Production bootstrap: recovery id already consumed — no password reset. (${resetId})`);
+      return;
+    }
+    if (!username || !password || password.length < 12) {
+      console.error('\n❌ FATAL: ADMIN_BOOTSTRAP_RESET_ID requires ADMIN_BOOTSTRAP_USERNAME');
+      console.error('   and ADMIN_BOOTSTRAP_PASSWORD (12+ chars).\n');
+      process.exit(1);
+    }
+    /* الاسترجاع عملية واحدة لا ثلاث: تغيير الحساب، وتسجيل الاستهلاك،
+       وأثر التدقيق. الترتيب السابق كان يُنفّذها متتابعة ويكتفي بتحذير إن
+       فشل التسجيل -- فيبقى احتمال أن تتغيّر كلمة المرور دون أن يُستهلك
+       المعرّف، وحينها يتكرر الاسترجاع مع **كل** إقلاع لاحق: أي أن كلمة
+       المرور تُعاد إلى قيمة نصّية في الإعدادات إلى الأبد، وهو العطل نفسه
+       الذي جاء تصميم «مرة واحدة» ليمنعه.
+
+       داخل معاملة: إما أن تقع الثلاثة أو لا يقع شيء. */
+    let how = null;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      how = writeSuperAdmin(username, password, named);
+      markRecoveryConsumed(resetId, username, how);
+      bootstrapAudit('bootstrap_superadmin_reset', username, { how, resetId, oneTime: true }, true);
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch (e2) { /* المعاملة قد تكون أُنهيت */ }
+      /* لا إقلاع بحالة استرجاع نصفية. الخادم الذي يعمل بعد استرجاع فاشل
+         أخطر من خادم يتوقف: كلمة المرور قد تكون تغيّرت أو لا، ولا أحد
+         يعرف أيّهما -- ولا شيء يمنع تكرار الاسترجاع عند كل إقلاع. */
+      console.error('\n❌ FATAL: one-time recovery could not be completed atomically.');
+      console.error(`   Reason: ${e && e.message}`);
+      console.error('   The transaction was rolled back: the SuperAdmin password was NOT');
+      console.error('   changed and the recovery id was NOT consumed. Nothing is half-done.');
+      console.error('   Refusing to start rather than run with an unknown recovery state.\n');
+      process.exit(1);
+    }
+    console.log(`Production bootstrap: one-time recovery "${resetId}" — ${how} SuperAdmin "${username}".`);
+    console.log('  This id is now consumed. Leaving the variable configured is harmless.');
+    return;
+  }
+
+  /* الحالة (3): يوجد SuperAdmin صالح، وبيانات البيئة تشير إلى حساب غير
+     صالح أو غير موجود. **لا يُنشأ حساب صامتًا**: صكّ حسابات إدارية من
+     متغيرات البيئة على نظام حيّ سطحُ تصعيد صلاحيات، لا راحة تشغيلية.
+     لكن الصمت هو ما جعل العطل الأصلي يمرّ، فيُعلَن بوضوح في سجل النشر --
+     حيث يراه من رفع النسخة، بدل أن يكتشفه عند شاشة الدخول. */
+  if (username && (!named || !usable.some(u => u.username === username))) {
+    console.warn('\n⚠️  WARNING: ADMIN_BOOTSTRAP_USERNAME does not match any usable SuperAdmin.');
+    console.warn(`   Requested: "${username}"`);
+    console.warn(`   Usable SuperAdmin account(s) already present: ${usable.map(u => u.username).join(', ')}`);
+    console.warn('   No account was created: minting admin accounts from environment');
+    console.warn('   variables on a live system would be a privilege-escalation path.');
+    console.warn('   To (re)set this account, set a one-time recovery id:');
+    console.warn('       ADMIN_BOOTSTRAP_RESET_ID=<any unique value>');
+    console.warn('   It is consumed once and needs no cleanup afterwards.\n');
+  }
 }
+
+function bootstrapProductionIfEmpty() { return ensureBootstrapSuperAdmin(); }
 
 if (process.env.NODE_ENV === 'production') {
   bootstrapProductionIfEmpty();

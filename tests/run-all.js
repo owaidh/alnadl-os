@@ -39,6 +39,7 @@ const suites = [
   './brand-media.js',
   './direct-outlet-products.js',
   './context-switch-audit.js',
+  './superadmin-access.js',
   './context-switch-audit.js',
   './operational-closure-b.js',
   './trusted-proxy.js',

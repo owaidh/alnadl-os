@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-20T14:43:11.068Z",
+  "timestamp": "2026-08-20T23:24:00.008Z",
   "suites": [
     {
       "suite": "./api-regression.js",
@@ -131,6 +131,10 @@
     },
     {
       "suite": "./context-switch-audit.js",
+      "status": "PASS"
+    },
+    {
+      "suite": "./superadmin-access.js",
       "status": "PASS"
     },
     {

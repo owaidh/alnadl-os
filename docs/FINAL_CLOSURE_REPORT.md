@@ -1,4 +1,4 @@
-> **Version:** v2.16.1 · **Status:** RELEASE CANDIDATE — **ليست Production Final** · **Date:** 2026-08-20 · **Tag:** `v2.16.1-rc1-qr-verifier`
+> **Version:** v2.16.4 · **Status:** RELEASE CANDIDATE — **ليست Production Final** · **Date:** 2026-08-20 · **Tag:** `v2.16.4-rc4-atomic-recovery`
 
 # Final Closure Report
 
@@ -19,11 +19,11 @@
 | المقياس | القيمة |
 |---|---|
 | **Final Commit** | يُقرأ من الوسم (§9) |
-| **Final Tag** | `v2.16.1-rc1-qr-verifier` |
-| **Final Version** | `2.16.1` |
-| **Total Test Suites** | **41** |
-| **Total Assertions** | **1,591** |
-| **Migrations Applied** | **22** (آخرها `022_audit_acting_context`) |
+| **Final Tag** | `v2.16.4-rc4-atomic-recovery` |
+| **Final Version** | `2.16.4` |
+| **Total Test Suites** | **42** |
+| **Total Assertions** | **1,664** |
+| **Migrations Applied** | **23** (آخرها `023_bootstrap_recovery`) |
 | **Git Status** | نظيف |
 | **AWAITING items** | **6** |
 
@@ -33,6 +33,7 @@
 
 | النطاق | الحالة | الدليل |
 |---|---|---|
+| **P0 SuperAdmin Access** | **PASS** | `tests/superadmin-access.js` — 73 تأكيدًا · قاعدة جديدة · إعادة تشغيل · قاعدة فيها مستخدم سابق · **استرجاع لمرة واحدة وذرّي** · سيناريو النشر القائم · قفل |
 | **P0 Production Persistence** | **PASS** | `tests/production-persistence.js` — 32 تأكيدًا · البقاء مُثبَت **بإماتة العملية** لا بفحص إعداد |
 | **Operational Closure (الدفعتان أ و ب)** | **PASS** | `tests/operational-closure-b.js` — 80 تأكيدًا · P1-01 · P1-03 · P1-04 · P1-05 · P1-06 · P1-07 · P1-08 · P2 |
 | **Payment Policy** | **PASS** | الوراثة منفذ ← عقار ← شريك · إنفاذ خادميّ · حالة `Confirmed` · لا استرجاع لما لم يُحصَّل |
@@ -47,7 +48,7 @@
 | **Unified Cart** | **PASS** | مدعومة كاملةً · رحلة حقيقية عبر الشاشات · أقسام لكل منفذ · Shell عام ثابت |
 | **Direct Outlet Products (`merchant_id = NULL`)** | **PASS** | `tests/direct-outlet-products.js` — 32 تأكيدًا · سلّة مختلطة بنسبتَي عمولة مختلفتين بلا تسرّب |
 | **Acting Context / Audit** | **PASS** | `tests/context-switch-audit.js` — 45 تأكيدًا · بيانات وصفية لا صلاحية |
-| **Migrations 019–022** | **PASS** | قاعدة جديدة **و** ترقية قاعدة قائمة — كلاهما مُتحقَّق (§3) |
+| **Migrations 019–023** | **PASS** | قاعدة جديدة **و** ترقية قاعدة قائمة — كلاهما مُتحقَّق (§3) |
 
 ---
 
@@ -150,7 +151,7 @@ audit_log: acting_partner_id, target_partner_id ✅
 ## 8. إعادة إنتاج النتائج
 
 ```bash
-node tests/run-all.js                    # 41 مجموعة · 1,591 تأكيدًا
+node tests/run-all.js                    # 42 مجموعة · 1,664 تأكيدًا
 node scripts/cross-system-audit.js       # تدقيق عابر للأنظمة
 node scripts/build-docs-pdf.js           # يُعيد توليد docs/pdf/
 ```
@@ -165,12 +166,12 @@ node scripts/build-docs-pdf.js           # يُعيد توليد docs/pdf/
 
 | | |
 |---|---|
-| **Final Commit** | يُقرأ من الوسم: `git rev-parse v2.16.1-rc1-qr-verifier` |
-| **Final Tag** | `v2.16.1-rc1-qr-verifier` |
-| **Final Version** | `2.16.1` |
-| **Total Test Suites** | 41 |
-| **Total Assertions** | 1,591 |
-| **Migrations Applied** | 22 (`001` → `022_audit_acting_context`) |
+| **Final Commit** | يُقرأ من الوسم: `git rev-parse v2.16.4-rc4-atomic-recovery` |
+| **Final Tag** | `v2.16.4-rc4-atomic-recovery` |
+| **Final Version** | `2.16.4` |
+| **Total Test Suites** | 42 |
+| **Total Assertions** | 1,664 |
+| **Migrations Applied** | 23 (`001` → `023_bootstrap_recovery`) |
 | **Git Status** | نظيف — لا ملفات قاعدة ولا WAL ولا artifacts مؤقتة |
 | **Overall** | **PASS** |
 | **Fully Verified** | **NO** — 6 بنود `AWAITING_ENVIRONMENT_VERIFICATION` |

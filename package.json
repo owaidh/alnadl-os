@@ -1,6 +1,6 @@
 {
   "name": "alnadl-hospitality-os",
-  "version": "2.16.1",
+  "version": "2.16.4",
   "private": true,
   "description": "ALNADL Hospitality OS — QR ordering and hospitality operations platform",
   "engines": {
